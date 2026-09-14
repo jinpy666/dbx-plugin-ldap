@@ -95,13 +95,15 @@ def remove_stale_container() -> None:
 
 
 def start_container(admin_password: str) -> None:
+    # Pinned to the bitnamilegacy org: bitnami/openldap lost its Docker Hub
+    # tags in the 2025-08 Bitnami Secure Images migration.
     subprocess.run(
         [
             "docker", "run", "--rm", "-d", "--name", CONTAINER,
             "-e", f"LDAP_ADMIN_USERNAME=admin",
             "-e", f"LDAP_ADMIN_PASSWORD={admin_password}",
             "-e", f"LDAP_ROOT={ROOT_DN}",
-            "bitnami/openldap:latest",
+            "bitnamilegacy/openldap:2.6.10-debian-12-r4",
         ],
         check=True,
         stdout=subprocess.DEVNULL,

@@ -10,7 +10,9 @@
 #     one into a temp dir; never commit a key here).
 services:
   ldap-tls-test:
-    image: bitnami/openldap:latest
+    # Pinned to the bitnamilegacy org: bitnami/openldap lost its Docker Hub
+    # tags in the 2025-08 Bitnami Secure Images migration.
+    image: bitnamilegacy/openldap:2.6.10-debian-12-r4
     container_name: dbx-ldap-tls-test
     environment:
       LDAP_ROOT: "dc=example,dc=org"

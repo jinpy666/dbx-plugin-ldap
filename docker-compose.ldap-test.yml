@@ -3,7 +3,9 @@
 # environment (export LDAP_ADMIN_PASSWORD=... before invoking docker compose).
 services:
   ldap-test:
-    image: bitnami/openldap:latest
+    # bitnami/openldap lost its Docker Hub tags in the 2025-08 Bitnami Secure
+    # Images migration; the legacy org keeps the last public build, pinned.
+    image: bitnamilegacy/openldap:2.6.10-debian-12-r4
     container_name: dbx-ldap-test
     environment:
       LDAP_ROOT: "dc=example,dc=org"
