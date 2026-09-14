@@ -1,20 +1,23 @@
-# DBX LDAP
+# LDAP Studio
 
 [![CI](https://github.com/jinpy666/dbx-plugin-ldap/actions/workflows/ci.yml/badge.svg)](https://github.com/jinpy666/dbx-plugin-ldap/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/jinpy666/dbx-plugin-ldap?display_name=tag)](https://github.com/jinpy666/dbx-plugin-ldap/releases)
 
 [English](README.en.md) · [产品宣传页](docs/MEDIA.zh-CN.md) · [特性与竞品对比](docs/COMPARISON.zh-CN.md) · [独立仓库迁移说明](docs/REPOSITORY_SPLIT.zh-CN.md)
 
-DBX LDAP 是 DBX 的 LDAP 目录工作台（插件 id `io.dbx.ldap`）：打开一个连接，
+LDAP Studio 是 DBX 的 LDAP 目录工作台（插件 id `io.dbx.ldap`）：打开一个连接，
 就能完成目录浏览、条目维护、Schema 检查和 MCP 自动化。它把"连上目录之后的
 每一步"收进一个连贯、受护栏、可审计的工作流。
 
 > LDAP Directory · Guarded Editing · Automation：浏览、编辑、审计和 AI 自动化
 > 集中在同一个 DBX 目录面板中。
 
+![LDAP Studio 工作台](docs/media/dbx-ldap-overview.png)
+![LDAP Studio 功能演示](docs/media/dbx-ldap-demo.mp4)
+
 ## 为什么值得用
 
-| 你要完成的事 | DBX LDAP 给你的体验 |
+| 你要完成的事 | LDAP Studio 给你的体验 |
 | --- | --- |
 | 快速定位用户、组和服务账号 | DN 树浏览、分页搜索、RFC 4515 过滤器和可复用的搜索预设 |
 | 安全地维护目录条目 | 查看、新增、编辑、重命名、删除，全程过 Base DN 白名单与屏蔽属性护栏 |
@@ -32,6 +35,8 @@ DBX LDAP 是 DBX 的 LDAP 目录工作台（插件 id `io.dbx.ldap`）：打开�
 ## 核心能力
 
 - DN 树浏览、分页搜索和 RFC 4515 过滤器，支持保存搜索预设。
+- 直接粘贴 `ldapsearch` 命令导入搜索条件：Base DN、范围、过滤器、属性和数量
+  上限一键落表；绑定/连接参数自动忽略，始终沿用已保存连接与护栏。
 - 目录条目的查看、新增、编辑、重命名和删除。
 - RootDSE、Schema 和属性元数据检查。
 - LDIF 和 CSV 导出。

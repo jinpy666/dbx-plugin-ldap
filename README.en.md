@@ -1,20 +1,23 @@
-# DBX LDAP
+# LDAP Studio
 
 [![CI](https://github.com/jinpy666/dbx-plugin-ldap/actions/workflows/ci.yml/badge.svg)](https://github.com/jinpy666/dbx-plugin-ldap/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/jinpy666/dbx-plugin-ldap?display_name=tag)](https://github.com/jinpy666/dbx-plugin-ldap/releases)
 
 [中文](README.md) · [Product page](docs/MEDIA.en.md) · [Feature & competitor comparison](docs/COMPARISON.en.md) · [Standalone repo migration](docs/REPOSITORY_SPLIT.en.md)
 
-DBX LDAP is the LDAP directory workspace for DBX (plugin id `io.dbx.ldap`):
+LDAP Studio is the LDAP directory workspace for DBX (plugin id `io.dbx.ldap`):
 open one connection and get directory browsing, guarded entry maintenance,
 schema inspection, and MCP automation in a single, auditable workflow.
 
 > LDAP Directory · Guarded Editing · Automation: browsing, editing, auditing,
 > and AI automation live in one DBX directory panel.
 
+![LDAP Studio workspace](docs/media/dbx-ldap-overview.png)
+![LDAP Studio walkthrough](docs/media/dbx-ldap-demo.mp4)
+
 ## Why it is worth using
 
-| What you need to do | What DBX LDAP gives you |
+| What you need to do | What LDAP Studio gives you |
 | --- | --- |
 | Find users, groups, and service accounts fast | DN tree browsing, paged searches, RFC 4515 filters, and reusable search presets |
 | Maintain entries without fear | View, create, edit, rename, and delete — every write passes Base DN and blocked-attribute guards |
@@ -34,6 +37,9 @@ schema inspection, and MCP automation in a single, auditable workflow.
 ## Highlights
 
 - DN tree browsing, paged searches, and RFC 4515 filters with saved presets.
+- Paste an `ldapsearch` command to import search criteria: base DN, scope,
+  filter, attributes, and size limit land on the form in one step; bind and
+  connection options are dropped in favour of the saved connection and guards.
 - View, create, edit, rename, and delete directory entries.
 - RootDSE, schema, and attribute metadata inspection.
 - LDIF and CSV export.
@@ -46,7 +52,7 @@ schema inspection, and MCP automation in a single, auditable workflow.
 - Simplified Chinese, Traditional Chinese, English, Spanish, Italian, Japanese,
   and Portuguese UI.
 
-For the full capability matrix and how DBX LDAP compares with ldapsearch,
+For the full capability matrix and how LDAP Studio compares with ldapsearch,
 Apache Directory Studio, and JXplorer, see
 [Feature & competitor comparison](docs/COMPARISON.en.md).
 
@@ -106,7 +112,7 @@ python3 scripts/smoke_mcp.py   # offline MCP smoke; live OpenLDAP container case
 
 - [Product page](docs/MEDIA.en.md): positioning, feature highlights, typical
   workflows, and FAQ.
-- [Feature & competitor comparison](docs/COMPARISON.en.md): where DBX LDAP
+- [Feature & competitor comparison](docs/COMPARISON.en.md): where LDAP Studio
   stands versus ldapsearch, Apache Directory Studio, and JXplorer.
 - [MCP usage guide](docs/MCP_USAGE.en.md): DBX MCP bridge or standalone stdio.
 - [LDAP MCP reference](docs/MCP.zh-CN.md): protocol methods, tool parameters,

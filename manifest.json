@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/t8y2/dbx/dev/plugin-framework-current/plugins/manifest.schema.json",
   "manifest_version": 1,
   "id": "io.dbx.ldap",
-  "name": "DBX LDAP",
+  "name": "LDAP Studio",
   "version": "0.1.67",
   "publisher": "dbx",
   "description": "Browse, search, and manage LDAP directories with RFC 4515 filters, schema inspection, entry editing, LDIF/CSV export, and guarded write controls.",
@@ -539,7 +539,7 @@
   ],
   "localizations": {
     "zh-CN": {
-      "name": "DBX LDAP",
+      "name": "LDAP Studio",
       "description": "用于浏览、搜索和管理 LDAP 目录：支持 RFC 4515 过滤器、Schema 检查、条目编辑、LDIF/CSV 导出和受控写入。",
       "contributions": {
         "io.dbx.ldap.connection": {
@@ -680,7 +680,7 @@
       }
     },
     "zh-TW": {
-      "name": "DBX LDAP",
+      "name": "LDAP Studio",
       "description": "DBX 的 LDAP 主控台外掛：DN 樹、RFC 4515 搜尋、條目編輯、Schema 與搜尋預設。",
       "contributions": {
         "io.dbx.ldap.connection": {
@@ -821,7 +821,7 @@
       }
     },
     "en": {
-      "name": "DBX LDAP",
+      "name": "LDAP Studio",
       "description": "Browse, search, and manage LDAP directories with RFC 4515 filters, schema inspection, entry editing, LDIF/CSV export, and guarded write controls.",
       "contributions": {
         "io.dbx.ldap.connection": {
@@ -962,7 +962,7 @@
       }
     },
     "es": {
-      "name": "DBX LDAP",
+      "name": "LDAP Studio",
       "description": "Plugin de consola LDAP para DBX: árbol de DN, búsqueda RFC 4515, edición de entradas, esquema y búsquedas guardadas.",
       "contributions": {
         "io.dbx.ldap.connection": {
@@ -1103,7 +1103,7 @@
       }
     },
     "it": {
-      "name": "DBX LDAP",
+      "name": "LDAP Studio",
       "description": "Plugin console LDAP per DBX: albero DN, ricerca RFC 4515, modifica delle voci, schema e ricerche salvate.",
       "contributions": {
         "io.dbx.ldap.connection": {
@@ -1244,7 +1244,7 @@
       }
     },
     "ja": {
-      "name": "DBX LDAP",
+      "name": "LDAP Studio",
       "description": "DBX 用 LDAP コンソールプラグイン: DN ツリー、RFC 4515 検索、エントリ編集、スキーマ、検索プリセット。",
       "contributions": {
         "io.dbx.ldap.connection": {
@@ -1385,7 +1385,7 @@
       }
     },
     "pt-BR": {
-      "name": "DBX LDAP",
+      "name": "LDAP Studio",
       "description": "Plugin de console LDAP para o DBX: árvore de DN, busca RFC 4515, edição de entradas, schema e buscas salvas.",
       "contributions": {
         "io.dbx.ldap.connection": {
