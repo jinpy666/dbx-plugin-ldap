@@ -4,9 +4,10 @@
 // + scope/attributes/sizeLimit/pageSize/typesOnly/derefAliases
 // + 预设（持久化过滤器串，应用时重建构建器；sidecar 不存 conditions）。
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
-import { Play, Save, Trash2 } from "@lucide/vue";
+import { Play, Save, Terminal, Trash2 } from "@lucide/vue";
 import { getLdapConnectionId, ldapApi, type LdapSearchPreset, type LdapScope } from "../lib/api";
 import { validateLDAPFilter, buildNodeFilter, collectBuilderErrors, parseFilterStructure, toBuilderRoot, createBuilderClause, createBuilderGroup, type BuilderGroup } from "../lib/ldapFilter";
+import { parseLdapSearchCommand, type LdapSearchCommandFailure } from "../lib/ldapSearchCommand";
 import { deriveSchemaMetadata, useLdapSchemaCache } from "../lib/schemaCache";
 import { t } from "../lib/i18n";
 import FilterGroup from "./FilterGroup.vue";
@@ -118,6 +119,20 @@ function switchToBuilder() {
   builderMode.value = true;
 }
 
+/** 过滤器串 → 构建器，解析失败保持源码模式（源码是唯一权威表示）。
+ * 预设、MCP intent 与 ldapsearch 命令导入共用这一落地路径。 */
+function presentFilter(filter: string) {
+  const fromFilter = toBuilderRoot(parseFilterStructure(filter));
+  if (fromFilter) {
+    builderRoot.value = fromFilter;
+    builderMode.value = true;
+    sourceParseError.value = false;
+  } else {
+    sourceFilter.value = filter;
+    builderMode.value = false;
+  }
+}
+
 // -- base DN / fields ---------------------------------------------------------
 
 // 树节点联动改写 Base DN 的一次性高亮（UI 扫描 P2-7：此前静默改写，
@@ -182,15 +197,7 @@ function applyIntentSearch(params: {
   sizeLimit?: number;
 }): SearchFormModel {
   const filter = (params.filter ?? "").trim() || "(objectClass=*)";
-  const fromFilter = toBuilderRoot(parseFilterStructure(filter));
-  if (fromFilter) {
-    builderRoot.value = fromFilter;
-    builderMode.value = true;
-    sourceParseError.value = false;
-  } else {
-    sourceFilter.value = filter;
-    builderMode.value = false;
-  }
+  presentFilter(filter);
   const scope = (params.scope ?? "").trim().toLowerCase();
   const sizeLimit = Number(params.sizeLimit);
   draft.value = {
@@ -240,6 +247,68 @@ function run() {
   emit("run", toModel());
 }
 
+// -- ldapsearch command import --------------------------------------------------
+
+const COMMAND_FAILURE_KEYS = {
+  empty: "search.commandErrorEmpty",
+  missingValue: "search.commandErrorMissingValue",
+  missingBaseDn: "search.commandErrorMissingBaseDn",
+  unknownOption: "search.commandErrorUnknownOption",
+  scope: "search.commandErrorScope",
+  derefAliases: "search.commandErrorDerefAliases",
+  sizeLimit: "search.commandErrorSizeLimit",
+  filter: "search.commandErrorFilter",
+  filterFile: "search.commandErrorFilterFile",
+} as const satisfies Record<LdapSearchCommandFailure["reason"], string>;
+
+const commandOpen = ref(false);
+const commandDraft = ref("");
+const commandError = ref("");
+const commandWarnings = ref<string[]>([]);
+const commandApplied = ref(false);
+
+function commandFailureMessage(failure: LdapSearchCommandFailure): string {
+  const params: Record<string, string> = {};
+  if (failure.flag) params.flag = failure.flag;
+  if (failure.value) params.value = failure.value;
+  return t(COMMAND_FAILURE_KEYS[failure.reason], params);
+}
+
+function applyCommand() {
+  if (props.disabled) return;
+  const result = parseLdapSearchCommand(commandDraft.value);
+  commandApplied.value = false;
+  if (!result.ok) {
+    commandWarnings.value = [];
+    commandError.value = commandFailureMessage(result);
+    return;
+  }
+  // 命令没带 -b 时保留当前 Base DN（可能来自树节点联动），不覆盖为空。
+  commandError.value = "";
+  draft.value = {
+    ...draft.value,
+    baseDn: result.search.baseDn || draft.value.baseDn,
+    filter: result.search.filter,
+    scope: result.search.scope,
+    attributes: result.search.attributes.join(", "),
+    sizeLimit: String(result.search.sizeLimit ?? 0),
+    typesOnly: result.search.typesOnly,
+    derefAliases: result.search.derefAliases ?? draft.value.derefAliases,
+  };
+  presentFilter(result.search.filter);
+  const warnings: string[] = [];
+  if (result.ignoredConnection.length) {
+    warnings.push(t("search.commandWarnConnection", { flags: result.ignoredConnection.join(" ") }));
+  }
+  if (result.ignoredUnsupported.length) {
+    warnings.push(t("search.commandWarnUnsupported", { flags: result.ignoredUnsupported.join(" ") }));
+  }
+  if (result.notes.includes("scopeChildren")) warnings.push(t("search.commandNoteScopeChildren"));
+  commandWarnings.value = warnings;
+  commandApplied.value = true;
+  emit("notify", t("search.commandApplied"));
+}
+
 // -- presets -------------------------------------------------------------------
 
 const presets = ref<LdapSearchPreset[]>([]);
@@ -272,15 +341,7 @@ function applyPreset() {
     sizeLimit: String(preset.sizeLimit ?? 0),
   };
   // 过滤器串是后端持久化的权威值；旧 mock 的 conditions 不参与恢复。
-  const fromFilter = toBuilderRoot(parseFilterStructure(preset.filter || "(objectClass=*)"));
-  if (fromFilter) {
-    builderRoot.value = fromFilter;
-    builderMode.value = true;
-    sourceParseError.value = false;
-  } else {
-    sourceFilter.value = preset.filter || "(objectClass=*)";
-    builderMode.value = false;
-  }
+  presentFilter(preset.filter || "(objectClass=*)");
   emit("notify", t("search.presetApplied"));
 }
 
@@ -461,6 +522,30 @@ const derefOptions = computed(() => [
           <option v-for="option in derefOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
         </select>
       </label>
+    </div>
+    <div class="command-import">
+      <button type="button" class="toolbar-button" :disabled="disabled" :aria-expanded="commandOpen" :title="t('search.commandImport')" @click="commandOpen = !commandOpen">
+        <Terminal aria-hidden="true" /><span>{{ t("search.commandImport") }}</span>
+      </button>
+      <div v-if="commandOpen" class="command-body">
+        <textarea
+          v-model="commandDraft"
+          class="mono"
+          rows="3"
+          :placeholder="t('search.commandPlaceholder')"
+          :aria-label="t('search.commandImport')"
+          :disabled="disabled"
+          spellcheck="false"
+        />
+        <div class="command-actions">
+          <button type="button" class="primary-button compact" :disabled="disabled || !commandDraft.trim()" @click="applyCommand">
+            {{ t("search.commandApply") }}
+          </button>
+        </div>
+        <p v-if="commandError" class="form-error" role="alert">{{ commandError }}</p>
+        <p v-for="warning in commandWarnings" :key="warning" class="command-warn">{{ warning }}</p>
+        <p v-if="commandApplied" class="command-ok">{{ t("search.commandApplied") }}</p>
+      </div>
     </div>
     <div class="search-presets">
       <span class="muted">{{ t("search.presets") }}</span>

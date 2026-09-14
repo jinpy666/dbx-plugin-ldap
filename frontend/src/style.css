@@ -211,6 +211,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .search-presets { display: flex; align-items: center; gap: 5px; grid-column: 1 / -1; }
 .search-presets select { min-width: 160px; height: 24px; }
 .preset-input { width: 140px !important; }
+.command-import { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; grid-column: 1 / -1; }
+.command-body { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.command-body textarea { width: 100%; box-sizing: border-box; resize: vertical; font-size: 11px; }
+.command-actions { display: flex; }
+.command-warn { margin: 0; color: color-mix(in srgb, var(--muted-foreground) 70%, #d97706); font-size: 10px; }
+.command-ok { margin: 0; color: var(--muted-foreground); font-size: 10px; }
 .link-button { align-self: center; padding: 2px 4px; color: var(--primary); font-size: 11px; cursor: pointer; }
 .link-button:hover { text-decoration: underline; }
 
