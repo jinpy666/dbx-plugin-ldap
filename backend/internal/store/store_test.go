@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 )
@@ -50,9 +49,12 @@ func TestOpenFallbackIsPersistentDir(t *testing.T) {
 	if st.Dir() == "" || filepath.Base(st.Dir()) != DefaultDirName {
 		t.Errorf("fallback dir = %q", st.Dir())
 	}
-	// 修复点：无环境变量时不得再落系统临时目录（macOS $TMPDIR 重启清空）。
-	if strings.HasPrefix(st.Dir(), os.TempDir()+string(filepath.Separator)) {
-		t.Errorf("fallback dir %q still under TempDir", st.Dir())
+	// 修复点：无环境变量时不得再落最终兜底的系统临时目录（macOS $TMPDIR
+	// 重启清空）。注意沙箱用的平台根本身就在 TempDir 下（Linux 的
+	// XDG_DATA_HOME 分支），所以只排除兜底路径本身，不能断言整个
+	// TempDir 前缀。
+	if st.Dir() == filepath.Join(os.TempDir(), "dbx-plugin-data", DefaultDirName) {
+		t.Errorf("fallback dir %q hit the TempDir last-resort", st.Dir())
 	}
 }
 
