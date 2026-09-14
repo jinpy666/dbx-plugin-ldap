@@ -1,11 +1,15 @@
 # DBX LDAP
 
-[English](README.en.md) · [工作区贡献指南](../CONTRIBUTING.zh-CN.md)
+[English](README.en.md)
 
-DBX LDAP 是用于目录浏览和管理的 LDAP 工作台。它适合目录查询、用户和组维护、
-Schema 检查以及批量导出，同时提供明确的只读、DN 范围和属性保护策略。
+DBX LDAP 是 DBX 的 LDAP 连接插件（插件 id `io.dbx.ldap`），提供目录浏览和
+管理工作台。它适合目录查询、用户和组维护、Schema 检查以及批量导出，同时提供
+明确的只读、DN 范围和属性保护策略。
 
-![DBX LDAP 工作台](docs/screenshots/01-workbench-initial.png)
+## 安装
+
+从 GitHub Releases 下载与宿主平台匹配的 `.dbxp` 安装包，在 DBX 插件中心安装即可；
+无需额外依赖，sidecar 后端随包分发。
 
 ## 适合场景
 
@@ -25,8 +29,6 @@ Schema 检查以及批量导出，同时提供明确的只读、DN 范围和属�
 - 支持只读模式、允许写入的 Base DN、屏蔽属性和审计安全策略。
 - 界面支持简体中文、繁体中文、英语、西班牙语、意大利语、日语和葡萄牙语。
 
-![LDAP Schema 检查](docs/screenshots/05-schema-panel.png)
-
 ## MCP 自动化
 
 独立 stdio 模式启动：
@@ -37,8 +39,7 @@ backend/bin/dbx-plugin-ldap --mcp
 
 常用工具包括 `ldap_search_digest`、`ldap_cursor_next`、`ldap_ui_schema` 和
 `ldap_entry_write`。大结果使用 cursor 翻页，删除条目需要两阶段确认。
-完整配置见 [MCP 使用指南](../docs/MCP_USAGE.zh-CN.md)和
-[LDAP MCP 参考](docs/MCP.zh-CN.md)。
+协议细节见 [LDAP MCP 参考](docs/MCP.zh-CN.md)。
 
 ## 安全设计
 
@@ -47,12 +48,21 @@ backend/bin/dbx-plugin-ldap --mcp
 
 ## 开发与验证
 
+本仓库自包含：前端宿主适配层位于 `shared/frontend/`，Go sidecar SDK 位于
+`shared/sdk/go/`，不依赖 monorepo 或宿主工作区。
+
 ```bash
-cd frontend && pnpm install && pnpm typecheck && pnpm test && pnpm build
-cd ../backend && go vet ./... && go test ./...
-cd ..
-scripts/test.sh
+scripts/test.sh        # 连接表单校验 + 前端三件套 + go vet/test + 打包 + smoke（无容器环境自动 SKIP）
+scripts/build.sh       # 前端构建 + sidecar 构建 + .dbxp 打包（产物在 dist/）
 ```
 
-协议和集成验证说明位于 `docs/`；公开贡献请先阅读
-[贡献指南](../CONTRIBUTING.zh-CN.md)。
+也可以分层执行：
+
+```bash
+node scripts/connection-forms/verify.mjs ldap
+pnpm --dir frontend install --frozen-lockfile && pnpm --dir frontend typecheck && pnpm --dir frontend test
+(cd backend && go vet ./... && go test ./...)
+python3 scripts/smoke_mcp.py   # 离线 MCP smoke；真实 OpenLDAP 容器类用例无环境时 SKIP
+```
+
+实施计划与进度记录位于 `docs/`。
