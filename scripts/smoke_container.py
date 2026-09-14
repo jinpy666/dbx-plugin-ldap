@@ -71,6 +71,17 @@ def wait_ready() -> None:
     raise SystemExit(f"LDAP container not serving admin bind on {HOST}:{PORT} after {READY_TIMEOUT_SECS}s")
 
 
+def remove_stale_container() -> None:
+    """Tear down a leftover container from an aborted run.
+
+    A stale registration (same name, different compose project/password) makes
+    `compose up` fail with a name conflict instead of self-healing; the name is
+    owned by this harness, so removing it unconditionally is safe.
+    """
+    sh(["docker", "rm", "-f", CONTAINER], check=False,
+       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--keep", action="store_true", help="leave the container running")
@@ -89,6 +100,7 @@ def main() -> int:
         LDAP_TEST_BINDPW=os.environ["LDAP_ADMIN_PASSWORD"],
     )
 
+    remove_stale_container()
     compose("up", "-d")
     try:
         wait_ready()

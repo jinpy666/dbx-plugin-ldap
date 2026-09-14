@@ -2,7 +2,8 @@
 """ldapi:// (unix socket) real-container smoke for dbx-plugin-ldap.
 
 Orchestration (self-contained, follows smoke_auth_test.py conventions):
-  1. cross-compile the sidecar as a static linux/arm64 binary (go required);
+  1. cross-compile the sidecar as a static linux binary matching the
+     container's architecture (go required);
   2. start bitnami/openldap (slapd listens on `ldapi:/// ldap://:1389/`);
   3. `docker cp` the binary into the container and drive it over
      `docker exec -i … /tmp/sidecar` using the NDJSON SidecarClient — the
@@ -74,12 +75,22 @@ def scenario(no: str, name: str):
 # -- provisioning --------------------------------------------------------------
 
 
-def build_linux_sidecar(out_path: pathlib.Path) -> None:
+def build_linux_sidecar(out_path: pathlib.Path, goarch: str) -> None:
     subprocess.run(
         ["go", "build", "-ldflags=-s -w", "-o", str(out_path), "."],
         cwd=REPO / "backend",
-        env={**os.environ, "CGO_ENABLED": "0", "GOOS": "linux", "GOARCH": "arm64"},
+        env={**os.environ, "CGO_ENABLED": "0", "GOOS": "linux", "GOARCH": goarch},
         check=True,
+    )
+
+
+def remove_stale_container() -> None:
+    """A leftover container from an aborted run blocks `docker run --name`;
+    the name is owned by this harness, so removing it unconditionally is safe."""
+    subprocess.run(
+        ["docker", "rm", "-f", CONTAINER],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
 
@@ -95,6 +106,26 @@ def start_container(admin_password: str) -> None:
         check=True,
         stdout=subprocess.DEVNULL,
     )
+
+
+def container_goarch() -> str:
+    """Map the running container's architecture to a Go GOARCH value.
+
+    The sidecar is built after the container starts so the binary matches the
+    image arch actually pulled (x64 CI runners get amd64 images; arm64 hosts
+    get arm64) instead of hard-coding one.
+    """
+    probe = subprocess.run(
+        ["docker", "exec", CONTAINER, "uname", "-m"],
+        check=True,
+        capture_output=True,
+    )
+    machine = probe.stdout.decode().strip()
+    if machine in ("x86_64", "amd64"):
+        return "amd64"
+    if machine in ("aarch64", "arm64"):
+        return "arm64"
+    raise RuntimeError(f"unsupported container architecture {machine!r}")
 
 
 def wait_for_socket(timeout: float = 90.0) -> None:
@@ -191,10 +222,12 @@ def main() -> int:
     container_started = False
     admin_password = secrets.token_urlsafe(24)  # 只经环境变量喂给容器，不落盘不打印
     try:
-        binary = temp_dir / "dbx-plugin-ldap-linux-arm64"
-        build_linux_sidecar(binary)
+        remove_stale_container()
         start_container(admin_password)
         container_started = True
+        goarch = container_goarch()
+        binary = temp_dir / f"dbx-plugin-ldap-linux-{goarch}"
+        build_linux_sidecar(binary, goarch)
         wait_for_socket()
         subprocess.run(["docker", "cp", str(binary), f"{CONTAINER}:/tmp/sidecar"], check=True, stdout=subprocess.DEVNULL)
 

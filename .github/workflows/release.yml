@@ -94,10 +94,40 @@ jobs:
             dist/*.dbxp
             dist/*.artifact.json
 
+  integration:
+    if: startsWith(github.event.release.tag_name, 'ldap-v')
+    name: LDAP container integration smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DBX_PLUGIN_SIDECAR: ${{ github.workspace }}/backend/bin/dbx-plugin-ldap
+      LDAP_TEST_REQUIRE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Build sidecar
+        run: (cd backend && CGO_ENABLED=0 go build -trimpath -o bin/dbx-plugin-ldap .)
+      - name: Plain-LDAP scenarios (S1-S18)
+        env:
+          LDAP_ADMIN_PASSWORD: ci-plain-${{ github.run_id }}-${{ github.run_attempt }}
+        run: python3 scripts/smoke_container.py
+      - name: TLS + auth scenarios (T1-T6, A1-A5)
+        env:
+          LDAP_ADMIN_PASSWORD: ci-tls-${{ github.run_id }}-${{ github.run_attempt }}
+        run: python3 scripts/smoke_auth_test.py
+      - name: ldapi SASL EXTERNAL scenarios (L1-L3)
+        run: python3 scripts/smoke_ldapi_test.py
+
   publish:
     if: startsWith(github.event.release.tag_name, 'ldap-v')
     name: Publish plugin release assets
-    needs: build
+    needs: [build, integration]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

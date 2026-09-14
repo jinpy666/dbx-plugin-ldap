@@ -147,7 +147,7 @@ func NewProfileFromLifecycle(params *lifecycle.Params) (Profile, bindSecrets, er
 // （加密由 tls_mode 选择：none/starttls/ldaps），端口经 binding port →
 // runtime.port 下发，拨号时空缺按 scheme 缺省（dial.go ldapURLPort）。
 // 兼容旧连接：host 绑定存的是完整 ldap/ldaps/ldapi URL 时原样透传，
-// StartTLS 沿用旧 use_starttls 字段（与 ldaps 并存时仍由 dial 校验拒绝）。
+// StartTLS 沿用旧 use_starttls 字段（落在 ldaps URL 上时在配置解析期拒绝）。
 func buildLDAPURL(connHost, tlsMode string, legacyStartTLS bool) (string, bool, error) {
 	connHost = strings.TrimSpace(connHost)
 	if connHost == "" {
@@ -160,6 +160,12 @@ func buildLDAPURL(connHost, tlsMode string, legacyStartTLS bool) (string, bool, 
 		}
 		switch strings.ToLower(parsed.Scheme) {
 		case "ldap", "ldaps", "ldapi":
+			// 互斥冲突前置到配置解析期（dial 层保留同义兜底）：带 StartTLS 的
+			// 旧字段落在 ldaps URL 上是逻辑矛盾，保存连接时就应报错，而不是
+			// 等拨号建立后才失败。
+			if legacyStartTLS && strings.EqualFold(parsed.Scheme, "ldaps") {
+				return "", false, fmt.Errorf("startTLS cannot be combined with an ldaps url")
+			}
 			return connHost, legacyStartTLS, nil
 		default:
 			return "", false, fmt.Errorf("unsupported ldap url scheme %q", parsed.Scheme)

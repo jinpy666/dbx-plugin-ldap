@@ -31,6 +31,9 @@ jobs:
           node-version: "22"
       - run: python3 scripts/validate_repo.py
       - run: node scripts/connection-forms/verify.mjs ldap
+      # Offline unit tests for the smoke harness itself (result attribution,
+      # scenario runner). No sidecar, no docker needed.
+      - run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_*.py'
 
   frontend:
     name: Frontend checks
@@ -59,6 +62,28 @@ jobs:
             exit 1
           fi
 
+  ui-walkthrough:
+    name: Browser UI walkthrough (mock host)
+    needs: [validate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.24.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm --dir frontend install --frozen-lockfile
+      # Real-browser walkthrough against the vite dev server + mock host
+      # (playwright-core + system Chrome, both provisioned by the script;
+      # runner images ship Chrome stable). Skips instead of failing when a
+      # browser is unavailable.
+      - run: node scripts/ui_test.mjs
+
   backend:
     name: Go sidecar checks
     runs-on: ubuntu-24.04
@@ -70,6 +95,42 @@ jobs:
           go-version: "1.24.x"
           cache-dependency-path: backend/go.sum
       - run: (cd backend && go vet ./... && go test ./...)
+
+  integration:
+    name: LDAP container integration smoke
+    needs: [validate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DBX_PLUGIN_SIDECAR: ${{ github.workspace }}/backend/bin/dbx-plugin-ldap
+      LDAP_TEST_REQUIRE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Build sidecar
+        run: (cd backend && CGO_ENABLED=0 go build -trimpath -o bin/dbx-plugin-ldap .)
+      # Scenario S1-S18 against a live OpenLDAP container (admin password is
+      # generated per run and only ever passes through the environment).
+      - name: Plain-LDAP scenarios (S1-S18)
+        env:
+          LDAP_ADMIN_PASSWORD: ci-plain-${{ github.run_id }}-${{ github.run_attempt }}
+        run: python3 scripts/smoke_container.py
+      # T1-T6 TLS matrix (ldaps/StartTLS/verify/mutual exclusion) + A1-A5 auth
+      # surface against a live container with a self-signed server cert.
+      - name: TLS + auth scenarios (T1-T6, A1-A5)
+        env:
+          LDAP_ADMIN_PASSWORD: ci-tls-${{ github.run_id }}-${{ github.run_attempt }}
+        run: python3 scripts/smoke_auth_test.py
+      # L1-L3 ldapi:// unix-socket SASL EXTERNAL (sidecar cross-compiled to the
+      # container's architecture, driven inside the container).
+      - name: ldapi SASL EXTERNAL scenarios (L1-L3)
+        run: python3 scripts/smoke_ldapi_test.py
 
   candidate:
     name: Package candidate (${{ matrix.target }})

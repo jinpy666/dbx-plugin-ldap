@@ -490,6 +490,10 @@ def main() -> int:
         cert_dir = Path(tempfile.mkdtemp(prefix="dbx-ldap-tls-certs-"))
         generate_self_signed_cert(cert_dir)
         compose_env["LDAP_TLS_CERTS_DIR"] = str(cert_dir)
+        # A leftover container from an aborted run makes `compose up` fail with
+        # a name conflict; the name is owned by this harness, remove it first.
+        sh(["docker", "rm", "-f", CONTAINER], check=False,
+           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         compose("up", "-d", check=True, env=compose_env)
     else:
         if not port_open(LDAP_PORT) or not port_open(LDAPS_PORT):
