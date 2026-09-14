@@ -100,7 +100,8 @@ jobs:
       run:
         shell: bash
     env:
-      SIDECAR_BINARY: backend/bin/dbx-plugin-ldap
+      # Windows Go 产物带 .exe 后缀；smoke 步骤按平台拼出真实二进制路径。
+      SIDECAR_BINARY: backend/bin/dbx-plugin-ldap${{ matrix.os == 'windows' && '.exe' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
