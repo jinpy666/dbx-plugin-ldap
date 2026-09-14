@@ -55,6 +55,7 @@ def main() -> int:
         fail("backend must pass the manifest-injected version into the MCP identity")
 
     required = [
+        ".dbx-store.json",
         "assets/plugin.svg", "frontend/package.json", "backend/go.mod",
         "scripts/test.sh", "scripts/build.sh", "scripts/cli-platform.sh",
         "scripts/smoke_mcp.py", "scripts/connection-forms/verify.mjs",
@@ -66,7 +67,15 @@ def main() -> int:
         if not (ROOT / relative).exists():
             fail(f"missing required path: {relative}")
 
-    print(f"PASS repository identity: {manifest['id']} {version}; standalone paths and vendored SDK present")
+    store = json.loads((ROOT / ".dbx-store.json").read_text(encoding="utf-8"))
+    if store.get("name") != manifest.get("name"):
+        fail(".dbx-store.json name does not match manifest name")
+    if store.get("permissions") != manifest.get("permissions"):
+        fail(".dbx-store.json permissions must mirror manifest permissions")
+    if store.get("source") != manifest.get("source") or store.get("homepage") != manifest.get("homepage"):
+        fail(".dbx-store.json source/homepage must match manifest source/homepage")
+
+    print(f"PASS repository identity: {manifest['id']} {version}; standalone paths, vendored SDK and store listing present")
     return 0
 
 
