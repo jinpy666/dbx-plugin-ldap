@@ -20,6 +20,7 @@ jobs:
   validate:
     name: Validate repository contracts
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,6 +35,7 @@ jobs:
   frontend:
     name: Frontend checks
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -60,6 +62,7 @@ jobs:
   backend:
     name: Go sidecar checks
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -96,6 +99,7 @@ jobs:
             target: windows-x64
             python: python
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -141,6 +145,7 @@ jobs:
     name: Cross-target candidate checks
     needs: [candidate]
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
