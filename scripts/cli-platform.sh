@@ -10,7 +10,8 @@
 #
 # The suffix is NOT plain "<os>-<arch>": linux packages carry a -gnu suffix
 # (linux-x64-gnu / linux-arm64-gnu), so the mapping lives in one place here
-# instead of being duplicated inline.
+# instead of being duplicated inline. Windows (MINGW/MSYS shells, i.e. the
+# windows runners' Git Bash) maps to win32-<arch>.
 #
 # The pure mapping is testable without a real install:
 #   source scripts/cli-platform.sh
@@ -24,6 +25,7 @@ cli_platform() {
   case "$os" in
     Darwin) os=darwin ;;
     Linux) os=linux ;;
+    MINGW*|MSYS*) os=win32 ;;
     *) return 1 ;;
   esac
   case "$arch" in
@@ -42,9 +44,12 @@ cli_platform() {
 # Returns non-zero when the platform is unsupported or the package is not
 # installed (caller prints a clear warning and falls back to the wrapper).
 resolve_native_plugin_cli() {
-  local suffix native
+  local suffix root native
   suffix="$(cli_platform "$(uname -s)" "$(uname -m)")" || return 1
-  native="$(npm root -g 2>/dev/null)/@dbx-app/plugin-cli/node_modules/@dbx-app/plugin-cli-${suffix}/bin/dbx-plugin"
-  [ -x "$native" ] && { printf '%s\n' "$native"; return 0; }
+  root="$(npm root -g 2>/dev/null)/@dbx-app/plugin-cli/node_modules/@dbx-app/plugin-cli-${suffix}/bin"
+  # Windows ships a .exe; Git Bash execs it fine with or without the suffix.
+  for native in "$root/dbx-plugin.exe" "$root/dbx-plugin"; do
+    [ -x "$native" ] && { printf '%s\n' "$native"; return 0; }
+  done
   return 1
 }

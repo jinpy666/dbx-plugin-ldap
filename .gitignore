@@ -1,7 +1,15 @@
-/dist/
 /backend/bin/
+/backend/target/
+/frontend/node_modules/
+/frontend/dist/
+/dist/
+/scripts/__pycache__/
+/ui/
+!/ui/
+!/ui/.gitkeep
 /dbx-plugin-ldap
 node_modules/
-frontend/dist/
 .DS_Store
 *.log
+.dbx-repository-signing-key.env
+.idea/
