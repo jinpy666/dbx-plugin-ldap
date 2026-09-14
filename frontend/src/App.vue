@@ -27,7 +27,7 @@ import { deriveSchemaMetadata, useLdapSchemaCache } from "./lib/schemaCache";
 import { deriveDnValuedAttributes } from "./lib/dnAttributes";
 import type { LdapSchema } from "./lib/newEntryTemplates";
 import { parseAuditEvent, pushAuditItem, type AuditFeedItem } from "./lib/auditFeed";
-import { useUiIntent, type UiIntentOutcome, type UiIntentSummary } from "../../../shared/frontend/uiIntent";
+import { useUiIntent, type UiIntentOutcome, type UiIntentSummary } from "../../shared/frontend/uiIntent";
 
 interface ConnectionSummary {
   name?: string;
