@@ -60,8 +60,17 @@ export interface LdapConnectionStatus {
 }
 
 export interface SchemaResult {
-  attributeTypes: string[];
-  objectClasses: string[];
+  /** attributeTypes / objectClasses：真实 sidecar 返回结构体数组
+   *（{oid,name,names,syntax,...}），mock / 旧 sidecar 返回 raw 定义串数组。 */
+  attributeTypes: unknown[];
+  objectClasses: unknown[];
+  /** 原始 RFC 4512 定义串（阶段1 起由 sidecar 透出；mock/旧 sidecar 缺省）。 */
+  rawAttributeTypes?: string[];
+  rawObjectClasses?: string[];
+  /** 服务器方言检测摘要（dialect.go；RootDSE 不可读时缺省）。 */
+  dialect?: string;
+  vendorName?: string;
+  productName?: string;
 }
 
 /** Current connection id, injected by App.vue once the host context resolves. */

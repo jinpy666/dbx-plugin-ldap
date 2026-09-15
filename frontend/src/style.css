@@ -356,8 +356,20 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 /* LDIF 复制按钮与模式切换同排（切换到 LDIF 模式时出现） */
 .mode-switch-row { display: flex; align-items: center; gap: 6px; }
 /* 属性行操作列：复制 + 删除并排 */
-.attr-actions { display: flex; gap: 2px; }
+.attr-actions { display: flex; gap: 2px; align-items: center; }
 .attr-actions button svg { width: 14px; height: 14px; }
+/* MUST 属性 ★ 标记（条目 objectClass 的 required 属性行旁） */
+.attr-actions .must-mark { color: var(--muted-foreground); font-size: 11px; cursor: help; }
+/* 阶段2：值编辑器分流（时间/DN/布尔/整数）行内控件 */
+.attr-row .attr-value-cell input[type="text"], .attr-row .attr-value-cell select,
+.attr-row .attr-value-cell input[type="datetime-local"] {
+  border: 1px solid var(--border); border-radius: 4px; padding: 4px 7px;
+  outline: none; background: var(--background); color: var(--foreground); font-size: 12px;
+}
+.attr-row .attr-value-cell select.boolean-select { min-height: 26px; }
+.attr-row .attr-value-cell .integer-input { max-width: 260px; }
+.attr-row .binary-decoded { margin: 0; font-size: 11px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.attr-row .attr-value-cell .form-error { font-size: 10px; }
 .ldif-editor { min-height: 0; flex: 1; border: 1px solid var(--border); border-radius: 4px; padding: 8px; outline: none; background: var(--background); color: var(--foreground); font-family: var(--mono-font-family); font-size: 12px; resize: none; }
 
 /* Side panels (schema / connections) */
@@ -381,6 +393,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .schema-col ul { min-height: 0; flex: 1; margin: 0; border: 1px solid var(--border); border-radius: 6px; overflow: auto; padding: 4px; list-style: none; }
 .schema-col li { border-radius: 4px; padding: 4px 6px; font-size: 11px; cursor: default; }
 .schema-col li:hover { background: color-mix(in srgb, var(--accent) 65%, transparent); }
+/* 阶段2：属性定义可点击展开语法详情 */
+.schema-attribute-row.is-selected { background: var(--accent); }
+.schema-attribute-button { border: 0; background: none; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
 .kv-grid { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 6px 12px; padding: 6px 0; }
 .kv-grid dt { color: var(--muted-foreground); }
 .kv-grid dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-family: var(--mono-font-family); font-size: 11px; }

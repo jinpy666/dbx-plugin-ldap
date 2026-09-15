@@ -25,6 +25,7 @@ import ConnectionsPanel from "./components/ConnectionsPanel.vue";
 import AuditFeedPanel from "./components/AuditFeedPanel.vue";
 import { deriveSchemaMetadata, useLdapSchemaCache } from "./lib/schemaCache";
 import { deriveDnValuedAttributes } from "./lib/dnAttributes";
+import { prepareCopyEntry } from "./lib/copyEntry";
 import type { LdapSchema } from "./lib/newEntryTemplates";
 import { parseAuditEvent, pushAuditItem, type AuditFeedItem } from "./lib/auditFeed";
 import { useUiIntent, type UiIntentOutcome, type UiIntentSummary } from "../../shared/frontend/uiIntent";
@@ -92,7 +93,14 @@ const connectionsOpen = ref(false);
 const wizardOpen = ref(false);
 const wizardParentDn = ref("");
 const wizardSchemaCache = useLdapSchemaCache({
-  loader: () => ldapApi.schema().then((result) => deriveSchemaMetadata(result.attributeTypes, result.objectClasses)),
+  loader: () =>
+    ldapApi.schema().then((result) =>
+      deriveSchemaMetadata(result.attributeTypes, result.objectClasses, {
+        dialect: result.dialect,
+        vendorName: result.vendorName,
+        productName: result.productName,
+      }),
+    ),
 });
 const wizardSchema = computed(() => ({ objectClassAttributes: wizardSchemaCache.objectClassAttributes.value }));
 
@@ -106,10 +114,20 @@ const dnAttributes = ref<string[]>([]);
 const editorSchema = ref<LdapSchema>();
 let dnAttributesReady = false;
 const dnSchemaCache = useLdapSchemaCache({
-  loader: () => ldapApi.schema().then((result) => ({
-    ...deriveSchemaMetadata(result.attributeTypes, result.objectClasses),
-    attributeNames: result.attributeTypes,
-  })),
+  loader: () =>
+    ldapApi.schema().then((result) => {
+      // deriveDnValuedAttributes 消费 raw RFC 4512 定义串：真实 sidecar 的
+      // attributeTypes 是结构体数组，优先用其透出的 rawAttributeTypes。
+      const rawDefinitions = result.rawAttributeTypes?.length ? result.rawAttributeTypes : result.attributeTypes;
+      return {
+        ...deriveSchemaMetadata(result.attributeTypes, result.objectClasses, {
+          dialect: result.dialect,
+          vendorName: result.vendorName,
+          productName: result.productName,
+        }),
+        attributeNames: rawDefinitions as string[],
+      };
+    }),
 });
 async function ensureDnAttributes() {
   if (dnAttributesReady) return;
@@ -403,6 +421,7 @@ async function openEntry(dn: string, initialTab?: "ldif" | "assoc") {
   editorLoadError.value = "";
   editorLoading.value = true;
   editorOpen.value = true;
+  editorAddPrefill.value = undefined;
   // 关联视图泛化的 DN 属性名集合：编辑器打开时惰性拉取（失败静默降级）。
   void ensureDnAttributes();
   ldapError.value = "";
@@ -417,6 +436,38 @@ async function openEntry(dn: string, initialTab?: "ldif" | "assoc") {
     if (request === entryRequestSeq) showError(cause, "entry");
   } finally {
     if (request === entryRequestSeq) editorLoading.value = false;
+  }
+}
+
+// 树右键「复制条目」（阶段3，ADS CopyEntriesRunnable 单条模式）：取源条目 →
+// prepareCopyEntry 剔除密码/系统属性 → 编辑器 add 态预填（RDN 属性名保留、
+// 值待填）；被剔除的属性经通知明示，不静默丢弃。
+const editorAddPrefill = ref<{ rdn?: string; attributes: Record<string, string[]> }>();
+
+async function onCopyEntry(dn: string) {
+  const request = ++entryRequestSeq;
+  ldapError.value = "";
+  editorInitialTab.value = undefined;
+  try {
+    const result = await ldapApi.entryGet(dn);
+    if (request !== entryRequestSeq) return;
+    void ensureDnAttributes();
+    const draft = prepareCopyEntry(
+      { dn: result.entry.dn, attributes: result.entry.attributes },
+      { attributeInfo: editorSchema.value?.attributeInfo },
+    );
+    editorEntry.value = undefined;
+    editorRequestedDn.value = "";
+    editorLoadError.value = "";
+    editorLoading.value = false;
+    editorAddPrefill.value = { rdn: draft.rdn, attributes: draft.attributes };
+    editorParentDn.value = draft.parentDn;
+    editorOpen.value = true;
+    if (draft.skipped.length > 0) {
+      showNotice(t("editor.copyEntrySkipped", { attributes: draft.skipped.join(", ") }));
+    }
+  } catch (cause) {
+    if (request === entryRequestSeq) showError(cause, "entry");
   }
 }
 
@@ -662,6 +713,7 @@ function syncConnectionContext() {
   lastSyncedConnectionId = current;
   if (switched) {
     closeEditor();
+    editorAddPrefill.value = undefined;
     searchRequestSeq++;
     searching.value = false;
     searchError.value = "";
@@ -774,6 +826,7 @@ onBeforeUnmount(() => {
         @view="openEntry"
         @members="searchMembersAt"
         @add="openAddChild"
+        @copy-entry="onCopyEntry"
         @rename="askRename"
         @remove="askDelete"
         @export="exportSubtree"
@@ -816,6 +869,7 @@ onBeforeUnmount(() => {
       :open="editorOpen"
       :entry="editorEntry"
       :parent-dn="editorParentDn"
+      :add-prefill="editorAddPrefill"
       :can-write="canWrite"
       :base-dn="baseDn"
       :dn-attributes="dnAttributes"

@@ -14,8 +14,10 @@ import (
 	"time"
 )
 
-// parseLDAPSchemaMetadata 解析 subschema 条目（tiny-rdm :773 原样）。
+// parseLDAPSchemaMetadata 解析 subschema 条目（tiny-rdm :773 原样 + 原始定义串保留）。
 func parseLDAPSchemaMetadata(schemaDN string, entry LDAPEntry) LDAPSchemaMetadata {
+	rawAttributeTypes := append([]string{}, entry.Attributes["attributeTypes"]...)
+	rawObjectClasses := append([]string{}, entry.Attributes["objectClasses"]...)
 	attributeTypes := parseLDAPAttributeTypes(entry.Attributes["attributeTypes"])
 	objectClasses := parseLDAPObjectClasses(entry.Attributes["objectClasses"])
 	attributeNames := make([]string, 0, len(attributeTypes))
@@ -36,6 +38,8 @@ func parseLDAPSchemaMetadata(schemaDN string, entry LDAPEntry) LDAPSchemaMetadat
 		AttributeNames:        attributeNames,
 		AttributeTypes:        attributeTypes,
 		ObjectClassAttributes: objectClasses,
+		RawAttributeTypes:     rawAttributeTypes,
+		RawObjectClasses:      rawObjectClasses,
 	}
 }
 
@@ -72,6 +76,9 @@ func filterLDAPSchemaMetadataForProfile(profile Profile, metadata LDAPSchemaMeta
 		attributeTypes = append(attributeTypes, attr)
 	}
 	metadata.AttributeTypes = attributeTypes
+	// 原始定义串按同款属性名策略过滤，避免被屏蔽属性的定义透出。
+	metadata.RawAttributeTypes = filterRawDefinitions(metadata.RawAttributeTypes, isAllowedAttr)
+	metadata.RawObjectClasses = filterRawDefinitions(metadata.RawObjectClasses, isAllowedAttr)
 
 	objectClasses := make(map[string]LDAPSchemaObjectClassAttributes, len(metadata.ObjectClassAttributes))
 	for key, item := range metadata.ObjectClassAttributes {
@@ -92,10 +99,17 @@ func parseLDAPAttributeTypes(values []string) []LDAPSchemaAttributeType {
 		}
 		names := schemaTokenList(tokens, "NAME")
 		item := LDAPSchemaAttributeType{
-			OID:         tokens[0],
-			Name:        firstLDAPNonEmpty(names...),
-			Names:       names,
-			Description: schemaTokenValue(tokens, "DESC"),
+			OID:                tokens[0],
+			Name:               firstLDAPNonEmpty(names...),
+			Names:              names,
+			Description:        schemaTokenValue(tokens, "DESC"),
+			Syntax:             stripLDAPSyntaxLength(schemaTokenValue(tokens, "SYNTAX")),
+			Equality:           schemaTokenValue(tokens, "EQUALITY"),
+			Substr:             schemaTokenValue(tokens, "SUBSTR"),
+			Ordering:           schemaTokenValue(tokens, "ORDERING"),
+			Sup:                schemaTokenValue(tokens, "SUP"),
+			SingleValue:        schemaTokenHas(tokens, "SINGLE-VALUE"),
+			NoUserModification: schemaTokenHas(tokens, "NO-USER-MODIFICATION"),
 		}
 		if item.Name == "" {
 			item.Name = item.OID
@@ -106,6 +120,55 @@ func parseLDAPAttributeTypes(values []string) []LDAPSchemaAttributeType {
 		return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
 	})
 	return items
+}
+
+// stripLDAPSyntaxLength 剥离 SYNTAX 值的 {len} 长度后缀
+//（RFC 4517 允许 "1.2.3.4{64}" 形式，编辑器分流只关心 OID）。
+func stripLDAPSyntaxLength(syntax string) string {
+	if idx := strings.IndexByte(syntax, '{'); idx >= 0 {
+		return syntax[:idx]
+	}
+	return syntax
+}
+
+// schemaTokenHas 判断无值关键字（如 SINGLE-VALUE）是否出现。
+func schemaTokenHas(tokens []string, keyword string) bool {
+	keyword = strings.ToUpper(keyword)
+	for _, token := range tokens {
+		if strings.ToUpper(token) == keyword {
+			return true
+		}
+	}
+	return false
+}
+
+// filterRawDefinitions 按属性名策略过滤原始 RFC 4512 定义串（解析每个定义的
+// NAME 列表，任一名字被屏蔽则整条剔除；objectClasses 的 MUST/MAY 由调用方的
+// isAllowedAttr 语义自然覆盖——仅当类名本身被屏蔽才整条剔除）。
+func filterRawDefinitions(definitions []string, isAllowed func(string) bool) []string {
+	if len(definitions) == 0 {
+		return nil
+	}
+	filtered := make([]string, 0, len(definitions))
+	for _, definition := range definitions {
+		tokens := tokenizeLDAPSchemaValue(definition)
+		names := schemaTokenList(tokens, "NAME")
+		if len(names) == 0 && len(tokens) > 0 {
+			names = []string{tokens[0]}
+		}
+		allowed := false
+		for _, name := range names {
+			if isAllowed(name) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			continue
+		}
+		filtered = append(filtered, definition)
+	}
+	return filtered
 }
 
 func parseLDAPObjectClasses(values []string) map[string]LDAPSchemaObjectClassAttributes {
@@ -292,6 +355,8 @@ func (c *SchemaCache) Invalidate(connectionID string) {
 func cloneSchemaMetadata(m *LDAPSchemaMetadata) LDAPSchemaMetadata {
 	out := *m
 	out.AttributeNames = append([]string{}, m.AttributeNames...)
+	out.RawAttributeTypes = append([]string{}, m.RawAttributeTypes...)
+	out.RawObjectClasses = append([]string{}, m.RawObjectClasses...)
 	out.AttributeTypes = make([]LDAPSchemaAttributeType, len(m.AttributeTypes))
 	for i, attr := range m.AttributeTypes {
 		attr.Names = append([]string{}, attr.Names...)
@@ -325,15 +390,23 @@ type SchemaSearchSpec struct {
 	SubschemaAttrs []string
 }
 
-// DefaultSchemaSearchSpec 返回默认两段读取规格。
+// DefaultSchemaSearchSpec 返回默认两段读取规格。RootDSE 额外读取 vendor/能力
+// 属性供方言检测（dialect.go）；不支持这些属性的服务器会静默忽略。
 func DefaultSchemaSearchSpec() SchemaSearchSpec {
 	return SchemaSearchSpec{
-		RootDSEAttrs:   []string{"subschemaSubentry"},
+		RootDSEAttrs: []string{
+			"subschemaSubentry",
+			"vendorName",
+			"vendorVersion",
+			"productName",
+			"supportedCapabilities",
+			"supportedLDAPVersion",
+		},
 		SubschemaAttrs: []string{"attributeTypes", "objectClasses"},
 	}
 }
 
-// ResolveSchema 用两段读取结果构建（解析 + 按策略过滤）schema 元数据。
+// ResolveSchema 用两段读取结果构建（解析 + 按策略过滤 + 方言检测）schema 元数据。
 // rootDSE/subschema 由调用方（operations 层）读取；schemaDN 白名单校验在此完成。
 func ResolveSchema(profile Profile, rootDSE, subschema LDAPEntry) (LDAPSchemaMetadata, error) {
 	if err := schemaAllowed(profile); err != nil {
@@ -347,7 +420,9 @@ func ResolveSchema(profile Profile, rootDSE, subschema LDAPEntry) (LDAPSchemaMet
 		return LDAPSchemaMetadata{}, err
 	}
 	metadata := parseLDAPSchemaMetadata(schemaDN, subschema)
-	return filterLDAPSchemaMetadataForProfile(profile, metadata), nil
+	metadata = filterLDAPSchemaMetadataForProfile(profile, metadata)
+	applyLDAPDialectMetadata(&metadata, rootDSE)
+	return metadata, nil
 }
 
 func firstLDAPNonEmpty(values ...string) string {

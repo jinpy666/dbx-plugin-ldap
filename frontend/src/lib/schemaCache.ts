@@ -10,6 +10,7 @@
  */
 
 import { ref } from 'vue';
+import type { AttributeSyntaxInfo } from './valueKinds';
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 
@@ -18,9 +19,18 @@ export interface ObjectClassAttributes {
     may: string[];
 }
 
+export interface SchemaServerInfo {
+    dialect?: string;
+    vendorName?: string;
+    productName?: string;
+}
+
 export interface SchemaMetadata {
     attributeNames: string[];
     objectClassAttributes: Record<string, ObjectClassAttributes>;
+    /** 小写属性名（含别名）→ 语法语义；来自 sidecar 解析字段或 raw 定义解析。 */
+    attributeInfo?: Record<string, AttributeSyntaxInfo>;
+    serverInfo?: SchemaServerInfo;
     rawAttributeTypes?: string[];
     rawObjectClasses?: string[];
 }
@@ -82,6 +92,21 @@ function parseAttributeType(definition: string): string[] {
     return extractKeywordValues(definition, 'NAME');
 }
 
+/** raw 定义串解析：SYNTAX（剥离 {len}）/ EQUALITY / SUP / 布尔标记。 */
+const SYNTAX_VALUE_RE = /\bSYNTAX\s+(\d+(?:\.\d+)+)(?:\{\d+\})?/iu;
+const EQUALITY_RE = /\bEQUALITY\s+([^\s)$]+)/iu;
+
+function parseSyntaxInfoFromDefinition(definition: string): AttributeSyntaxInfo {
+    const info: AttributeSyntaxInfo = {};
+    const syntax = SYNTAX_VALUE_RE.exec(definition);
+    if (syntax) info.syntax = syntax[1];
+    const equality = EQUALITY_RE.exec(definition);
+    if (equality) info.equality = equality[1];
+    if (/\bSINGLE-VALUE\b/iu.test(definition)) info.singleValue = true;
+    if (/\bNO-USER-MODIFICATION\b/iu.test(definition)) info.noUserModification = true;
+    return info;
+}
+
 interface ParsedObjectClass {
     names: string[];
     must: string[];
@@ -95,16 +120,65 @@ function parseObjectClass(definition: string): ParsedObjectClass {
     return { names, must, may };
 }
 
+interface ParsedAttributeType {
+    names: string[];
+    info: AttributeSyntaxInfo;
+}
+
 /**
- * Derive the frontend schema metadata from the sidecar `ldap/schema` return
- * (`attributeTypes` / `objectClasses` are raw RFC 4512 description strings).
+ * 单条 attributeType 定义 → 名字列表 + 语法语义。兼容两种 wire 形状：
+ * - raw RFC 4512 定义串（mock / 旧 sidecar）→ 正则解析；
+ * - sidecar 结构体（{oid,name,names,syntax,...}，阶段1 起的真实格式）→ 直取字段。
  */
-export function deriveSchemaMetadata(attributeTypes: unknown, objectClasses: unknown): SchemaMetadata {
+function parseAttributeTypeItem(item: unknown): ParsedAttributeType {
+    if (item && typeof item === 'object') {
+        const record = item as { name?: unknown; names?: unknown; syntax?: unknown; equality?: unknown; singleValue?: unknown; noUserModification?: unknown };
+        const names = (Array.isArray(record.names) ? record.names : []).map(String).filter(Boolean);
+        const primary = typeof record.name === 'string' && record.name ? record.name : '';
+        if (primary && !names.some((name) => name.toLowerCase() === primary.toLowerCase())) names.unshift(primary);
+        return {
+            names,
+            info: {
+                syntax: typeof record.syntax === 'string' ? record.syntax : undefined,
+                equality: typeof record.equality === 'string' ? record.equality : undefined,
+                singleValue: record.singleValue === true,
+                noUserModification: record.noUserModification === true,
+            },
+        };
+    }
+    const definition = String(item ?? '');
+    return { names: parseAttributeType(definition), info: parseSyntaxInfoFromDefinition(definition) };
+}
+
+function parseObjectClassItem(item: unknown): ParsedObjectClass {
+    if (item && typeof item === 'object') {
+        const record = item as { name?: unknown; names?: unknown; must?: unknown; may?: unknown };
+        const names = (Array.isArray(record.names) ? record.names : []).map(String).filter(Boolean);
+        const primary = typeof record.name === 'string' && record.name ? record.name : '';
+        if (primary && !names.some((name) => name.toLowerCase() === primary.toLowerCase())) names.unshift(primary);
+        return {
+            names,
+            must: (Array.isArray(record.must) ? record.must : []).map(String),
+            may: (Array.isArray(record.may) ? record.may : []).map(String),
+        };
+    }
+    return parseObjectClass(String(item ?? ''));
+}
+
+/**
+ * Derive the frontend schema metadata from the sidecar `ldap/schema` return.
+ * attributeTypes / objectClasses 兼容 raw 定义串数组与结构体数组两种形状；
+ * 同时透出按属性名（小写，含别名）索引的语法语义与服务器方言摘要。
+ */
+export function deriveSchemaMetadata(attributeTypes: unknown, objectClasses: unknown, serverInfo?: SchemaServerInfo): SchemaMetadata {
     const attributeNames: string[] = [];
+    const attributeInfo: Record<string, AttributeSyntaxInfo> = {};
     const seenAttributes = new Set<string>();
-    for (const definition of Array.isArray(attributeTypes) ? attributeTypes : []) {
-        for (const name of parseAttributeType(String(definition ?? ''))) {
+    for (const item of Array.isArray(attributeTypes) ? attributeTypes : []) {
+        const parsed = parseAttributeTypeItem(item);
+        for (const name of parsed.names) {
             const key = name.toLowerCase();
+            if (key) attributeInfo[key] = parsed.info;
             if (!key || seenAttributes.has(key)) continue;
             seenAttributes.add(key);
             attributeNames.push(name);
@@ -112,8 +186,8 @@ export function deriveSchemaMetadata(attributeTypes: unknown, objectClasses: unk
     }
 
     const objectClassAttributes: Record<string, ObjectClassAttributes> = {};
-    for (const definition of Array.isArray(objectClasses) ? objectClasses : []) {
-        const parsed = parseObjectClass(String(definition ?? ''));
+    for (const item of Array.isArray(objectClasses) ? objectClasses : []) {
+        const parsed = parseObjectClassItem(item);
         if (parsed.names.length === 0) continue;
         const entry: ObjectClassAttributes = { must: parsed.must, may: parsed.may };
         for (const name of parsed.names) {
@@ -124,8 +198,10 @@ export function deriveSchemaMetadata(attributeTypes: unknown, objectClasses: unk
     return {
         attributeNames,
         objectClassAttributes,
-        rawAttributeTypes: Array.isArray(attributeTypes) ? attributeTypes.map(String) : [],
-        rawObjectClasses: Array.isArray(objectClasses) ? objectClasses.map(String) : [],
+        attributeInfo,
+        serverInfo,
+        rawAttributeTypes: Array.isArray(attributeTypes) ? attributeTypes.map((item) => (typeof item === 'string' ? item : JSON.stringify(item))) : [],
+        rawObjectClasses: Array.isArray(objectClasses) ? objectClasses.map((item) => (typeof item === 'string' ? item : JSON.stringify(item))) : [],
     };
 }
 
@@ -142,6 +218,8 @@ export function useLdapSchemaCache(options?: SchemaCacheOptions) {
     const error = ref<unknown>(null);
     const attributeNames = ref<string[]>([]);
     const objectClassAttributes = ref<Record<string, ObjectClassAttributes>>({});
+    const attributeInfo = ref<Record<string, AttributeSyntaxInfo>>({});
+    const serverInfo = ref<SchemaServerInfo | undefined>(undefined);
 
     const cache = new Map<string, CacheEntry>();
     const inFlight = new Map<string, Promise<SchemaMetadata>>();
@@ -150,6 +228,8 @@ export function useLdapSchemaCache(options?: SchemaCacheOptions) {
     const applyEntry = (entry: CacheEntry) => {
         attributeNames.value = entry?.payload?.attributeNames || [];
         objectClassAttributes.value = entry?.payload?.objectClassAttributes || {};
+        attributeInfo.value = entry?.payload?.attributeInfo || {};
+        serverInfo.value = entry?.payload?.serverInfo;
     };
 
     const ensureLoaded = async (connectionId: string): Promise<SchemaMetadata | null> => {
@@ -180,6 +260,8 @@ export function useLdapSchemaCache(options?: SchemaCacheOptions) {
                     payload: {
                         attributeNames: payload.attributeNames || [],
                         objectClassAttributes: payload.objectClassAttributes || {},
+                        attributeInfo: payload.attributeInfo || {},
+                        serverInfo: payload.serverInfo,
                         rawObjectClasses: payload.rawObjectClasses,
                     },
                     fetchedAt: Date.now(),
@@ -214,6 +296,8 @@ export function useLdapSchemaCache(options?: SchemaCacheOptions) {
         error.value = null;
         attributeNames.value = [];
         objectClassAttributes.value = {};
+        attributeInfo.value = {};
+        serverInfo.value = undefined;
         currentConnectionId = '';
     };
 
@@ -222,6 +306,8 @@ export function useLdapSchemaCache(options?: SchemaCacheOptions) {
         error,
         attributeNames,
         objectClassAttributes,
+        attributeInfo,
+        serverInfo,
         ensureLoaded,
         invalidate,
         clear,

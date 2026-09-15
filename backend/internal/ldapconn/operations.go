@@ -270,6 +270,7 @@ func (s *Service) SchemaMetadata(ctx context.Context, req LDAPSchemaMetadataRequ
 	}
 	metadata := parseLDAPSchemaMetadata(schemaDN, schemaEntry)
 	metadata = filterLDAPSchemaMetadataForProfile(profile, metadata)
+	applyLDAPDialectMetadata(&metadata, rootDSE)
 	s.schemaCache().Put(req.ConnectionID, metadata)
 	return metadata, nil
 }

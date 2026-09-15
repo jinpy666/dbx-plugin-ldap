@@ -29,11 +29,29 @@ const cache = useLdapSchemaCache({
   loader: async (connectionId) => {
     const { ldapApi } = await import("../lib/api");
     const result = await ldapApi.schema(false);
-    return deriveSchemaMetadata(result.attributeTypes, result.objectClasses);
+    return deriveSchemaMetadata(result.attributeTypes, result.objectClasses, {
+      dialect: result.dialect,
+      vendorName: result.vendorName,
+      productName: result.productName,
+    });
   },
 });
 
 const keyword = ref("");
+const selectedAttribute = ref("");
+// 选中属性的语法语义（schema attributeInfo → 无则不显示详情行）。
+const selectedAttributeInfo = computed(() => {
+  if (!selectedAttribute.value) return undefined;
+  const info = cache.attributeInfo.value;
+  if (!info) return undefined;
+  const key = selectedAttribute.value.toLowerCase();
+  return info[key] ?? info[Object.keys(info).find((name) => name.toLowerCase() === key) ?? ""];
+});
+
+function selectAttribute(name: string) {
+  selectedAttribute.value = selectedAttribute.value === name ? "" : name;
+}
+
 const rawDefinition = ref<SchemaClassRow>();
 // 空列两态（UI 扫描 P2-4）：有过滤字时是"无匹配"，不是"Schema 为空"。
 const hasKeyword = computed(() => keyword.value.trim() !== "");
@@ -109,7 +127,15 @@ useModalA11y(
           <div class="schema-col">
             <h3>{{ t("schema.attributeTypes") }} <span class="muted">({{ attributeRows.length }})</span></h3>
             <ul>
-              <li v-for="name in attributeRows" :key="name" class="mono">{{ name }}</li>
+              <li v-for="name in attributeRows" :key="name" class="mono schema-attribute-row" :class="{ 'is-selected': name === selectedAttribute }">
+                <button type="button" class="schema-attribute-button mono" @click="selectAttribute(name)">{{ name }}</button>
+                <div v-if="name === selectedAttribute && selectedAttributeInfo" class="schema-def">
+                  <div v-if="selectedAttributeInfo.syntax">{{ t("schema.syntax") }}: <span class="mono">{{ selectedAttributeInfo.syntax }}</span></div>
+                  <div v-if="selectedAttributeInfo.equality">{{ t("schema.equality") }}: {{ selectedAttributeInfo.equality }}</div>
+                  <div v-if="selectedAttributeInfo.singleValue">{{ t("schema.singleValue") }}</div>
+                  <div v-if="selectedAttributeInfo.noUserModification">{{ t("schema.noUserModification") }}</div>
+                </div>
+              </li>
               <li v-if="attributeRows.length === 0" class="muted">{{ attributeEmptyText }}</li>
             </ul>
           </div>

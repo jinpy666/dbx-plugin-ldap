@@ -324,3 +324,92 @@ func TestSchemaCacheTTLExpiryTriggersColdFetch(t *testing.T) {
 		t.Fatalf("expired entry should miss (cold refetch expected): %+v", got)
 	}
 }
+
+// —— 语法语义扩展（阶段1：value editor 注册表数据源） ————————————————
+
+func TestParseLDAPAttributeTypesSyntaxSemantics(t *testing.T) {
+	items := parseLDAPAttributeTypes(sampleSubschemaEntry.Attributes["attributeTypes"])
+	byName := map[string]LDAPSchemaAttributeType{}
+	for _, item := range items {
+		byName[item.Name] = item
+	}
+	// SYNTAX {32768} 长度后缀被剥离
+	if got := byName["fullName"].Syntax; got != "1.3.6.1.4.1.1466.115.121.1.15" {
+		t.Errorf("fullName syntax = %q, want stripped OID", got)
+	}
+	if got := byName["fullName"].Equality; got != "caseIgnoreMatch" {
+		t.Errorf("fullName equality = %q", got)
+	}
+	if got := byName["cn"].Sup; got != "name" {
+		t.Errorf("cn sup = %q", got)
+	}
+	if got := byName["userPassword"].Syntax; got != "1.3.6.1.4.1.1466.115.121.1.40" {
+		t.Errorf("userPassword syntax = %q", got)
+	}
+	// 未声明字段保持零值
+	if byName["mail"].Syntax != "" || byName["mail"].SingleValue {
+		t.Errorf("mail semantics should be zero: %+v", byName["mail"])
+	}
+	// SINGLE-VALUE / NO-USER-MODIFICATION 布尔标记
+	flagged := parseLDAPAttributeTypes([]string{
+		`( 1.2.3.10 NAME 'singleInt' SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )`,
+		`( 1.2.3.11 NAME 'sysAttr' SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )`,
+	})
+	if !flagged[0].SingleValue || flagged[0].NoUserModification {
+		t.Errorf("singleInt flags = %+v", flagged[0])
+	}
+	if !flagged[1].SingleValue || !flagged[1].NoUserModification {
+		t.Errorf("sysAttr flags = %+v", flagged[1])
+	}
+}
+
+func TestParseLDAPSchemaMetadataKeepsRawDefinitions(t *testing.T) {
+	metadata := parseLDAPSchemaMetadata("cn=Subschema", sampleSubschemaEntry)
+	if got, want := len(metadata.RawAttributeTypes), len(sampleSubschemaEntry.Attributes["attributeTypes"]); got != want {
+		t.Fatalf("rawAttributeTypes len = %d, want %d", got, want)
+	}
+	if got, want := len(metadata.RawObjectClasses), len(sampleSubschemaEntry.Attributes["objectClasses"]); got != want {
+		t.Fatalf("rawObjectClasses len = %d, want %d", got, want)
+	}
+	if metadata.RawAttributeTypes[0] != sampleSubschemaEntry.Attributes["attributeTypes"][0] {
+		t.Errorf("raw order/content drifted: %q", metadata.RawAttributeTypes[0])
+	}
+	// 缓存深拷贝隔离
+	cache := NewSchemaCache(time.Minute)
+	cache.Put("conn-raw", metadata)
+	got := cache.Get("conn-raw")
+	got.RawAttributeTypes[0] = "mutated"
+	if again := cache.Get("conn-raw"); again.RawAttributeTypes[0] != metadata.RawAttributeTypes[0] {
+		t.Errorf("cache entry mutated through raw slice")
+	}
+}
+
+func TestFilterLDAPSchemaMetadataFiltersRawDefinitions(t *testing.T) {
+	profile := Profile{} // 默认屏蔽表含 userPassword
+	metadata := filterLDAPSchemaMetadataForProfile(profile, parseLDAPSchemaMetadata("cn=Subschema", sampleSubschemaEntry))
+	for _, raw := range metadata.RawAttributeTypes {
+		if strings.Contains(raw, "userPassword") {
+			t.Errorf("userPassword definition should be filtered: %q", raw)
+		}
+	}
+	if len(metadata.RawAttributeTypes) != 3 {
+		t.Errorf("rawAttributeTypes len = %d, want 3 (userPassword dropped)", len(metadata.RawAttributeTypes))
+	}
+	// objectClasses 定义保留（person/inetOrgPerson 不在屏蔽表）
+	if len(metadata.RawObjectClasses) != 2 {
+		t.Errorf("rawObjectClasses len = %d, want 2", len(metadata.RawObjectClasses))
+	}
+}
+
+func TestStripLDAPSyntaxLength(t *testing.T) {
+	cases := map[string]string{
+		"1.3.6.1.4.1.1466.115.121.1.15{64}": "1.3.6.1.4.1.1466.115.121.1.15",
+		"1.3.6.1.4.1.1466.115.121.1.15":     "1.3.6.1.4.1.1466.115.121.1.15",
+		"":                                  "",
+	}
+	for input, want := range cases {
+		if got := stripLDAPSyntaxLength(input); got != want {
+			t.Errorf("stripLDAPSyntaxLength(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

@@ -27,6 +27,7 @@ const emit = defineEmits<{
   (e: "view", dn: string): void;
   (e: "members", dn: string): void;
   (e: "add", dn: string): void;
+  (e: "copyEntry", dn: string): void;
   (e: "rename", dn: string): void;
   (e: "remove", dn: string): void;
   (e: "export", dn: string): void;
@@ -420,6 +421,7 @@ function menuAction(action: string) {
   else if (action === "view") emit("view", dn);
   else if (action === "members") emit("members", dn);
   else if (action === "add") emit("add", dn);
+  else if (action === "copyEntry") emit("copyEntry", dn);
   else if (action === "rename") emit("rename", dn);
   else if (action === "delete") emit("remove", dn);
   else if (action === "export") emit("export", dn);
@@ -574,6 +576,7 @@ onBeforeUnmount(onMountedCleanup);
         <button role="menuitem" @click="menuAction('view')">{{ t("tree.viewEntry") }}</button>
         <button role="menuitem" @click="menuAction('members')">{{ t("associations.members") }}</button>
         <button role="menuitem" :disabled="!canWrite" @click="menuAction('add')">{{ t("tree.addEntry") }}</button>
+        <button role="menuitem" :disabled="!canWrite" @click="menuAction('copyEntry')">{{ t("tree.copyEntry") }}</button>
         <button role="menuitem" :disabled="!canWrite" @click="menuAction('rename')">{{ t("tree.renameEntry") }}</button>
         <button role="menuitem" :disabled="!canWrite" class="danger" @click="menuAction('delete')">{{ t("tree.deleteEntry") }}</button>
         <hr />

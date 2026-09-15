@@ -216,12 +216,22 @@ type LDAPSchemaMetadataRequest struct {
 	Refresh      bool   `json:"refresh,omitempty"`
 }
 
-// LDAPSchemaAttributeType schema attributeTypes 条目（tiny-rdm :122-127）。
+// LDAPSchemaAttributeType schema attributeTypes 条目（tiny-rdm :122-127 +
+// RFC 4512 语法语义扩展：SYNTAX/EQUALITY 等驱动前端值编辑器分流）。
 type LDAPSchemaAttributeType struct {
 	OID         string   `json:"oid"`
 	Name        string   `json:"name"`
 	Names       []string `json:"names"`
 	Description string   `json:"description,omitempty"`
+	// Syntax 语法 OID（SYNTAX，剥离 {len} 长度后缀）；Equality/Substr/Ordering
+	// 匹配规则名；Sup 上位属性名；SingleValue/NoUserModification 布尔标记。
+	Syntax             string `json:"syntax,omitempty"`
+	Equality           string `json:"equality,omitempty"`
+	Substr             string `json:"substr,omitempty"`
+	Ordering           string `json:"ordering,omitempty"`
+	Sup                string `json:"sup,omitempty"`
+	SingleValue        bool   `json:"singleValue,omitempty"`
+	NoUserModification bool   `json:"noUserModification,omitempty"`
 }
 
 // LDAPSchemaObjectClassAttributes schema objectClasses 条目（tiny-rdm :129-136）。
@@ -234,12 +244,21 @@ type LDAPSchemaObjectClassAttributes struct {
 	May         []string `json:"may"`
 }
 
-// LDAPSchemaMetadata schema 元数据聚合（tiny-rdm :138-143）。
+// LDAPSchemaMetadata schema 元数据聚合（tiny-rdm :138-143 + 方言/原始定义扩展）。
 type LDAPSchemaMetadata struct {
 	SubschemaSubentry     string                                     `json:"subschemaSubentry"`
 	AttributeNames        []string                                   `json:"attributeNames"`
 	AttributeTypes        []LDAPSchemaAttributeType                  `json:"attributeTypes"`
 	ObjectClassAttributes map[string]LDAPSchemaObjectClassAttributes `json:"objectClassAttributes"`
+	// RawAttributeTypes / RawObjectClasses subschema 条目的原始 RFC 4512 定义串
+	//（与 AttributeTypes 同序；前端 deriveSchemaMetadata 的历史消费格式）。
+	RawAttributeTypes []string `json:"rawAttributeTypes,omitempty"`
+	RawObjectClasses  []string `json:"rawObjectClasses,omitempty"`
+	// Dialect / VendorName / ProductName 服务器方言检测摘要（RootDSE 推导，
+	// dialect.go；AllowedBaseDNs 禁用 RootDSE 时 Dialect 为 DialectUnknown）。
+	Dialect     string `json:"dialect,omitempty"`
+	VendorName  string `json:"vendorName,omitempty"`
+	ProductName string `json:"productName,omitempty"`
 }
 
 // LDAPAddEntryRequest 对应 ldap/entry/add。

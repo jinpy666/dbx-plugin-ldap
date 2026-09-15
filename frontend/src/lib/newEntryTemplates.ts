@@ -11,6 +11,7 @@
 
 import { joinRdnAndParent } from "./dn";
 import type { ObjectClassAttributes } from "./schemaCache";
+import type { AttributeSyntaxInfo } from "./valueKinds";
 
 export type TemplateId = "user" | "group" | "ou" | "simpleObject" | "blank";
 
@@ -31,11 +32,15 @@ export interface EntryTemplate {
 
 /**
  * schemaCache 聚合结果的最小结构切片（SchemaMetadata / useLdapSchemaCache 的
- * objectClassAttributes 即满足；rawObjectClasses 可选，供 SUP 父类归并）。
+ * objectClassAttributes 即满足；rawObjectClasses 可选，供 SUP 父类归并；
+ * attributeInfo/serverInfo 可选，供值编辑器分流与方言适配）。
  */
 export interface LdapSchema {
+  attributeNames?: string[];
   objectClassAttributes?: Record<string, ObjectClassAttributes>;
   rawObjectClasses?: string[];
+  attributeInfo?: Record<string, AttributeSyntaxInfo>;
+  serverInfo?: { dialect?: string; vendorName?: string; productName?: string };
 }
 
 export interface NewEntryPayload {

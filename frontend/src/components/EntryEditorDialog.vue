@@ -15,10 +15,15 @@ import { missingRequiredAttributes } from "../lib/entryValidation";
 import type { LdapSchema } from "../lib/newEntryTemplates";
 import { useModalA11y, decideBackdropClose } from "../lib/modal";
 import { looksBinaryAttribute } from "../lib/binaryValue";
+import { attributeValueKind, isBinaryKind } from "../lib/valueKinds";
+import { builtinAttributeInfo, builtinAttributeNames } from "../lib/builtinSchema";
+import { objectGuidDisplay, objectSidDisplay } from "../lib/adValues";
 import { writeClipboardText } from "../lib/clipboard";
 import { t } from "../lib/i18n";
 import PasswordAttributeEditor from "./PasswordAttributeEditor.vue";
 import BinaryValueEditor from "./BinaryValueEditor.vue";
+import DatetimeValueEditor from "./DatetimeValueEditor.vue";
+import DnValueEditor from "./DnValueEditor.vue";
 import AssociationPanel from "./AssociationPanel.vue";
 
 export interface AttrRowDraft extends AttrRowDraftSource {
@@ -36,6 +41,8 @@ const props = defineProps<{
   /** view/edit: an existing entry; add: the parent DN to create under. */
   entry?: LdapEntry;
   parentDn?: string;
+  /** add 态的属性预填（复制条目）：entry 为空时生效，rows 由预填属性铺开。 */
+  addPrefill?: { rdn?: string; attributes: Record<string, string[]> };
   /** 关联视图的搜索根（透传给 AssociationPanel）。 */
   baseDn?: string;
   /** 打开时的初始页签；仅 view 态的非 form 值生效，默认不影响既有调用方。 */
@@ -191,8 +198,12 @@ function initFor(mode_: EditorMode, entry?: LdapEntry, parentDn?: string) {
   saving.value = false;
   if (mode_ === "add") {
     dnDraft.value = parentDn || "";
-    rdnDraft.value = "";
-    rows.value = [{ name: "objectClass", valuesText: "top" }];
+    // 复制条目预填：RDN 属性名保留（值待填），属性行由预填铺开
+    //（多值行天然支持，属性 datalist/MUST 标记照常生效）。
+    rdnDraft.value = props.addPrefill?.rdn ?? "";
+    rows.value = props.addPrefill
+      ? entryToRows({ dn: "", attributes: props.addPrefill.attributes })
+      : [{ name: "objectClass", valuesText: "top" }];
     ldifText.value = "";
     syncLdifFromRows();
     return;
@@ -259,20 +270,116 @@ async function focusRequiredAttribute(name: string) {
     rows.value.push({ name, valuesText: "" });
   }
   await nextTick();
-  attrEditor.value?.querySelectorAll(".attr-row")[index]?.querySelector<HTMLElement>("textarea, .attr-value-cell input")?.focus();
+  attrEditor.value?.querySelectorAll(".attr-row")[index]?.querySelector<HTMLElement>("textarea, .attr-value-cell input, .attr-value-cell select")?.focus();
 }
 
-// M6 N2/N3：按属性名分流行编辑器——密码属性走哈希编辑器（userPassword/
-// unicodePwd 等 *password* 命名），二进制属性（jpegPhoto/*Certificate 等，
-// looksBinaryAttribute 启发式）走查看/上传组件，其余保持多行文本。
-// LDIF 模式始终是纯文本，不走分流。
-type RowEditorKind = "password" | "binary" | "text";
+// M6 N2/N3 + 阶段2（值编辑器注册表）：按属性名/语法分流值编辑器。
+// 分流数据源 = valueKinds 注册表（对齐 Apache Directory Studio valueeditors
+// plugin.xml 的「属性名 + 语法 OID」双绑定）：schema 的 attributeInfo 优先，
+// 内置表（builtinSchema）兜底。LDIF 模式始终是纯文本，不走分流。
+type RowEditorKind = "password" | "binary" | "datetime" | "filetime" | "dn" | "boolean" | "integer" | "text";
+
 function editorKind(name: string): RowEditorKind {
   const key = name.trim().toLowerCase();
   if (!key) return "text";
   if (key === "userpassword" || key === "unicodepwd" || key.endsWith("password")) return "password";
   if (looksBinaryAttribute(key)) return "binary";
+  const info = schemaAttributeInfo(key);
+  const kind = attributeValueKind(key, info, props.schema?.serverInfo?.dialect);
+  if (isBinaryKind(kind)) return "binary";
+  if (kind === "datetime" || kind === "filetime" || kind === "dn" || kind === "boolean" || kind === "integer") return kind;
   return "text";
+}
+
+// 属性语法信息：schema attributeInfo（后端为小写键）→ 大小写不敏感扫描 →
+// 内置兜底表（builtinSchema）。
+function schemaAttributeInfo(key: string) {
+  const info = props.schema?.attributeInfo;
+  if (info) {
+    const direct = info[key];
+    if (direct) return direct;
+    const matched = Object.keys(info).find((name) => name.toLowerCase() === key);
+    if (matched) return info[matched];
+  }
+  return builtinAttributeInfo(key);
+}
+
+// 单值编辑器（时间/布尔/整数/DN 选择）只在行确实是单值时生效；多值行
+// （member 可达数百值）降级回 textarea，避免选择器覆盖丢数据。布尔再约束
+// 当前值为 TRUE/FALSE/空，非常规值保持文本以防意外改写。
+const SINGLE_VALUE_KINDS: ReadonlyArray<RowEditorKind> = ["datetime", "filetime", "boolean", "integer", "dn"];
+
+function rowEditorKind(row: AttrRowDraft): RowEditorKind {
+  const kind = editorKind(row.name);
+  if (SINGLE_VALUE_KINDS.includes(kind) && rowValues(row).length > 1) return "text";
+  if (kind === "boolean" && row.valuesText.trim() !== "" && !/^(true|false)$/iu.test(row.valuesText.trim())) return "text";
+  return kind;
+}
+
+// AD objectGUID / objectSid：BinaryValueEditor 之外的一行人类可读预览
+//（ADS 行为：仅显示解码，编辑仍走原始 base64/hex）。
+function decodedIdentifier(row: AttrRowDraft): string {
+  if (editorKind(row.name) !== "binary") return "";
+  const key = row.name.trim().toLowerCase();
+  const value = rowValues(row)[0] ?? "";
+  if (key === "objectguid") return objectGuidDisplay(value);
+  if (key === "objectsid") return objectSidDisplay(value);
+  return "";
+}
+
+const attributeListId = useId();
+
+// 当前条目生效的 objectClass（view/edit 来自条目属性；add 来自草稿行），
+// 小写比较；供 MUST 标记与属性补全排序。
+const entryObjectClasses = computed<string[]>(() => {
+  const source = isAdd.value
+    ? rows.value.filter((row) => row.name.trim().toLowerCase() === "objectclass").flatMap((row) => rowValues(row))
+    : props.entry?.attributes["objectClass"] ?? [];
+  return source.map((value) => value.trim().toLowerCase()).filter(Boolean);
+});
+
+function objectClassDef(name: string) {
+  const classes = props.schema?.objectClassAttributes ?? {};
+  return classes[name] ?? classes[Object.keys(classes).find((key) => key.toLowerCase() === name) ?? ""];
+}
+
+// 条目 objectClass 的 MUST 属性（小写集合），属性行旁打 ★ 提示。
+const mustAttributes = computed<Set<string>>(() => {
+  const set = new Set<string>();
+  for (const objectClass of entryObjectClasses.value) {
+    for (const attribute of objectClassDef(objectClass)?.must ?? []) set.add(attribute.trim().toLowerCase());
+  }
+  return set;
+});
+
+// 属性名补全（datalist）：MUST 优先 → MAY → schema 全量 → 内置常用表兜底。
+const attributeOptions = computed<string[]>(() => {
+  const seen = new Set<string>();
+  const options: string[] = [];
+  const push = (name: string) => {
+    const key = String(name ?? "").trim().toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    options.push(String(name));
+  };
+  for (const objectClass of entryObjectClasses.value) {
+    const def = objectClassDef(objectClass);
+    for (const attribute of def?.must ?? []) push(attribute);
+  }
+  for (const objectClass of entryObjectClasses.value) {
+    const def = objectClassDef(objectClass);
+    for (const attribute of def?.may ?? []) push(attribute);
+  }
+  for (const name of props.schema?.attributeNames ?? []) push(name);
+  for (const name of builtinAttributeNames()) push(name);
+  return options;
+});
+
+const isIntegerShape = (value: string) => /^[+-]?\d+$/.test(value.trim());
+
+// DatetimeValueEditor 的 kind 收窄（模板 v-else-if 无法让 TS 收窄联合类型）。
+function datetimeKind(row: AttrRowDraft): "datetime" | "filetime" {
+  return rowEditorKind(row) === "filetime" ? "filetime" : "datetime";
 }
 
 function rowValues(row: AttrRowDraft): string[] {
@@ -406,29 +513,74 @@ function onBackdropClick() {
       <template v-if="editorTab === 'form'">
         <div ref="attrEditor" class="attr-editor">
           <p v-if="rows.length === 0" class="empty" role="status">{{ t("editor.noAttributes") }}</p>
+          <datalist :id="attributeListId">
+            <option v-for="option in attributeOptions" :key="option" :value="option" />
+          </datalist>
           <div v-for="(row, index) in rows" :key="index" class="attr-row">
-            <input v-model="row.name" type="text" name="attr-name" :placeholder="t('editor.attribute')" :aria-label="t('editor.attribute')" :disabled="!editable" spellcheck="false" />
+            <input v-model="row.name" type="text" name="attr-name" :list="attributeListId" :placeholder="t('editor.attribute')" :aria-label="t('editor.attribute')" :disabled="!editable" spellcheck="false" />
             <span class="attr-value-cell" role="group" :aria-label="row.name || t('editor.values')" :aria-describedby="fieldMissing(row.name) ? requiredErrorId : undefined">
               <PasswordAttributeEditor
-                v-if="editorKind(row.name) === 'password'"
+                v-if="rowEditorKind(row) === 'password'"
                 :model-value="row.valuesText"
                 :disabled="!editable"
                 @update:model-value="row.valuesText = $event"
                 @plain-generated="onPlainGenerated"
               />
-              <BinaryValueEditor
-                v-else-if="editorKind(row.name) === 'binary'"
-                :attribute-name="row.name"
-                :model-value="rowValues(row)"
+              <template v-else-if="rowEditorKind(row) === 'binary'">
+                <BinaryValueEditor
+                  :attribute-name="row.name"
+                  :model-value="rowValues(row)"
+                  :disabled="!editable"
+                  @update:model-value="row.valuesText = $event.join('\n')"
+                />
+                <p v-if="decodedIdentifier(row)" class="binary-decoded mono">{{ decodedIdentifier(row) }}</p>
+              </template>
+              <DatetimeValueEditor
+                v-else-if="rowEditorKind(row) === 'datetime' || rowEditorKind(row) === 'filetime'"
+                :kind="datetimeKind(row)"
+                :model-value="row.valuesText"
                 :disabled="!editable"
-                @update:model-value="row.valuesText = $event.join('\n')"
+                @update:model-value="row.valuesText = $event"
               />
+              <DnValueEditor
+                v-else-if="rowEditorKind(row) === 'dn'"
+                :model-value="row.valuesText"
+                :disabled="!editable"
+                :base-dn="baseDn"
+                @update:model-value="row.valuesText = $event"
+              />
+              <select
+                v-else-if="rowEditorKind(row) === 'boolean'"
+                class="boolean-select"
+                :value="row.valuesText.trim().toUpperCase()"
+                :disabled="!editable"
+                :aria-label="row.name || t('editor.values')"
+                @change="row.valuesText = ($event.target as HTMLSelectElement).value"
+              >
+                <option value="TRUE">TRUE</option>
+                <option value="FALSE">FALSE</option>
+              </select>
+              <template v-else-if="rowEditorKind(row) === 'integer'">
+                <input
+                  class="mono integer-input"
+                  type="text"
+                  inputmode="numeric"
+                  :value="row.valuesText"
+                  :disabled="!editable"
+                  :aria-label="row.name || t('editor.values')"
+                  :aria-invalid="row.valuesText.trim() !== '' && !isIntegerShape(row.valuesText)"
+                  spellcheck="false"
+                  @input="row.valuesText = ($event.target as HTMLInputElement).value"
+                />
+                <small v-if="row.valuesText.trim() !== '' && !isIntegerShape(row.valuesText)" class="form-error">{{ t("ldap.valueEditors.integerInvalid") }}</small>
+              </template>
               <template v-else>
                 <textarea v-model="row.valuesText" rows="2" :placeholder="t('editor.values')" :aria-label="row.name || t('editor.values')" :aria-invalid="fieldMissing(row.name)" :aria-describedby="fieldMissing(row.name) ? requiredErrorId : undefined" :disabled="!editable" spellcheck="false" />
                 <small v-if="row.multiline" class="multiline-hint">{{ t("editor.multilineHint") }}</small>
               </template>
             </span>
             <span class="attr-actions">
+              <span v-if="mustAttributes.has(row.name.split(';')[0].trim().toLowerCase())" class="must-mark" :title="t('editor.requiredAttributes')" aria-hidden="true">★</span>
               <button :title="t('editor.copyValue')" :aria-label="t('editor.copyValue')" :disabled="row.valuesText === ''" @click="copyText(row.valuesText)"><Copy aria-hidden="true" /></button>
               <button :title="t('editor.removeAttribute')" :disabled="!editable" @click="removeRow(index)"><Trash2 /></button>
             </span>
