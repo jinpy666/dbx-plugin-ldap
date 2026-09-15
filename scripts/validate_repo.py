@@ -24,6 +24,11 @@ def main() -> int:
         fail("manifest_version must be 1")
     if manifest.get("id") != "io.dbx.ldap":
         fail(f"manifest id is {manifest.get('id')!r}, expected io.dbx.ldap")
+    if manifest.get("publisher") != "jinpy":
+        # Store authorship lives in the manifest publisher field (SSH plugin
+        # precedent); a placeholder here would bake the wrong author into
+        # every packaged .dbxp.
+        fail(f"manifest publisher is {manifest.get('publisher')!r}, expected 'jinpy'")
     version = manifest.get("version")
     if not isinstance(version, str) or not SEMVER.fullmatch(version):
         fail(f"invalid manifest version: {version!r}")
