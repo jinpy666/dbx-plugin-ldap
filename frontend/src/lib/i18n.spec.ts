@@ -1,5 +1,4 @@
-// 七语完整性守卫：断言 7 个 locale 的 i18n key 集合完全一致（仓库硬性规范，
-// 对齐 scripts/check_i18n.py 的语义）。
+// 七语完整性守卫：断言 7 个 locale 的 i18n key 集合完全一致（仓库硬性规范）。
 import { describe, expect, it } from "vitest";
 import { messages, resolveWorkbenchLocale, workbenchMessage } from "./i18n";
 

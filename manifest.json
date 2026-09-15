@@ -556,7 +556,7 @@
               "label": "认证方式",
               "options": {
                 "anonymous": "匿名",
-                "unauthenticated": "Unauthenticated bind",
+                "unauthenticated": "未认证绑定",
                 "simple": "Simple",
                 "kerberos": "Kerberos（GSSAPI）",
                 "ntlm": "NTLM",
@@ -589,7 +589,8 @@
               "description": "可选，DBX 所在机器上的 PEM CA 文件；Web 环境指服务器或容器路径。留空使用系统证书，仅在验证 TLS 证书时生效。"
             },
             "tls_server_name": {
-              "label": "TLS 服务器名"
+              "label": "TLS 服务器名",
+              "description": "留空时默认使用 URL 中的主机名。"
             },
             "krb_credential_type": {
               "label": "Kerberos 凭据类型",
@@ -639,7 +640,8 @@
               "description": "在 GSSAPI 上下文中请求相互认证。"
             },
             "krb_password": {
-              "label": "Kerberos 密码"
+              "label": "Kerberos 密码",
+              "description": "仅在 Kerberos 凭据类型为「密码」时使用（keytab/ccache 会忽略）。"
             },
             "timeout_secs": {
               "label": "超时（秒）"
@@ -648,16 +650,20 @@
               "label": "只读模式"
             },
             "allowed_base_dns": {
-              "label": "允许的 Base DN（读）"
+              "label": "允许的 Base DN（读）",
+              "description": "每行一个 DN；留空表示不限制。"
             },
             "allowed_write_base_dns": {
-              "label": "允许的 Base DN（写）"
+              "label": "允许的 Base DN（写）",
+              "description": "留空时回退使用读白名单。"
             },
             "blocked_attributes": {
-              "label": "屏蔽属性"
+              "label": "屏蔽属性",
+              "description": "每行一个属性名；会从结果中过滤，写入时将被拒绝。"
             },
             "host": {
-              "label": "服务器地址"
+              "label": "服务器地址",
+              "description": "仅填 LDAP 服务器主机名，不带协议或端口（如 dc01.corp.example.com）。旧版本保存的连接仍保留完整 ldap/ldaps URL，可继续使用。"
             },
             "port": {
               "label": "端口",
@@ -697,7 +703,7 @@
               "label": "認證方式",
               "options": {
                 "anonymous": "匿名",
-                "unauthenticated": "Unauthenticated bind",
+                "unauthenticated": "未認證繫結",
                 "simple": "Simple",
                 "kerberos": "Kerberos（GSSAPI）",
                 "ntlm": "NTLM",
@@ -730,7 +736,8 @@
               "description": "選填，DBX 所在機器上的 PEM CA 檔案；Web 環境指伺服器或容器路徑。留空使用系統憑證，僅在驗證 TLS 憑證時生效。"
             },
             "tls_server_name": {
-              "label": "TLS 伺服器名稱"
+              "label": "TLS 伺服器名稱",
+              "description": "留空時預設使用 URL 中的主機名稱。"
             },
             "krb_credential_type": {
               "label": "Kerberos 憑證類型",
@@ -780,7 +787,8 @@
               "description": "在 GSSAPI 上下文中要求相互驗證。"
             },
             "krb_password": {
-              "label": "Kerberos 密碼"
+              "label": "Kerberos 密碼",
+              "description": "僅在 Kerberos 憑證類型為「密碼」時使用（keytab/ccache 會忽略）。"
             },
             "timeout_secs": {
               "label": "逾時（秒）"
@@ -789,16 +797,20 @@
               "label": "唯讀模式"
             },
             "allowed_base_dns": {
-              "label": "允許的 Base DN（讀）"
+              "label": "允許的 Base DN（讀）",
+              "description": "每行一個 DN；留空表示不限制。"
             },
             "allowed_write_base_dns": {
-              "label": "允許的 Base DN（寫）"
+              "label": "允許的 Base DN（寫）",
+              "description": "留空時回退使用讀取白名單。"
             },
             "blocked_attributes": {
-              "label": "封鎖屬性"
+              "label": "封鎖屬性",
+              "description": "每行一個屬性名稱；會從結果中過濾，寫入時將被拒絕。"
             },
             "host": {
-              "label": "伺服器位址"
+              "label": "伺服器位址",
+              "description": "僅填 LDAP 伺服器主機名稱，不含通訊協定或連接埠（如 dc01.corp.example.com）。舊版本儲存的連線仍保留完整 ldap/ldaps URL，可繼續使用。"
             },
             "port": {
               "label": "連接埠",
@@ -1012,7 +1024,8 @@
               "description": "CA PEM opcional en la máquina DBX (servidor/contenedor en Web). Vacío usa las CA del sistema. Solo se usa al verificar TLS."
             },
             "tls_server_name": {
-              "label": "Nombre del servidor TLS"
+              "label": "Nombre del servidor TLS",
+              "description": "Si se deja vacío, se usa el host de la URL."
             },
             "krb_credential_type": {
               "label": "Tipo de credencial Kerberos",
@@ -1062,7 +1075,8 @@
               "description": "Solicita autenticación mutua en el contexto GSSAPI."
             },
             "krb_password": {
-              "label": "Contraseña de Kerberos"
+              "label": "Contraseña de Kerberos",
+              "description": "Secreto que solo se usa cuando el tipo de credencial Kerberos es contraseña (se ignora para keytab/ccache)."
             },
             "timeout_secs": {
               "label": "Tiempo de espera (segundos)"
@@ -1071,16 +1085,20 @@
               "label": "Solo lectura"
             },
             "allowed_base_dns": {
-              "label": "DN base permitidos (lectura)"
+              "label": "DN base permitidos (lectura)",
+              "description": "Un DN por línea; vacío significa sin restricciones."
             },
             "allowed_write_base_dns": {
-              "label": "DN base permitidos (escritura)"
+              "label": "DN base permitidos (escritura)",
+              "description": "Si se deja vacío, se usa la lista de lectura permitida."
             },
             "blocked_attributes": {
-              "label": "Atributos bloqueados"
+              "label": "Atributos bloqueados",
+              "description": "Un nombre de atributo por línea; se filtran de los resultados y se rechazan en las escrituras."
             },
             "host": {
-              "label": "Servidor"
+              "label": "Servidor",
+              "description": "Solo el nombre de host del servidor LDAP, sin esquema ni puerto (ej.: dc01.corp.example.com). Las conexiones guardadas con una versión anterior conservan su URL ldap/ldaps completa y siguen funcionando."
             },
             "port": {
               "label": "Puerto",
@@ -1153,7 +1171,8 @@
               "description": "CA PEM opzionale sulla macchina DBX (server/container per Web). Se vuoto usa le CA di sistema. Usato solo con la verifica TLS."
             },
             "tls_server_name": {
-              "label": "Nome server TLS"
+              "label": "Nome server TLS",
+              "description": "Se vuoto, viene usato l'host nell'URL."
             },
             "krb_credential_type": {
               "label": "Tipo di credenziale Kerberos",
@@ -1203,7 +1222,8 @@
               "description": "Richiede l'autenticazione reciproca nel contesto GSSAPI."
             },
             "krb_password": {
-              "label": "Password Kerberos"
+              "label": "Password Kerberos",
+              "description": "Segreto usato solo quando il tipo di credenziale Kerberos è password (ignorato per keytab/ccache)."
             },
             "timeout_secs": {
               "label": "Timeout (secondi)"
@@ -1212,16 +1232,20 @@
               "label": "Sola lettura"
             },
             "allowed_base_dns": {
-              "label": "DN base consentiti (lettura)"
+              "label": "DN base consentiti (lettura)",
+              "description": "Un DN per riga; vuoto significa senza restrizioni."
             },
             "allowed_write_base_dns": {
-              "label": "DN base consentiti (scrittura)"
+              "label": "DN base consentiti (scrittura)",
+              "description": "Se vuoto, viene usato l'elenco consentito in lettura."
             },
             "blocked_attributes": {
-              "label": "Attributi bloccati"
+              "label": "Attributi bloccati",
+              "description": "Un nome di attributo per riga; vengono filtrati dai risultati e rifiutati in scrittura."
             },
             "host": {
-              "label": "Server"
+              "label": "Server",
+              "description": "Solo il nome host del server LDAP, senza schema né porta (es.: dc01.corp.example.com). Le connessioni salvate con una versione precedente conservano l'URL ldap/ldaps completo e continuano a funzionare."
             },
             "port": {
               "label": "Porta",
@@ -1261,7 +1285,7 @@
               "label": "認証方式",
               "options": {
                 "anonymous": "匿名",
-                "unauthenticated": "Unauthenticated bind",
+                "unauthenticated": "非認証バインド",
                 "simple": "Simple",
                 "kerberos": "Kerberos（GSSAPI）",
                 "ntlm": "NTLM",
@@ -1294,7 +1318,8 @@
               "description": "DBX マシン上の任意の PEM CA ファイルです。Web ではサーバー／コンテナーのパスです。空欄はシステム証明書を使い、TLS 検証時のみ適用します。"
             },
             "tls_server_name": {
-              "label": "TLS サーバー名"
+              "label": "TLS サーバー名",
+              "description": "空欄の場合は URL 内のホスト名が既定で使われます。"
             },
             "krb_credential_type": {
               "label": "Kerberos 認証情報タイプ",
@@ -1344,7 +1369,8 @@
               "description": "GSSAPI コンテキストで相互認証を要求します。"
             },
             "krb_password": {
-              "label": "Kerberos パスワード"
+              "label": "Kerberos パスワード",
+              "description": "Kerberos 認証情報タイプが「パスワード」の場合にのみ使うシークレットです（keytab/ccache では無視されます）。"
             },
             "timeout_secs": {
               "label": "タイムアウト（秒）"
@@ -1353,16 +1379,20 @@
               "label": "読み取り専用"
             },
             "allowed_base_dns": {
-              "label": "許可された Base DN（読み取り）"
+              "label": "許可された Base DN（読み取り）",
+              "description": "1 行に 1 つの DN。空欄は無制限を意味します。"
             },
             "allowed_write_base_dns": {
-              "label": "許可された Base DN（書き込み）"
+              "label": "許可された Base DN（書き込み）",
+              "description": "空欄の場合は読み取り許可リストにフォールバックします。"
             },
             "blocked_attributes": {
-              "label": "ブロックされた属性"
+              "label": "ブロックされた属性",
+              "description": "1 行に 1 つの属性名。結果からは除外され、書き込み時は拒否されます。"
             },
             "host": {
-              "label": "サーバーホスト"
+              "label": "サーバーホスト",
+              "description": "LDAP サーバーのホスト名のみを入力します（スキームやポートは不要。例: dc01.corp.example.com）。旧バージョンで保存した接続は完全な ldap/ldaps URL を保持し、そのまま動作します。"
             },
             "port": {
               "label": "ポート",
@@ -1435,7 +1465,8 @@
               "description": "CA PEM opcional na máquina DBX (servidor/contêiner na Web). Vazio usa as CAs do sistema. Usado apenas com verificação TLS."
             },
             "tls_server_name": {
-              "label": "Nome do servidor TLS"
+              "label": "Nome do servidor TLS",
+              "description": "Se vazio, usa o host da URL por padrão."
             },
             "krb_credential_type": {
               "label": "Tipo de credencial Kerberos",
@@ -1485,7 +1516,8 @@
               "description": "Solicita autenticação mútua no contexto GSSAPI."
             },
             "krb_password": {
-              "label": "Senha do Kerberos"
+              "label": "Senha do Kerberos",
+              "description": "Segredo usado somente quando o tipo de credencial Kerberos é senha (ignorado para keytab/ccache)."
             },
             "timeout_secs": {
               "label": "Tempo limite (segundos)"
@@ -1494,16 +1526,20 @@
               "label": "Somente leitura"
             },
             "allowed_base_dns": {
-              "label": "DNs base permitidos (leitura)"
+              "label": "DNs base permitidos (leitura)",
+              "description": "Um DN por linha; vazio significa sem restrição."
             },
             "allowed_write_base_dns": {
-              "label": "DNs base permitidos (escrita)"
+              "label": "DNs base permitidos (escrita)",
+              "description": "Se vazio, usa a lista de leitura permitida como fallback."
             },
             "blocked_attributes": {
-              "label": "Atributos bloqueados"
+              "label": "Atributos bloqueados",
+              "description": "Um nome de atributo por linha; filtrado dos resultados e rejeitado nas escritas."
             },
             "host": {
-              "label": "Servidor"
+              "label": "Servidor",
+              "description": "Apenas o nome do host do servidor LDAP, sem esquema nem porta (ex.: dc01.corp.example.com). Conexões salvas com uma versão anterior mantêm a URL ldap/ldaps completa e continuam funcionando."
             },
             "port": {
               "label": "Porta",
