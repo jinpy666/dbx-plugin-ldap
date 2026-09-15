@@ -3,7 +3,7 @@
   "manifest_version": 1,
   "id": "io.dbx.ldap",
   "name": "LDAP Studio",
-  "version": "0.1.67",
+  "version": "0.1.68",
   "publisher": "jinpy",
   "description": "Browse, search, and manage LDAP directories with RFC 4515 filters, schema inspection, entry editing, LDIF/CSV export, and guarded write controls.",
   "source": "https://github.com/jinpy666/dbx-plugin-ldap",
