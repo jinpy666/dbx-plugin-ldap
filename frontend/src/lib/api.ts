@@ -59,6 +59,13 @@ export interface LdapConnectionStatus {
   lastUsedAt?: number;
 }
 
+/** ldap/check 连接体检结果（契约定死：network 段 + bind 段；level 缺省 = 两段）。 */
+export interface LdapCheckResult {
+  ok: boolean;
+  network: { ok: boolean; latencyMs?: number; error?: string };
+  bind: { ok: boolean; skipped?: boolean; error?: string };
+}
+
 export interface SchemaResult {
   /** attributeTypes / objectClasses：真实 sidecar 返回结构体数组
    *（{oid,name,names,syntax,...}），mock / 旧 sidecar 返回 raw 定义串数组。 */
@@ -161,6 +168,16 @@ export const ldapApi = {
 
   connectionStatuses() {
     return callLdap<{ statuses: LdapConnectionStatus[] }>("ldap/connections/statuses");
+  },
+
+  // 连接体检：level 缺省（不传）= network+bind 两段；此处显式传 connectionId
+  // （覆盖全局上下文）以支持连接面板逐行检查任意连接。连接未知等业务错误走 reject。
+  check(connectionId: string, level?: "network" | "bind") {
+    return callLdap<LdapCheckResult>(
+      "ldap/check",
+      { connectionId, ...(level ? { level } : {}) },
+      { timeoutMs: 15000 },
+    );
   },
 
   presetsList() {

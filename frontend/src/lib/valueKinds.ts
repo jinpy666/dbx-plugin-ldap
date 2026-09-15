@@ -17,6 +17,7 @@ export type AttributeValueKind =
     | "dn" // DN / nameAndOptionalUID 值（可从目录树选择）
     | "boolean" // TRUE/FALSE
     | "integer" // 整数
+    | "uac" // AD userAccountControl 位掩码
     | "guid" // AD objectGUID（二进制，显示为标准 UUID）
     | "sid" // AD objectSid（二进制，显示为 S-1-…）
     | "uuid" // entryUUID 等 RFC UUID 字符串
@@ -31,17 +32,20 @@ export interface AttributeSyntaxInfo {
     noUserModification?: boolean;
 }
 
-/** RFC 4512 常用语法 OID（对齐 ADS valueeditors plugin.xml 绑定）。 */
+/** RFC 4512 常用语法 OID（对齐 ADS valueeditors plugin.xml 绑定）。
+ * 注意 RFC 4517 的 OID 陷阱：.26 是 IA5 String（mail/uid/dc），UTC Time 是 .53。 */
 export const LDAP_SYNTAX = {
     generalizedTime: "1.3.6.1.4.1.1466.115.121.1.24",
-    utcTime: "1.3.6.1.4.1.1466.115.121.1.26",
+    utcTime: "1.3.6.1.4.1.1466.115.121.1.53",
+    ia5String: "1.3.6.1.4.1.1466.115.121.1.26",
     dn: "1.3.6.1.4.1.1466.115.121.1.12",
     nameAndOptionalUID: "1.3.6.1.4.1.1466.115.121.1.34",
     boolean: "1.3.6.1.4.1.1466.115.121.1.7",
     integer: "1.3.6.1.4.1.1466.115.121.1.27",
     jpeg: "1.3.6.1.4.1.1466.115.121.1.28",
     certificate: "1.3.6.1.4.1.1466.115.121.1.8",
-    certificateList: "1.3.6.1.4.1.1466.115.121.1.10",
+    certificateList: "1.3.6.1.4.1.1466.115.121.1.9",
+    certificationPath: "1.3.6.1.4.1.1466.115.121.1.10",
     octetString: "1.3.6.1.4.1.1466.115.121.1.40",
     oid: "1.3.6.1.4.1.1466.115.121.1.38",
     uuid: "1.3.6.1.1.16.1",
@@ -63,6 +67,8 @@ const NAME_KINDS: Record<string, AttributeValueKind> = {
     // MSAD 二进制标识（显示解码，编辑仍走二进制/base64）
     objectguid: "guid",
     objectsid: "sid",
+    // AD 位掩码（专用的复选框合成编辑器）
+    useraccountcontrol: "uac",
     // UUID
     entryuuid: "uuid",
     ipauniqueid: "uuid",
@@ -102,6 +108,7 @@ const SYNTAX_KINDS: Record<string, AttributeValueKind> = {
     [LDAP_SYNTAX.jpeg]: "binary",
     [LDAP_SYNTAX.certificate]: "binary",
     [LDAP_SYNTAX.certificateList]: "binary",
+    [LDAP_SYNTAX.certificationPath]: "binary",
     [LDAP_SYNTAX.octetString]: "binary",
     [LDAP_SYNTAX.oid]: "oid",
     [LDAP_SYNTAX.uuid]: "uuid",

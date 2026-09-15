@@ -29,6 +29,10 @@ describe("attributeValueKind name bindings", () => {
     }
   });
 
+  it("binds userAccountControl to the uac bitmask kind even with integer schema syntax", () => {
+    expect(attributeValueKind("userAccountControl", { syntax: LDAP_SYNTAX.integer })).toBe("uac");
+  });
+
   it("falls back to common DN reference names when schema is unavailable", () => {
     expect(attributeValueKind("member")).toBe("dn");
     expect(attributeValueKind("memberOf")).toBe("dn");
@@ -53,6 +57,13 @@ describe("attributeValueKind syntax bindings", () => {
     expect(attributeValueKind("someInt", { syntax: LDAP_SYNTAX.integer })).toBe("integer");
     expect(attributeValueKind("someOid", { syntax: LDAP_SYNTAX.oid })).toBe("oid");
     expect(attributeValueKind("someId", { syntax: LDAP_SYNTAX.uuid })).toBe("uuid");
+  });
+
+  it("does NOT mistake IA5 String (.26) for a time syntax (mail/uid/dc are IA5)", () => {
+    // 回归：UTC Time 是 .53；.26 = IA5 String 必须保持 text
+    expect(LDAP_SYNTAX.utcTime).toBe("1.3.6.1.4.1.1466.115.121.1.53");
+    expect(attributeValueKind("mail", { syntax: LDAP_SYNTAX.ia5String })).toBe("text");
+    expect(attributeValueKind("uid", { syntax: "1.3.6.1.4.1.1466.115.121.1.26" })).toBe("text");
   });
 
   it("maps octetString to binary (guid/sid names already captured earlier)", () => {

@@ -15,6 +15,7 @@ import {
   mayAttributesFor,
   mustAttributesFor,
   resolveTemplate,
+  sortTemplatesForDialect,
   type LdapSchema,
   type NewEntryPayload,
   type TemplateId,
@@ -35,12 +36,19 @@ const emit = defineEmits<{
 
 const templates = listTemplates();
 
+// 阶段5 方言适配：按连接 serverInfo.dialect 把最匹配的模板排最前。
+const orderedTemplates = computed(() => sortTemplatesForDialect(templates, props.schema?.serverInfo?.dialect));
+
 const TEMPLATE_I18N: Record<TemplateId, { title: string; desc: string }> = {
   user: { title: "ldap.wizard.templateUser", desc: "ldap.wizard.templateUserDesc" },
   group: { title: "ldap.wizard.templateGroup", desc: "ldap.wizard.templateGroupDesc" },
   ou: { title: "ldap.wizard.templateOu", desc: "ldap.wizard.templateOuDesc" },
   simpleObject: { title: "ldap.wizard.templateSimpleObject", desc: "ldap.wizard.templateSimpleObjectDesc" },
   blank: { title: "ldap.wizard.templateBlank", desc: "ldap.wizard.templateBlankDesc" },
+  adUser: { title: "ldap.wizard.templateAdUser", desc: "ldap.wizard.templateAdUserDesc" },
+  posixUser: { title: "ldap.wizard.templatePosixUser", desc: "ldap.wizard.templatePosixUserDesc" },
+  posixGroup: { title: "ldap.wizard.templatePosixGroup", desc: "ldap.wizard.templatePosixGroupDesc" },
+  ipaUser: { title: "ldap.wizard.templateIpaUser", desc: "ldap.wizard.templateIpaUserDesc" },
 };
 
 const step = ref(1);
@@ -206,14 +214,15 @@ function onBackdropClick() {
         <span :data-step="4" :class="{ 'is-active': step === 4 }">{{ t("ldap.wizard.stepAttributes") }}</span>
       </div>
 
-      <!-- ① 模板选择 -->
+      <!-- ① 模板选择（方言匹配的排最前，卡片带方言标注） -->
       <div v-if="step === 1" class="wizard-step template-grid">
         <button
-          v-for="template in templates"
+          v-for="template in orderedTemplates"
           :key="template.id"
           type="button"
           class="template-card"
           :data-template="template.id"
+          :data-dialect="template.dialect ?? 'universal'"
           @click="chooseTemplate(template.id)"
         >
           <strong>{{ t(TEMPLATE_I18N[template.id].title) }}</strong>

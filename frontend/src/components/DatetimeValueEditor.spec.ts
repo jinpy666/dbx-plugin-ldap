@@ -68,6 +68,12 @@ describe("DatetimeValueEditor (filetime)", () => {
     expect(wrapper.text()).not.toMatch(/20\d\d/u);
   });
 
+  it("keeps the picker empty for sentinels (0 is not a 1601 date)", () => {
+    expect((track({ modelValue: "0", kind: "filetime" }).find(PICKER).element as HTMLInputElement).value).toBe("");
+    expect((track({ modelValue: "9223372036854775807", kind: "filetime" }).find(PICKER).element as HTMLInputElement).value).toBe("");
+    expect((track({ modelValue: "132223104000000000", kind: "filetime" }).find(PICKER).element as HTMLInputElement).value).not.toBe("");
+  });
+
   it("renders the never sentinel for INT64_MAX", () => {
     const wrapper = track({ modelValue: "9223372036854775807", kind: "filetime" });
     expect(wrapper.find(".datetime-preview").exists()).toBe(true);

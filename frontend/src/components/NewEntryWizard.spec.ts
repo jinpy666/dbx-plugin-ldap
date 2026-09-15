@@ -89,7 +89,7 @@ describe("NewEntryWizard", () => {
     const wrapper = trackWizard({ parentDn: PARENT, schema: SCHEMA });
     expect(activeStep(wrapper).text()).toBe(t("ldap.wizard.stepTemplate"));
     const ids = wrapper.findAll(".template-card").map((card) => card.attributes("data-template"));
-    expect(ids).toEqual(["user", "group", "ou", "simpleObject", "blank"]);
+    expect(ids).toEqual(["user", "group", "ou", "simpleObject", "blank", "adUser", "posixUser", "posixGroup", "ipaUser"]);
   });
 
   it("seeds the user template chain, then lays out the must form with the RDN-synced field", async () => {

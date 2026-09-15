@@ -207,6 +207,34 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 .search-form input:focus, .search-form select:focus { border-color: color-mix(in srgb, var(--primary) 70%, var(--border)); }
 .search-form .mono { font-family: var(--mono-font-family); }
+/* 折叠态单行快捷条（对标 ADS quick search）：高级区用 hidden 属性收起而非卸载，
+   构建/源码输入态与焦点保留，展开即时还原。输入样式沿用上方 .search-form input/select。 */
+/* hidden 折叠契约收口：上方 .filter-block/.search-extra 等的作者 display 规则
+   会压过 UA 样式表的 [hidden]，必须显式判 none（vitest 不加载 CSS，测不出）。 */
+.search-form [hidden] { display: none !important; }
+.search-form-compact { display: flex; align-items: center; gap: 6px; grid-column: 1 / -1; }
+.search-form-compact > .field { flex: 1.2 1 170px; }
+.search-form-compact .compact-scope { flex: 0 0 auto; width: 104px; }
+.search-form-compact .compact-filter { flex: 2 1 220px; }
+.search-form-compact > .form-error { flex: 0 1 auto; max-width: 32%; }
+.search-form-compact .compact-toggle { flex: 0 0 auto; width: 26px; justify-content: center; }
+/* 历史过滤器下拉（对账表 P1，对标 ADS 搜索历史）：两种形态的触发按钮挂各自
+   锚点、共用一个面板状态；面板绝对定位于自身按钮下方，盖住后续行不挤占布局，
+   质感沿用 .context-menu 的 popover 约定。 */
+.search-history { position: relative; display: inline-flex; flex: 0 0 auto; }
+.search-history .history-toggle { width: 26px; justify-content: center; }
+.history-panel { position: absolute; top: calc(100% + 4px); right: 0; z-index: 40; display: flex; width: min(420px, 92vw); max-height: 280px; flex-direction: column; gap: 4px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; background: var(--popover); box-shadow: 0 12px 36px rgb(0 0 0 / 24%); color: var(--foreground); }
+.history-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; color: var(--muted-foreground); }
+.history-clear { border: 0; background: transparent; padding: 2px 4px; color: var(--primary); font-size: 10px; cursor: pointer; }
+.history-clear:hover:not(:disabled) { text-decoration: underline; }
+.history-empty { margin: 0; color: var(--muted-foreground); font-size: 10px; }
+.history-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.history-item { display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 100%; border: 1px solid transparent; border-radius: 4px; padding: 4px 6px; background: transparent; color: var(--foreground); font-size: 11px; text-align: left; cursor: pointer; }
+.history-item:hover { border-color: var(--border); background: var(--accent); }
+.history-filter { overflow-wrap: anywhere; }
+.history-meta { color: var(--muted-foreground); font-size: 10px; overflow-wrap: anywhere; }
+/* 展开态定位行：Run 与「收起高级区」并排 */
+.run-row { display: flex; align-items: center; gap: 4px; }
 .search-extra { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(70px, 100px) minmax(70px, 100px) auto auto; gap: 6px; align-items: end; grid-column: 1 / -1; }
 .search-presets { display: flex; align-items: center; gap: 5px; grid-column: 1 / -1; }
 .search-presets select { min-width: 160px; height: 24px; }
@@ -223,6 +251,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 /* Filter block: visual builder / source mode (A-LDAP) */
 .filter-block { display: flex; flex-direction: column; gap: 6px; grid-column: 1 / -1; }
 .filter-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; color: var(--muted-foreground); }
+/* filter-head 右侧工具区：模式开关与历史入口归组右对齐（space-between 只分两端） */
+.filter-head-tools { display: inline-flex; align-items: center; gap: 6px; }
 .filter-source { display: flex; align-items: center; gap: 8px; }
 .filter-source input {
   min-width: 0; flex: 1; height: 26px;
@@ -407,4 +437,33 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .divider { width: 100%; height: 1px; flex-basis: 1px; cursor: row-resize; }
   .search-form { grid-template-columns: 1fr 1fr; }
   .search-extra { grid-template-columns: 1fr 1fr; }
+  /* 窄屏紧凑条允许换行，过滤器串独占一整行 */
+  .search-form-compact { flex-wrap: wrap; }
+  .search-form-compact .compact-filter { flex-basis: 100%; }
 }
+
+/* 悬浮提示气泡（lib/tooltip.ts）：图标按钮 hover 的即时文字提示，禁用态
+   也有（原生 title 对 disabled 控件不显示）。fixed 挂 body，不受滚动容器
+   overflow 裁剪；z-index 高于 modal(80)/notice(90)。 */
+.app-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 120;
+  max-width: min(360px, 90vw);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  background: var(--popover);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 24%);
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.app-tooltip.is-visible { opacity: 1; }

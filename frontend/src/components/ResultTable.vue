@@ -4,6 +4,7 @@
 // - 列头点击排序（dn 列默认升序）
 // - 列头右缘拖拽调宽，持久化 localStorage（按列名记录）
 // - 行双击 / Enter 打开条目编辑器（ldap/entry/get），↑/↓ 键盘导航
+// - 行首复选框多选 + 批量删除入口（对标 Apache Directory Studio 的 Batch Operations）
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { ChevronLeft, ChevronRight, FileDown, FileJson, FileSpreadsheet } from "@lucide/vue";
 import type { LdapEntry } from "../lib/api";
@@ -30,6 +31,8 @@ const emit = defineEmits<{
   (e: "open", dn: string): void;
   (e: "export", format: "ldif" | "csv" | "json"): void;
   (e: "retry"): void;
+  (e: "batchDelete", dns: string[]): void;
+  (e: "batchMove", dns: string[]): void;
 }>();
 
 const PAGE_SIZE = 50;
@@ -37,6 +40,8 @@ const COLUMN_WIDTHS_KEY = "ldap.result.columnWidths.v1";
 const MIN_COLUMN_WIDTH = 60;
 const DEFAULT_DN_WIDTH = "minmax(200px, 2fr)";
 const DEFAULT_COLUMN_WIDTH = "minmax(90px, 1fr)";
+// 行首复选框固定列宽（不参与列宽拖拽持久化）。
+const BATCH_CHECK_WIDTH = "26px";
 
 const sortColumn = ref<string>("dn");
 const sortDirection = ref<"asc" | "desc">("asc");
@@ -97,6 +102,7 @@ onMounted(loadColumnWidths);
 
 const gridStyle = computed(() => ({
   gridTemplateColumns: [
+    BATCH_CHECK_WIDTH,
     columnWidths.value.dn ? `${columnWidths.value.dn}px` : DEFAULT_DN_WIDTH,
     ...columns.value.map((column) => (columnWidths.value[column] ? `${columnWidths.value[column]}px` : DEFAULT_COLUMN_WIDTH)),
   ].join(" "),
@@ -194,11 +200,94 @@ function onRowsKeydown(event: KeyboardEvent) {
   }
 }
 
+// -- batch selection（行首复选框多选 + 批量删除入口） -------------------------
+// 键统一用小写 DN（LDAP DN 大小写不敏感），原始 DN 存 Map 以便事件 payload
+// 按原样取回。选择状态独立于行选中（selectedDn）与排序/键盘导航。
+
+const selectedDns = ref<Set<string>>(new Set());
+const originalDns = ref<Map<string, string>>(new Map());
+
+const selectedCount = computed(() => selectedDns.value.size);
+
+const allSelected = computed(
+  () => props.entries.length > 0 && props.entries.every((entry) => selectedDns.value.has(entry.dn.toLowerCase())),
+);
+
+// 行复选框选中态：小写 DN 键命中即可（与存储键同规则）。
+function isRowChecked(entry: LdapEntry): boolean {
+  return selectedDns.value.has(entry.dn.toLowerCase());
+}
+
+function toggleRowSelection(entry: LdapEntry) {
+  const key = entry.dn.toLowerCase();
+  const next = new Set(selectedDns.value);
+  const nextOriginals = new Map(originalDns.value);
+  if (next.has(key)) {
+    next.delete(key);
+    nextOriginals.delete(key);
+  } else {
+    next.add(key);
+    nextOriginals.set(key, entry.dn);
+  }
+  selectedDns.value = next;
+  originalDns.value = nextOriginals;
+}
+
+function clearSelection() {
+  selectedDns.value = new Set();
+  originalDns.value = new Map();
+}
+
+function toggleAllSelection() {
+  if (allSelected.value) {
+    clearSelection();
+    return;
+  }
+  const next = new Set<string>();
+  const nextOriginals = new Map<string, string>();
+  for (const entry of props.entries) {
+    const key = entry.dn.toLowerCase();
+    next.add(key);
+    nextOriginals.set(key, entry.dn);
+  }
+  selectedDns.value = next;
+  originalDns.value = nextOriginals;
+}
+
+// 收集所选 DN：按当前条目顺序输出原始大小写 DN（batchDelete/batchMove 共用，
+// 保证两个事件的 payload 同序同大小写）。
+function collectSelectedDns(): string[] {
+  const dns: string[] = [];
+  for (const entry of props.entries) {
+    const key = entry.dn.toLowerCase();
+    if (selectedDns.value.has(key)) dns.push(originalDns.value.get(key) ?? entry.dn);
+  }
+  return dns;
+}
+
+// 确认删除：原生 confirm（与 SearchForm.removePreset 同机制）；确认后清空选择。
+function confirmBatchDelete() {
+  const count = selectedDns.value.size;
+  if (count === 0) return;
+  if (!window.confirm(t("result.batchConfirm", { count }))) return;
+  emit("batchDelete", collectSelectedDns());
+  clearSelection();
+}
+
+// 批量移动：目标父 DN 的选择与确认在 App 侧对话框完成，这里直接 emit，
+// payload 与 batchDelete 同序同大小写；随后与 batchDelete 一致地清空选择。
+function batchMoveSelection() {
+  if (selectedDns.value.size === 0) return;
+  emit("batchMove", collectSelectedDns());
+  clearSelection();
+}
+
 watch(
   () => props.entries,
   (next) => {
     page.value = 0;
     selectedDn.value = "";
+    clearSelection();
     // round-4：新结果不含旧排序列时排序已失去意义（该列所有行取值都是空、
     // 等价于不排序），残留的列头排序指示会误导"正按某列排序"；此时重置回
     // dn 升序。列集 = 全部条目属性并集（与渲染列同源）。
@@ -242,7 +331,24 @@ const hasEntries = computed(() => props.entries.length > 0);
       :title="t('result.keyboardHint')"
       @keydown="onRowsKeydown"
     >
+      <!-- 批量操作条：选中数 > 0 时出现在表头之上 -->
+      <div v-if="selectedCount > 0" class="batch-bar">
+        <span class="batch-count">{{ t("result.batchSelected", { count: selectedCount }) }}</span>
+        <button type="button" class="toolbar-button batch-delete" :disabled="disabled" @click="confirmBatchDelete">{{ t("result.batchDelete") }}</button>
+        <!-- 移动所选：不弹确认，目标父 DN 由 App 侧对话框选择 -->
+        <button type="button" class="toolbar-button batch-move" :disabled="disabled" @click="batchMoveSelection">{{ t("result.batchMove") }}</button>
+        <button type="button" class="toolbar-button batch-clear" @click="clearSelection">{{ t("result.batchClear") }}</button>
+      </div>
       <div class="result-header" :style="gridStyle">
+        <span class="col-check">
+          <input
+            type="checkbox"
+            :checked="allSelected"
+            :indeterminate="selectedCount > 0 && !allSelected"
+            :disabled="disabled"
+            @click="toggleAllSelection"
+          />
+        </span>
         <button type="button" :aria-sort="ariaSortFor('dn')" @click="toggleSort('dn')">
           dn<span v-if="sortColumn === 'dn'"> {{ sortDirection === "asc" ? "▲" : "▼" }}</span>
           <span class="col-resize" @pointerdown="startColumnResize($event, 'dn')" />
@@ -263,6 +369,18 @@ const hasEntries = computed(() => props.entries.length > 0);
           @click="rowClick(entry)"
           @dblclick="rowActivate(entry)"
         >
+          <!-- @click.stop：复选框点击绝不触发行点击（选中/打开条目） -->
+          <span class="cell-check">
+            <input
+              type="checkbox"
+              :checked="isRowChecked(entry)"
+              :disabled="disabled"
+              :aria-label="entry.dn"
+              :title="entry.dn"
+              @click.stop="toggleRowSelection(entry)"
+              @dblclick.stop
+            />
+          </span>
           <span class="cell-dn">{{ entry.dn }}</span>
           <span v-for="column in columns" :key="column" class="cell-value" :title="cellTitle(entry, column)">{{ cellText(entry, column) }}</span>
         </button>
@@ -270,3 +388,37 @@ const hasEntries = computed(() => props.entries.length > 0);
     </div>
   </section>
 </template>
+
+<style scoped>
+/* 批量操作条：位于表头之上，仅在有选中项时渲染 */
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.batch-count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.batch-bar .batch-delete {
+  color: var(--destructive);
+  border-color: color-mix(in srgb, var(--destructive) 45%, transparent);
+}
+.batch-bar .batch-delete:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
+}
+/* 复选框固定列（表头全选 + 行首多选），居中于 BATCH_CHECK_WIDTH 列内 */
+.col-check,
+.cell-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+</style>

@@ -107,6 +107,7 @@ const truncatedTitle = computed(() => {
         tabindex="-1"
         :disabled="disabled || node.loading"
         :aria-expanded="node.expanded"
+        :title="node.expanded ? t('tree.collapse') : t('tree.expand')"
         :aria-label="node.expanded ? t('tree.collapse') : t('tree.expand')"
         @click.stop="onToggle"
         @dblclick.stop

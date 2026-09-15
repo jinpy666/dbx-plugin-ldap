@@ -413,3 +413,23 @@ func TestStripLDAPSyntaxLength(t *testing.T) {
 		}
 	}
 }
+
+// filterRawDefinitions 边界：无 NAME 的 OID-only 定义按 OID 参与策略过滤，
+// 不因解析不出名字而被误丢。
+func TestFilterRawDefinitionsOidOnly(t *testing.T) {
+	raws := []string{
+		`( 1.2.3.5 DESC 'no name' )`,        // 无 NAME → 以 OID 兜底判定
+		`( 1.2.3.9 NAME 'userPassword-x' )`, // 命名属性，不在屏蔽表 → 保留
+	}
+	metadata := LDAPSchemaMetadata{RawAttributeTypes: raws}
+	filtered := filterLDAPSchemaMetadataForProfile(Profile{}, metadata)
+	if len(filtered.RawAttributeTypes) != 2 {
+		t.Fatalf("rawAttributeTypes = %d, want 2", len(filtered.RawAttributeTypes))
+	}
+	// 名称策略是尽力而为：无 NAME 的定义以 OID 参与比对（无 OID→名映射，
+	// 不在屏蔽表 → 保留）。带 NAME 的屏蔽属性剔除已由
+	// TestFilterLDAPSchemaMetadataFiltersRawDefinitions 覆盖。
+	if filtered.RawAttributeTypes[0] != raws[0] {
+		t.Errorf("OID-only definition drifted: %q", filtered.RawAttributeTypes[0])
+	}
+}

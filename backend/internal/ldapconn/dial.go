@@ -41,6 +41,31 @@ type bindSecrets struct {
 // dialProfile 建立 LDAP 连接：dial → (StartTLS) → bind。
 // 返回的 conn 已完成 bind；调用方负责 Close。
 func dialProfile(ctx context.Context, profile Profile, target connTarget, secrets bindSecrets) (*ldap.Conn, error) {
+	timeout := time.Duration(profile.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	conn, err := dialTransport(profile, target, timeout)
+	if err != nil {
+		return nil, err
+	}
+	// bind 前恢复操作超时（dialTransport 不管 LDAP 消息超时，只管传输）。
+	conn.SetTimeout(timeout)
+	// 逻辑主机（TLS SNI / SASL host 兜底）= connection.host = URL hostname。
+	if err := bindLDAPConnection(ctx, conn, profile, ldapURLLogicalHost(profile.URL), secrets); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("bind ldap: %w", err)
+	}
+	return conn, nil
+}
+
+// dialTransport 建立 LDAP 传输：dial → (StartTLS)，不含 bind。从 dialProfile
+// 抽出，供 ldap/check network 段复用——检查与真实建连必须同一套
+// host/port/TLS 语义（方案 D5 端点解析、ldaps TLS、StartTLS 升级都在此），
+// 否则会出现"检查通过但连不上"或反之的语义漂移。timeout 同时约束 TCP 拨号
+// 与 StartTLS 升级；ldap.DialURL 不感知 ctx，调用方经 net.Dialer 期限生效。
+// 返回的 conn 未 bind；调用方负责 Close。
+func dialTransport(profile Profile, target connTarget, timeout time.Duration) (*ldap.Conn, error) {
 	parsed, err := url.Parse(profile.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse ldap url: %w", err)
@@ -67,14 +92,7 @@ func dialProfile(ctx context.Context, profile Profile, target connTarget, secret
 		dialURL = clone.String()
 	}
 
-	timeout := time.Duration(profile.TimeoutSeconds) * time.Second
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
-
-	// 逻辑主机（TLS SNI 兜底）= connection.host = URL hostname。
-	logicalHost := firstLDAPNonEmpty(parsed.Hostname())
-	tlsConfig, err := ldapTLSConfig(profile, scheme == "ldaps" || profile.UseStartTLS, logicalHost)
+	tlsConfig, err := ldapTLSConfig(profile, scheme == "ldaps" || profile.UseStartTLS, parsed.Hostname())
 	if err != nil {
 		return nil, err
 	}
@@ -97,12 +115,6 @@ func dialProfile(ctx context.Context, profile Profile, target connTarget, secret
 			_ = conn.Close()
 			return nil, fmt.Errorf("startTLS: %w", err)
 		}
-	}
-	conn.SetTimeout(timeout)
-
-	if err := bindLDAPConnection(ctx, conn, profile, logicalHost, secrets); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("bind ldap: %w", err)
 	}
 	return conn, nil
 }
@@ -207,6 +219,16 @@ func ldapTLSConfig(profile Profile, required bool, logicalHost string) (*tls.Con
 		cfg.RootCAs = pool
 	}
 	return cfg, nil
+}
+
+// ldapURLLogicalHost 取 URL 逻辑主机（TLS SNI / SASL host 的兜底来源，
+// 即 connection.host）；URL 已由 dialTransport 校验过，解析失败兜底为空。
+func ldapURLLogicalHost(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return parsed.Hostname()
 }
 
 // ldapURLPort 解析 URL 端口，缺省按 scheme（ldaps=636，其余 389）。

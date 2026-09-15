@@ -3,12 +3,13 @@
 // 连接生命周期由宿主驱动（connection/test|connect|disconnect），工作台只持有
 // connectionId；所有 ldap/* 调用经 lib/api.ts 注入 connectionId。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { Database, Download, Info, Loader2, Network, RefreshCw, X } from "@lucide/vue";
+import { Database, Download, FileUp, History, Info, Loader2, Network, RefreshCw, X } from "@lucide/vue";
 import { DBX_POPOVER, resolveAppearance, type DbxPluginAppearanceInput } from "./lib/appearance";
 import { isDbxPluginTheme, onHostThemeChange, themeToAppearance } from "./lib/hostTheme";
 import { setWorkbenchLocale, t, workbenchLocale } from "./lib/i18n";
 import { getLdapConnectionId, ldapApi, setLdapConnectionId, type LdapEntry } from "./lib/api";
 import { inferBaseDnFromProfile, pickBaseDnFromRootDse } from "./lib/baseDn";
+import { splitFirstDnRdn } from "./lib/dn";
 import { escapeLdapFilterValue } from "./lib/ldapFilter";
 import { friendlyLdapError } from "./lib/ldapErrors";
 import { writeClipboardText } from "./lib/clipboard";
@@ -17,8 +18,10 @@ import DnTree from "./components/DnTree.vue";
 import SearchForm, { type SearchFormModel } from "./components/SearchForm.vue";
 import ResultTable from "./components/ResultTable.vue";
 import EntryEditorDialog from "./components/EntryEditorDialog.vue";
+import ImportEntryDialog from "./components/ImportEntryDialog.vue";
 import DeleteEntryDialog from "./components/DeleteEntryDialog.vue";
 import ModifyDnDialog from "./components/ModifyDnDialog.vue";
+import BatchMoveDialog from "./components/BatchMoveDialog.vue";
 import NewEntryWizard from "./components/NewEntryWizard.vue";
 import SchemaPanel from "./components/SchemaPanel.vue";
 import ConnectionsPanel from "./components/ConnectionsPanel.vue";
@@ -28,6 +31,7 @@ import { deriveDnValuedAttributes } from "./lib/dnAttributes";
 import { prepareCopyEntry } from "./lib/copyEntry";
 import type { LdapSchema } from "./lib/newEntryTemplates";
 import { parseAuditEvent, pushAuditItem, type AuditFeedItem } from "./lib/auditFeed";
+import { setupTooltipLayer, teardownTooltipLayer } from "./lib/tooltip";
 import { useUiIntent, type UiIntentOutcome, type UiIntentSummary } from "../../shared/frontend/uiIntent";
 
 interface ConnectionSummary {
@@ -85,7 +89,14 @@ const deleteSubmitting = ref(false);
 const modifyDnOpen = ref(false);
 const modifyDnSource = ref("");
 const modifyDnSubmitting = ref(false);
+// 批量移动（结果表多选，ADS Batch Operations 单步版）：所选 DN 由 ResultTable
+// 的 batchMove 事件带入；移动执行在 onBatchMoveConfirm，submitting 兼作防重入门闩。
+const batchMoveOpen = ref(false);
+const batchMoveDns = ref<string[]>([]);
+const batchMoveSubmitting = ref(false);
 const schemaOpen = ref(false);
+// 条目导入弹窗（阶段4）：LDIF / PowerShell Format-List 粘贴或文件导入。
+const importOpen = ref(false);
 const connectionsOpen = ref(false);
 
 // M6 N4：新建条目走模板向导（树「新增子条目」入口），schema 用独立
@@ -180,7 +191,10 @@ const uiIntentHandlers = {
       // 主区常驻（树/搜索面板无独立开关）；关闭弹窗让目标面板可见。
       deleteOpen.value = false;
       modifyDnOpen.value = false;
+      batchMoveOpen.value = false;
       wizardOpen.value = false;
+      // 搜索面板默认折叠为快捷条：宿主点名聚焦时展开，字段必须可见可交互。
+      if (panel === "search") searchRef.value?.expandSearch();
       return { status: "applied", summary: { panel } };
     }
     return { status: "rejected", reason: t("intent.unknownPanel") };
@@ -339,6 +353,70 @@ async function refreshResultsAfterWrite(affected: (dn: string) => boolean) {
   await runSearch(searchModel.value);
 }
 
+// 结果表批量删除（结果多选，ADS Batch Operations 单步版）：逐条非递归删除，
+// 与确认文案一致——仍有子条目的条目会失败并计入 failed，不做半递归的意外删除。
+// 成功的按各自父节点失效树；被删条目（及其子树内的命中行）仍留在结果里时
+// 重放最近一次搜索，避免残留行双击报 entry not found。
+async function onBatchDelete(dns: string[]) {
+  if (dns.length === 0 || busy.value) return;
+  ldapError.value = "";
+  const failed = new Set<string>();
+  for (const dn of dns) {
+    try {
+      await ldapApi.entryDelete(dn, false);
+    } catch {
+      failed.add(dn);
+    }
+  }
+  showNotice(t("result.batchResult", { ok: dns.length - failed.size, failed: failed.size }));
+  const deleted = dns.filter((dn) => !failed.has(dn));
+  if (deleted.length === 0) return;
+  for (const parent of new Set(deleted.map((dn) => parentOf(dn)))) treeRef.value?.invalidate(parent);
+  void refreshResultsAfterWrite((dn) => {
+    const key = dn.toLowerCase();
+    return deleted.some((entry) => key === entry.toLowerCase() || key.endsWith(`,${entry.toLowerCase()}`));
+  });
+}
+
+// 批量移动入口（ResultTable 多选 → batchMove 事件，payload 与 batchDelete
+// 同为条目顺序的原始大小写 DN）：空数组忽略，只负责打开确认框；真正的移动
+// 在 onBatchMoveConfirm 执行，便于单测与防重入。
+function onBatchMove(dns: string[]) {
+  if (dns.length === 0 || busy.value) return;
+  batchMoveDns.value = dns;
+  batchMoveOpen.value = true;
+}
+
+// 逐条 modifyDN 换父（RDN 用原条目首段，deleteOldRdn=true 为保留原 RDN 的
+// modifyDN 语义）；单条失败计数、不中断其余条目（与 onBatchDelete 同风格）。
+// 全部失败也给出 failed=count 的通知；成功的按「目标父 + 各源父」失效树，
+// 被 move 的 DN 已变化，仍留在结果里时重放搜索避免残留行。
+async function onBatchMoveConfirm(targetParentDn: string) {
+  const dns = batchMoveDns.value;
+  if (dns.length === 0 || batchMoveSubmitting.value) return;
+  batchMoveSubmitting.value = true;
+  ldapError.value = "";
+  const failed = new Set<string>();
+  for (const dn of dns) {
+    try {
+      await ldapApi.entryModifyDn(dn, rdnOf(dn), targetParentDn, true);
+    } catch {
+      failed.add(dn);
+    }
+  }
+  batchMoveSubmitting.value = false;
+  batchMoveOpen.value = false;
+  showNotice(t("batchMove.result", { ok: dns.length - failed.size, failed: failed.size }));
+  const moved = dns.filter((dn) => !failed.has(dn));
+  if (moved.length === 0) return;
+  const affectedParents = new Set<string>([targetParentDn, ...moved.map((dn) => parentOf(dn))]);
+  for (const parent of affectedParents) treeRef.value?.invalidate(parent);
+  void refreshResultsAfterWrite((dn) => {
+    const key = dn.toLowerCase();
+    return moved.some((entry) => key === entry.toLowerCase() || key.endsWith(`,${entry.toLowerCase()}`));
+  });
+}
+
 async function runSearch(model: SearchFormModel) {
   if (busy.value || searching.value) return;
   const request = ++searchRequestSeq;
@@ -369,6 +447,10 @@ async function runSearch(model: SearchFormModel) {
     resultTruncated.value = result.truncated === true;
     resultAtLimit.value = sizeLimit !== undefined && resultCount.value === sizeLimit;
     lastSizeLimit.value = sizeLimit;
+    // 搜索成功才入历史（失败/竞态不记）：recordSearch 是 SearchForm 暴露的
+    // 本地历史入队（去重 + localStorage），与 presets 的 sidecar 持久化互补。
+    // 可选调用：stub 实例（测试挂载）无 expose 方法时不致命。
+    searchRef.value?.recordSearch?.(model);
     // 快照型 report（设计 §1）：搜索完成后上报工作台状态，`ldap_ui_state`
     // 不带 intentId 时取用。
     const anchorDn = results.value[0]?.dn;
@@ -414,6 +496,46 @@ function selectEntry(dn: string) {
 // 常规入口不传参，维持默认表单页签。
 const editorInitialTab = ref<"ldif" | "assoc">();
 
+// 最近打开条目（工具栏 History 下拉）：最新在前、大小写不敏感去重、上限 10 条。
+// 记录点 = openEntry 的 entryGet 成功路径与 onEditorSaved（保存后 reopen 语义）；
+// 属于单个连接的浏览状态，连接切换时随 auditItems 一并清空（P2-24 状态隔离）。
+const RECENT_ENTRIES_MAX = 10;
+const recentEntries = ref<string[]>([]);
+function recordRecentEntry(dn: string) {
+  const trimmed = dn.trim();
+  if (!trimmed) return;
+  const next = recentEntries.value.filter((item) => item.toLowerCase() !== trimmed.toLowerCase());
+  next.unshift(trimmed);
+  recentEntries.value = next.slice(0, RECENT_ENTRIES_MAX);
+}
+// 下拉复用全局 .context-menu（fixed + z-50）：打开时按按钮位置算一次坐标即可
+//（工具栏不滚动）；点击外部/Escape/再点按钮关闭，注册方式照抄 DnTree 右键菜单。
+const recentButtonEl = ref<HTMLButtonElement>();
+const recentMenu = ref<{ x: number; y: number }>();
+function toggleRecentMenu() {
+  if (recentMenu.value) {
+    recentMenu.value = undefined;
+    return;
+  }
+  const rect = recentButtonEl.value?.getBoundingClientRect();
+  if (!rect) return;
+  recentMenu.value = { x: rect.left, y: rect.bottom + 4 };
+}
+function closeRecentMenu() {
+  recentMenu.value = undefined;
+}
+function openRecent(dn: string) {
+  closeRecentMenu();
+  void openEntry(dn);
+}
+// 行文本只显示首段 RDN，完整 DN 挂 title 悬停（长 DN 由行内 ellipsis 截断）。
+function recentLabel(dn: string): string {
+  return splitFirstDnRdn(dn).rdn || dn;
+}
+function onRecentMenuKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") closeRecentMenu();
+}
+
 async function openEntry(dn: string, initialTab?: "ldif" | "assoc") {
   const request = ++entryRequestSeq;
   editorRequestedDn.value = dn;
@@ -429,6 +551,7 @@ async function openEntry(dn: string, initialTab?: "ldif" | "assoc") {
     const result = await ldapApi.entryGet(dn);
     if (request !== entryRequestSeq) return;
     editorEntry.value = result.entry;
+    recordRecentEntry(dn);
     editorParentDn.value = "";
     editorOpen.value = true;
     uiIntent.reportSnapshot({ panel: "entry", anchor: dn });
@@ -504,9 +627,19 @@ async function onWizardCreate(payload: { dn: string; attributes: Record<string, 
   }
 }
 
+// 导入完成：刷新整棵树（批量写可能落在多个父节点下）并反馈汇总。
+function onImported(importedCount: number, failed: number) {
+  if (importedCount > 0) {
+    treeRef.value?.invalidate();
+    showNotice(t("ldap.importEntry.summary", { ok: importedCount, failed }));
+  }
+}
+
 function onEditorSaved(dn: string, mode_: "add" | "edit") {
   closeEditor();
   showNotice(mode_ === "add" ? t("editor.added") : t("editor.saved"));
+  // 保存后 reopen 语义：保存动作本身也应把条目记入最近打开。
+  recordRecentEntry(dn);
   treeRef.value?.invalidate(mode_ === "add" ? parentOf(dn) : dn);
   void openEntryRefresh(dn);
 }
@@ -719,6 +852,7 @@ function syncConnectionContext() {
     searchError.value = "";
     deleteOpen.value = false;
     modifyDnOpen.value = false;
+    batchMoveOpen.value = false;
     wizardOpen.value = false;
     // DN 属性名集合属于上一个连接的 schema，随连接切换一并失效重取。
     dnAttributes.value = [];
@@ -733,10 +867,72 @@ function syncConnectionContext() {
     // 最近操作面板同属上一个连接（round-4）：残留会让新连接的写操作反馈
     // 与旧连接的 denied/ok 事件混在一起，误导排查。
     auditItems.value = [];
+    // 最近打开条目同样是上一个连接的浏览状态（DN 只在原目录里有意义）。
+    recentEntries.value = [];
   }
   baseDn.value = contextBaseDn.value;
   void resolveAutoBaseDn();
+  // 服务器方言徽章（阶段5）：惰性加载 schema（TTL/inFlight 去重），失败静默
+  //（无徽章不阻塞工作台）。
+  wizardSchemaCache.ensureLoaded(connectionId.value).catch(() => {});
 }
+
+// 方言 → 显示名（vendor 缺失时兜底）。
+const DIALECT_LABELS: Record<string, string> = {
+  ad: "Active Directory",
+  openldap: "OpenLDAP",
+  "389ds": "389 Directory Server",
+  freeipa: "FreeIPA",
+  rfc4511: "LDAPv3",
+};
+
+const serverBadge = computed(() => {
+  const info = wizardSchemaCache.serverInfo.value;
+  if (!info) return "";
+  const label = info.vendorName || DIALECT_LABELS[info.dialect ?? ""] || "";
+  return label.trim();
+});
+
+// 协议/认证徽章（对标 ADS 连接标识）：字段来自 manifest binding: config 的
+// external_config.tls_mode（none/starttls/ldaps）与 auth_type（anonymous/
+// unauthenticated/simple/kerberos/ntlm/ntlm_hash/digest_md5/external），
+// 端口取连接摘要（636 视为 LDAPS）。字段与端口全缺时无从推导，不显示徽章；
+// 结构异常静默返回空串——徽章只是装饰，绝不能把工作台初始化弄挂。
+const AUTH_BADGE_LABELS: Record<string, string> = {
+  anonymous: "Anonymous",
+  kerberos: "GSSAPI",
+  ntlm: "NTLM",
+  ntlm_hash: "NTLM",
+  digest_md5: "DIGEST-MD5",
+};
+
+function normalizePort(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
+  return undefined;
+}
+
+const protocolBadge = computed(() => {
+  try {
+    const external = connection.value.external_config;
+    const config = external && typeof external === "object" ? (external as Record<string, unknown>) : undefined;
+    const rawTlsMode = config?.tls_mode;
+    const tlsMode = typeof rawTlsMode === "string" ? rawTlsMode.trim().toLowerCase() : "";
+    const rawAuthType = config?.auth_type;
+    const authType = typeof rawAuthType === "string" ? rawAuthType.trim().toLowerCase() : "";
+    const port = normalizePort(connection.value.port);
+    if (!tlsMode && !authType && port === undefined) return "";
+    const segments: string[] = [];
+    if (tlsMode === "ldaps" || port === 636) segments.push("LDAPS");
+    else if (tlsMode === "starttls") segments.push("LDAP+TLS");
+    else segments.push("LDAP");
+    // 认证段：字段缺失省略；unauthenticated/external 等其余取值兜底 Simple。
+    if (authType) segments.push(AUTH_BADGE_LABELS[authType] ?? "Simple");
+    return segments.join(" · ");
+  } catch {
+    return "";
+  }
+});
 
 // 连接未配置 base_dn 时的兜底定位（tiny-rdm baseDn.js 语义）：
 // RootDSE namingContexts（AD 取 defaultNamingContext）→ 主机名推断
@@ -765,14 +961,25 @@ function refreshTree() {
 }
 
 onMounted(() => {
+  setupTooltipLayer();
   void initialize().catch((cause) => showError(cause, "init"));
 });
+
+// 最近条目下拉的关闭监听：延后到 setTimeout 0 再挂，避免注册瞬间的点击
+// 事件立刻触发关闭（照 DnTree 右键菜单的注册/清理模式）。
+window.setTimeout(() => {
+  document.addEventListener("click", closeRecentMenu);
+  document.addEventListener("keydown", onRecentMenuKeydown);
+}, 0);
 
 onBeforeUnmount(() => {
   searchRequestSeq++;
   entryRequestSeq++;
   window.clearTimeout(noticeTimer);
   uiIntent.stop();
+  teardownTooltipLayer();
+  document.removeEventListener("click", closeRecentMenu);
+  document.removeEventListener("keydown", onRecentMenuKeydown);
   for (const dispose of [...unsubscribeAppearance, ...unsubscribeLocale, ...unsubscribeContext, ...unsubscribeEvent]) dispose();
 });
 </script>
@@ -796,6 +1003,21 @@ onBeforeUnmount(() => {
         <button class="toolbar-button" :disabled="!ready" :title="t('connections.title')" @click="connectionsOpen = true">
           <Network class="icon-cyan" aria-hidden="true" /><span>{{ t("connections.title") }}</span>
         </button>
+        <button class="toolbar-button" :disabled="!ready" :title="t('ldap.importEntry.title')" @click="importOpen = true">
+          <FileUp class="icon-cyan" aria-hidden="true" /><span>{{ t("ldap.importEntry.toolbar") }}</span>
+        </button>
+        <button
+          ref="recentButtonEl"
+          class="icon-button"
+          :disabled="!ready || recentEntries.length === 0"
+          :title="t('recent.title')"
+          :aria-label="t('recent.title')"
+          @click.stop="toggleRecentMenu"
+        >
+          <History aria-hidden="true" />
+        </button>
+        <span v-if="serverBadge" class="badge mono" :title="t('connections.title')">{{ serverBadge }}</span>
+        <span v-if="protocolBadge" class="badge mono" :title="t('protocol.badge')">{{ protocolBadge }}</span>
         <span class="toolbar-separator" />
         <button class="icon-button" :disabled="!ready" :title="t('refresh')" @click="refreshTree">
           <RefreshCw aria-hidden="true" />
@@ -858,6 +1080,8 @@ onBeforeUnmount(() => {
           @retry="retrySearch"
           @open="openEntry"
           @export="exportResults"
+          @batch-delete="onBatchDelete"
+          @batch-move="onBatchMove"
         />
         <AuditFeedPanel :items="auditItems" @clear="clearAuditFeed" />
       </main>
@@ -901,6 +1125,13 @@ onBeforeUnmount(() => {
       @close="modifyDnOpen = false"
       @confirm="confirmRename"
     />
+    <BatchMoveDialog
+      :open="batchMoveOpen"
+      :dns="batchMoveDns"
+      :submitting="batchMoveSubmitting"
+      @close="batchMoveOpen = false"
+      @confirm="onBatchMoveConfirm"
+    />
     <NewEntryWizard
       :open="wizardOpen"
       :parent-dn="wizardParentDn"
@@ -909,6 +1140,34 @@ onBeforeUnmount(() => {
       @cancel="wizardOpen = false"
     />
     <SchemaPanel :open="schemaOpen" :connection-id="getLdapConnectionId()" @close="schemaOpen = false" @error="showError" />
+    <ImportEntryDialog
+      :open="importOpen"
+      :can-write="canWrite"
+      :parent-dn="baseDn"
+      @close="importOpen = false"
+      @imported="onImported"
+      @error="showError"
+      @notify="showNotice"
+    />
     <ConnectionsPanel :open="connectionsOpen" :disabled="!ready" @close="connectionsOpen = false" @error="showError" />
+
+    <!-- 最近打开条目下拉：Teleport 到 body + 复用全局 .context-menu（fixed 定位），
+         坐标由 toggleRecentMenu 按按钮 getBoundingClientRect 在打开时算一次；
+         全部用既有 class + 内联样式，不新增全局 CSS。 -->
+    <Teleport to="body">
+      <div
+        v-if="recentMenu"
+        class="context-menu"
+        role="menu"
+        :style="{ left: `${recentMenu.x}px`, top: `${recentMenu.y}px`, width: '360px', maxWidth: 'calc(100vw - 16px)' }"
+        @click.stop
+      >
+        <div style="padding: 4px 8px; font-size: 11px; color: var(--muted-foreground)">{{ t("recent.title") }}</div>
+        <button v-if="recentEntries.length === 0" disabled>{{ t("recent.empty") }}</button>
+        <button v-for="dn in recentEntries" :key="dn" role="menuitem" :title="dn" @click="openRecent(dn)">
+          <span style="overflow: hidden; min-width: 0; max-width: 100%; text-overflow: ellipsis; white-space: nowrap">{{ recentLabel(dn) }}</span>
+        </button>
+      </div>
+    </Teleport>
   </div>
 </template>

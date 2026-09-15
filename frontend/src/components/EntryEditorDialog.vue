@@ -9,7 +9,7 @@ import { computed, nextTick, ref, useId, watch } from "vue";
 import { Copy, Plus, Trash2, X } from "@lucide/vue";
 import { ldapApi, type LdapEntry } from "../lib/api";
 import { parseLdif, serializeEntriesToLdif } from "../lib/ldif";
-import { attrRowsToAttributes, diffChanges, type AttrRowDraftSource } from "../lib/ldapDiff";
+import { attrRowsToAttributes, diffChanges, type AttrRowDraftSource, type LdapModifyChange } from "../lib/ldapDiff";
 import { joinRdnAndParent, isLikelyDn, isLikelyRdn, splitFirstDnRdn } from "../lib/dn";
 import { missingRequiredAttributes } from "../lib/entryValidation";
 import type { LdapSchema } from "../lib/newEntryTemplates";
@@ -24,7 +24,9 @@ import PasswordAttributeEditor from "./PasswordAttributeEditor.vue";
 import BinaryValueEditor from "./BinaryValueEditor.vue";
 import DatetimeValueEditor from "./DatetimeValueEditor.vue";
 import DnValueEditor from "./DnValueEditor.vue";
+import UacValueEditor from "./UacValueEditor.vue";
 import AssociationPanel from "./AssociationPanel.vue";
+import ObjectClassPickerDialog from "./ObjectClassPickerDialog.vue";
 
 export interface AttrRowDraft extends AttrRowDraftSource {
   /** 源值自身含换行：编辑后按行重切分为多值（歧义提示用）。 */
@@ -75,6 +77,13 @@ const ldifError = ref("");
 // LDIF 模式 DN 行锁定信号（UI 扫描 P2-13）：LDIF 里的 dn 与原条目不一致时提示。
 const ldifDnChanged = ref(false);
 const saving = ref(false);
+// 变更预览（仅 edit 态）：save 先 diff 出 changes 并挂起，确认后才真正发
+// modify；取消则只关预览层、编辑原样保留。
+const changesOpen = ref(false);
+const pendingChanges = ref<LdapModifyChange[]>([]);
+// objectClass 选择器（chips 行「添加」）：记录目标行，选中类写回该行。
+const ocPickerOpen = ref(false);
+const activeOcRow = ref<AttrRowDraft | null>(null);
 const attrEditor = ref<HTMLElement>();
 const requiredErrorId = useId();
 const rdnErrorId = useId();
@@ -196,6 +205,11 @@ function initFor(mode_: EditorMode, entry?: LdapEntry, parentDn?: string) {
   ldifError.value = "";
   ldifDnChanged.value = false;
   saving.value = false;
+  // 重新打开时清掉上一轮的预览/选择器状态（否则层会残留到新条目会话）。
+  changesOpen.value = false;
+  pendingChanges.value = [];
+  ocPickerOpen.value = false;
+  activeOcRow.value = null;
   if (mode_ === "add") {
     dnDraft.value = parentDn || "";
     // 复制条目预填：RDN 属性名保留（值待填），属性行由预填铺开
@@ -277,7 +291,7 @@ async function focusRequiredAttribute(name: string) {
 // 分流数据源 = valueKinds 注册表（对齐 Apache Directory Studio valueeditors
 // plugin.xml 的「属性名 + 语法 OID」双绑定）：schema 的 attributeInfo 优先，
 // 内置表（builtinSchema）兜底。LDIF 模式始终是纯文本，不走分流。
-type RowEditorKind = "password" | "binary" | "datetime" | "filetime" | "dn" | "boolean" | "integer" | "text";
+type RowEditorKind = "password" | "binary" | "datetime" | "filetime" | "dn" | "boolean" | "integer" | "uac" | "oid" | "text";
 
 function editorKind(name: string): RowEditorKind {
   const key = name.trim().toLowerCase();
@@ -287,7 +301,9 @@ function editorKind(name: string): RowEditorKind {
   const info = schemaAttributeInfo(key);
   const kind = attributeValueKind(key, info, props.schema?.serverInfo?.dialect);
   if (isBinaryKind(kind)) return "binary";
-  if (kind === "datetime" || kind === "filetime" || kind === "dn" || kind === "boolean" || kind === "integer") return kind;
+  // oid（supportedControl 等 OID 语法）此前未映射、落回 text：这里接上，
+  // 表单页签给出带格式的单行输入与行内校验。
+  if (kind === "datetime" || kind === "filetime" || kind === "dn" || kind === "boolean" || kind === "integer" || kind === "uac" || kind === "oid") return kind;
   return "text";
 }
 
@@ -304,10 +320,11 @@ function schemaAttributeInfo(key: string) {
   return builtinAttributeInfo(key);
 }
 
-// 单值编辑器（时间/布尔/整数/DN 选择）只在行确实是单值时生效；多值行
+// 单值编辑器（时间/布尔/整数/DN 选择/UAC/OID）只在行确实是单值时生效；多值行
 // （member 可达数百值）降级回 textarea，避免选择器覆盖丢数据。布尔再约束
-// 当前值为 TRUE/FALSE/空，非常规值保持文本以防意外改写。
-const SINGLE_VALUE_KINDS: ReadonlyArray<RowEditorKind> = ["datetime", "filetime", "boolean", "integer", "dn"];
+// 当前值为 TRUE/FALSE/空，非常规值保持文本以防意外改写。oid 虽无专用"选择器"，
+// 但单行 input 会吞掉换行分隔的多值（supportedControl 等常多值），同样降级。
+const SINGLE_VALUE_KINDS: ReadonlyArray<RowEditorKind> = ["datetime", "filetime", "boolean", "integer", "dn", "uac", "oid"];
 
 function rowEditorKind(row: AttrRowDraft): RowEditorKind {
   const kind = editorKind(row.name);
@@ -376,6 +393,9 @@ const attributeOptions = computed<string[]>(() => {
 });
 
 const isIntegerShape = (value: string) => /^[+-]?\d+$/.test(value.trim());
+// OID 形状（RFC 4512 dottedDecimal）：空值合法（留白等价删除），非空必须
+// 至少一段数字、多段点分，如 2.16.840.1.113730.3.4.2。
+const isOidShape = (value: string) => /^\d+(\.\d+)+$/.test(value.trim());
 
 // DatetimeValueEditor 的 kind 收窄（模板 v-else-if 无法让 TS 收窄联合类型）。
 function datetimeKind(row: AttrRowDraft): "datetime" | "filetime" {
@@ -385,6 +405,51 @@ function datetimeKind(row: AttrRowDraft): "datetime" | "filetime" {
 function rowValues(row: AttrRowDraft): string[] {
   return row.valuesText === "" ? [] : row.valuesText.split("\n");
 }
+
+// -- objectClass 专用 chips 行（对标 ADS ObjectClass Editor）------------------
+// objectClass 是结构多值属性：textarea 的"一行一值"对类名不直观也不防错，
+// 改为 chip 展示 + 选择器补加；值仍落回 valuesText（\n 连接），与 LDIF 双向
+// 同步、diff 保存路径完全不变。该行天然多值，不受单值降级影响。
+
+function isObjectClassRow(row: AttrRowDraft): boolean {
+  return row.name.trim().toLowerCase() === "objectclass";
+}
+
+// chips 展示/写回统一走这里：滤掉空段（LDIF 往返不产生，防御性），保持原序。
+function objectClassValues(row: AttrRowDraft): string[] {
+  return rowValues(row).map((value) => value.trim()).filter(Boolean);
+}
+
+function removeObjectClass(row: AttrRowDraft, value: string) {
+  const values = objectClassValues(row);
+  const index = values.indexOf(value);
+  if (index < 0) return;
+  values.splice(index, 1);
+  // 仅剩最后一个类时按钮已 disabled，这里是双保险；写回 valuesText 后既有
+  // rows→LDIF watch 自动同步，保存仍走 diffChanges 的 replace 路径。
+  row.valuesText = values.join("\n");
+}
+
+function openObjectClassPicker(row: AttrRowDraft) {
+  activeOcRow.value = row;
+  ocPickerOpen.value = true;
+}
+
+// picker 选中一个类：写回目标行 valuesText（\n 连接），可连续添加。
+function onPickerAdd(className: string) {
+  const row = activeOcRow.value;
+  const name = className.trim();
+  if (!row || !name) return;
+  const values = objectClassValues(row);
+  if (values.some((value) => value.toLowerCase() === name.toLowerCase())) return;
+  values.push(name);
+  row.valuesText = values.join("\n");
+}
+
+// 已用类（小写）传给 picker 做「已选禁点」。
+const pickerUsedClasses = computed<string[]>(() =>
+  activeOcRow.value ? objectClassValues(activeOcRow.value).map((value) => value.toLowerCase()) : [],
+);
 
 // 随机生成的明文只在通知里出现一次（不进 rows、不进 LDIF、不落盘）。
 function onPlainGenerated(plain: string) {
@@ -406,9 +471,10 @@ async function save() {
   if (editorTab.value === "ldif" && !syncRowsFromLdif()) return;
   // Validate the parsed draft too; a valid form RDN cannot authorize a new LDIF DN.
   if (rdnInvalid.value || parentInvalid.value || missingRequired.value.length > 0) return;
-  saving.value = true;
-  try {
-    if (isAdd.value) {
+  if (isAdd.value) {
+    // add 态不做预览（新条目没有"原值"可比，提交即创建），保持直接保存。
+    saving.value = true;
+    try {
       const dn = joinRdnAndParent(rdnDraft.value, dnDraft.value);
       if (!dn) {
         emit("error", t("editor.rdn"));
@@ -420,24 +486,64 @@ async function save() {
       }
       await ldapApi.entryAdd(dn, rowsToAttributes());
       emit("saved", dn, "add");
-    } else {
-      const source = props.entry!;
-      const current = rowsToAttributes();
-      const changes = diffChanges(source.attributes, current);
-      if (changes.length === 0) {
-        // 无差异不再静默关闭（P2-13）：区分"没有修改"与"修改被丢弃"。
-        emit("notify", t("editor.noChanges"));
-        emit("close");
-        return;
-      }
-      await ldapApi.entryModify(dnDraft.value, changes);
-      emit("saved", dnDraft.value, "edit");
+    } catch (cause) {
+      emit("error", cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      saving.value = false;
     }
+    return;
+  }
+  // edit 态：先 diff 并挂起变更（对标 ADS 保存前确认的习惯）——确认前不发
+  // modify、不置 saving，用户可取消回编辑；无差异分支保持原语义。
+  const source = props.entry!;
+  const changes = diffChanges(source.attributes, rowsToAttributes());
+  if (changes.length === 0) {
+    // 无差异不再静默关闭（P2-13）：区分"没有修改"与"修改被丢弃"。
+    emit("notify", t("editor.noChanges"));
+    emit("close");
+    return;
+  }
+  pendingChanges.value = changes;
+  changesOpen.value = true;
+}
+
+// 预览层按 op（add/replace/delete）分组渲染，组内保持 diffChanges 顺序。
+const CHANGE_OP_ORDER = ["add", "replace", "delete"] as const;
+const groupedChanges = computed<{ op: (typeof CHANGE_OP_ORDER)[number]; changes: LdapModifyChange[] }[]>(() =>
+  CHANGE_OP_ORDER
+    .map((op) => ({ op, changes: pendingChanges.value.filter((change) => change.operation === op) }))
+    .filter((group) => group.changes.length > 0),
+);
+
+// 值预览：多值截断为前 3 个 + "…"；delete 的 values 恒为空，调用方隐藏。
+function changeValuesPreview(change: LdapModifyChange): string {
+  if (change.values.length === 0) return "";
+  const head = change.values.slice(0, 3).join(", ");
+  return change.values.length > 3 ? `${head}, …` : head;
+}
+
+// 预览「确认保存」：真正执行 modify。saving/in-flight/错误处理与原 save 的
+// edit 分支一致；关闭预览后再进入 saving，footer 保存按钮照常显示 "…"。
+async function confirmChanges() {
+  if (saving.value || pendingChanges.value.length === 0) return;
+  const changes = pendingChanges.value;
+  changesOpen.value = false;
+  saving.value = true;
+  try {
+    await ldapApi.entryModify(dnDraft.value, changes);
+    emit("saved", dnDraft.value, "edit");
   } catch (cause) {
     emit("error", cause instanceof Error ? cause.message : String(cause));
   } finally {
     saving.value = false;
+    pendingChanges.value = [];
   }
+}
+
+// 预览「取消」：只关预览层，rows/草稿原样保留（不丢编辑），可继续改再存。
+function cancelChanges() {
+  changesOpen.value = false;
+  pendingChanges.value = [];
 }
 
 const title = computed(() => (props.loading || props.loadError
@@ -449,6 +555,8 @@ const title = computed(() => (props.loading || props.loadError
 // ✕/取消仍为显式放弃入口。只读态无改动可做，始终放行。
 function canRequestClose(): boolean {
   if (props.loading || props.loadError) return true;
+  // 二层 UI 在场时先明确处置（确认/取消、加类完成），Esc/遮罩不动编辑器。
+  if (changesOpen.value || ocPickerOpen.value) return false;
   return !saving.value && !(props.canWrite && dirty.value);
 }
 
@@ -519,8 +627,37 @@ function onBackdropClick() {
           <div v-for="(row, index) in rows" :key="index" class="attr-row">
             <input v-model="row.name" type="text" name="attr-name" :list="attributeListId" :placeholder="t('editor.attribute')" :aria-label="t('editor.attribute')" :disabled="!editable" spellcheck="false" />
             <span class="attr-value-cell" role="group" :aria-label="row.name || t('editor.values')" :aria-describedby="fieldMissing(row.name) ? requiredErrorId : undefined">
+              <!-- objectClass 专用 chips 行：每 chip 一个类值，天然多值，
+                   不走 textarea / 单值降级；值仍落回 valuesText 保持同步语义。 -->
+              <template v-if="isObjectClassRow(row)">
+                <div class="oc-chips">
+                  <span v-for="(value, valueIndex) in objectClassValues(row)" :key="`${valueIndex}:${value}`" class="oc-chip">
+                    <span class="mono">{{ value }}</span>
+                    <button
+                      type="button"
+                      class="icon-button oc-chip-remove"
+                      :title="t('editor.objectClassRemove', { name: value })"
+                      :aria-label="t('editor.objectClassRemove', { name: value })"
+                      :disabled="!editable || objectClassValues(row).length <= 1"
+                      @click="removeObjectClass(row, value)"
+                    >
+                      <X aria-hidden="true" />
+                    </button>
+                  </span>
+                  <button
+                    type="button"
+                    class="oc-chip-add"
+                    :title="t('editor.objectClassAdd')"
+                    :aria-label="t('editor.objectClassAdd')"
+                    :disabled="!editable"
+                    @click="openObjectClassPicker(row)"
+                  >
+                    <Plus aria-hidden="true" />{{ t("editor.objectClassAdd") }}
+                  </button>
+                </div>
+              </template>
               <PasswordAttributeEditor
-                v-if="rowEditorKind(row) === 'password'"
+                v-else-if="rowEditorKind(row) === 'password'"
                 :model-value="row.valuesText"
                 :disabled="!editable"
                 @update:model-value="row.valuesText = $event"
@@ -560,6 +697,12 @@ function onBackdropClick() {
                 <option value="TRUE">TRUE</option>
                 <option value="FALSE">FALSE</option>
               </select>
+              <UacValueEditor
+                v-else-if="rowEditorKind(row) === 'uac'"
+                :model-value="row.valuesText"
+                :disabled="!editable"
+                @update:model-value="row.valuesText = $event"
+              />
               <template v-else-if="rowEditorKind(row) === 'integer'">
                 <input
                   class="mono integer-input"
@@ -573,6 +716,20 @@ function onBackdropClick() {
                   @input="row.valuesText = ($event.target as HTMLInputElement).value"
                 />
                 <small v-if="row.valuesText.trim() !== '' && !isIntegerShape(row.valuesText)" class="form-error">{{ t("ldap.valueEditors.integerInvalid") }}</small>
+              </template>
+              <!-- OID 单行输入：写法参照 integer 分支；点分数字格式行内校验。 -->
+              <template v-else-if="rowEditorKind(row) === 'oid'">
+                <input
+                  class="mono oid-input"
+                  type="text"
+                  :value="row.valuesText"
+                  :disabled="!editable"
+                  :aria-label="row.name || t('editor.values')"
+                  :aria-invalid="row.valuesText.trim() !== '' && !isOidShape(row.valuesText)"
+                  spellcheck="false"
+                  @input="row.valuesText = ($event.target as HTMLInputElement).value"
+                />
+                <small v-if="row.valuesText.trim() !== '' && !isOidShape(row.valuesText)" class="form-error">{{ t("ldap.valueEditors.oidInvalid") }}</small>
               </template>
               <template v-else>
                 <textarea v-model="row.valuesText" rows="2" :placeholder="t('editor.values')" :aria-label="row.name || t('editor.values')" :aria-invalid="fieldMissing(row.name)" :aria-describedby="fieldMissing(row.name) ? requiredErrorId : undefined" :disabled="!editable" spellcheck="false" />
@@ -611,6 +768,169 @@ function onBackdropClick() {
           {{ saving ? "…" : t("save") }}
         </button>
       </footer>
+      <!-- 变更预览（仅 edit 态）：内嵌二层面板盖住编辑器本体。不用第二层
+           useModalA11y 弹窗，原因：modal.ts 以"当前文档唯一弹窗"为前提做全局
+           容器查询，双弹窗会让焦点陷阱错位；内嵌层取消即回到编辑器，天然
+           满足"取消不丢编辑"，Esc 由 canRequestClose 的预览否决兜底。 -->
+      <div v-if="changesOpen" class="changes-layer" role="dialog" aria-modal="true" :aria-label="t('editor.changesTitle')">
+        <h3>{{ t("editor.changesTitle") }}</h3>
+        <p class="hint">{{ t("editor.changesHint") }}</p>
+        <div class="changes-list">
+          <section v-for="group in groupedChanges" :key="group.op" class="changes-group">
+            <p class="changes-group-title">
+              <span class="change-badge" :class="`change-badge--${group.op}`">{{ group.op }}</span>
+            </p>
+            <ul>
+              <li v-for="change in group.changes" :key="`${group.op}:${change.attribute}`" class="change-item">
+                <span class="mono change-attr">{{ change.attribute }}</span>
+                <span v-if="changeValuesPreview(change)" class="mono change-values">{{ changeValuesPreview(change) }}</span>
+              </li>
+            </ul>
+          </section>
+        </div>
+        <footer>
+          <button type="button" class="changes-cancel" :disabled="saving" @click="cancelChanges">{{ t("cancel") }}</button>
+          <button type="button" class="primary-button changes-confirm" :disabled="saving" @click="confirmChanges">{{ t("editor.confirmChanges") }}</button>
+        </footer>
+      </div>
     </div>
   </div>
+  <!-- objectClass 选择器：自带遮罩的第二层模态，仅由 chips 行「添加」唤起。 -->
+  <ObjectClassPickerDialog
+    :open="ocPickerOpen"
+    :schema="schema"
+    :used-classes="pickerUsedClasses"
+    @close="ocPickerOpen = false"
+    @add="onPickerAdd"
+  />
 </template>
+
+<style scoped>
+/* objectClass chips 行 */
+.oc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.oc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 4px 2px 10px;
+  background: var(--background);
+  font-size: 12px;
+}
+.oc-chip-remove {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+}
+.oc-chip-remove svg {
+  width: 12px;
+  height: 12px;
+}
+/* 刻意不复用 .toolbar-button 类：footer 的"添加属性"是同名选择器约定,
+   chips 添加按钮独立成类避免测试/样式互相串扰 */
+.oc-chip-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 11px;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+}
+.oc-chip-add:hover:not(:disabled) {
+  background: var(--accent);
+}
+.oc-chip-add svg {
+  width: 14px;
+  height: 14px;
+}
+/* OID 单行输入（与 textarea 同高基准，mono 由全局类提供） */
+.oid-input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 10px;
+  background: var(--background);
+  color: var(--foreground);
+}
+.oid-input:disabled {
+  opacity: 0.6;
+}
+/* 变更预览二层面板：盖住编辑器模态本体（.modal 已 position:relative） */
+.changes-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--popover);
+}
+.changes-layer h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.changes-list {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.changes-group-title {
+  margin: 0;
+}
+.changes-group ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.change-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.change-attr {
+  flex: none;
+  font-weight: 600;
+}
+.change-values {
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+.change-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 8px;
+  background: var(--muted);
+  font-size: 11px;
+  font-family: var(--mono-font-family);
+  text-transform: uppercase;
+}
+/* delete 徽章用 destructive 色：删除不可由服务器端确认，视觉上加重 */
+.change-badge--delete {
+  color: var(--destructive);
+  border-color: color-mix(in srgb, var(--destructive) 45%, var(--border));
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
+}
+</style>

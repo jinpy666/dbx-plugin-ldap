@@ -13,7 +13,10 @@ import { joinRdnAndParent } from "./dn";
 import type { ObjectClassAttributes } from "./schemaCache";
 import type { AttributeSyntaxInfo } from "./valueKinds";
 
-export type TemplateId = "user" | "group" | "ou" | "simpleObject" | "blank";
+export type TemplateId = "user" | "group" | "ou" | "simpleObject" | "blank" | "adUser" | "posixUser" | "posixGroup" | "ipaUser";
+
+/** 模板方言标记（阶段5）：按服务器方言把最匹配的模板排在最前。 */
+export type TemplateDialect = "universal" | "ad" | "posix" | "ipa";
 
 export interface EntryTemplate {
   id: TemplateId;
@@ -28,6 +31,8 @@ export interface EntryTemplate {
   must: string[];
   /** 内置常用 may 建议集，同上兜底语义。 */
   may: string[];
+  /** 方言归属（缺省 universal）；方言分组排序用。 */
+  dialect?: TemplateDialect;
 }
 
 /**
@@ -89,12 +94,62 @@ export const BUILTIN_TEMPLATES: readonly EntryTemplate[] = [
     must: [],
     may: [],
   },
+  {
+    // Active Directory user：sAMAccountName 必填，uac 预置由向导用户勾选。
+    id: "adUser",
+    objectClasses: ["top", "person", "organizationalPerson", "user"],
+    rdnAttr: "cn",
+    must: ["cn", "sAMAccountName"],
+    may: ["displayName", "userPrincipalName", "givenName", "sn", "mail", "userAccountControl"],
+    dialect: "ad",
+  },
+  {
+    // RFC 2307 posixAccount（OpenLDAP / 389DS 常用）。
+    id: "posixUser",
+    objectClasses: ["top", "inetOrgPerson", "posixAccount"],
+    rdnAttr: "uid",
+    must: ["cn", "sn", "uid", "uidNumber", "gidNumber", "homeDirectory"],
+    may: ["loginShell", "gecos", "mail", "description"],
+    dialect: "posix",
+  },
+  {
+    id: "posixGroup",
+    objectClasses: ["top", "posixGroup"],
+    rdnAttr: "cn",
+    must: ["cn", "gidNumber"],
+    may: ["memberUid", "description"],
+    dialect: "posix",
+  },
+  {
+    // FreeIPA user：通常还需 krbPrincipalName（IPA 侧可自动生成，故放 may）。
+    id: "ipaUser",
+    objectClasses: ["top", "person", "organizationalPerson", "inetOrgPerson", "posixAccount"],
+    rdnAttr: "uid",
+    must: ["uid", "givenName", "sn"],
+    may: ["mail", "krbPrincipalName", "mobile", "title", "uidNumber", "gidNumber", "homeDirectory"],
+    dialect: "ipa",
+  },
 ];
 
 const templatesById = new Map<string, EntryTemplate>(BUILTIN_TEMPLATES.map((template) => [template.id, template]));
 
 export function listTemplates(): EntryTemplate[] {
   return [...BUILTIN_TEMPLATES];
+}
+
+/**
+ * 按服务器方言排序模板：最匹配方言的最前，universal 居中，其余方言殿后
+ * （阶段5 方言适配；dialect 未知/缺省 = 原顺序）。
+ */
+export function sortTemplatesForDialect(templates: readonly EntryTemplate[], dialect?: string): EntryTemplate[] {
+  if (!dialect) return [...templates];
+  const rank = (template: EntryTemplate): number => {
+    const templateDialect = template.dialect ?? "universal";
+    if (templateDialect === "universal") return 1;
+    if (templateDialect === dialect) return 0;
+    return 2;
+  };
+  return [...templates].sort((left, right) => rank(left) - rank(right));
 }
 
 export function resolveTemplate(id: string): EntryTemplate | null {

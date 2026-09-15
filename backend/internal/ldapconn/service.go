@@ -68,13 +68,23 @@ type Service struct {
 	// Presets 提供预设持久化（main.go 注入 store-backed 实现，见
 	// operations.go 的 PresetStore 契约）。nil 时 ldap/presets/* 报错。
 	Presets PresetStore
+
+	// checkDialFn 是 ldap/check network 段的拨号函数（缺省 dialTransport，
+	// 与真实建连同一套 host/port/TLS 语义）。抽成字段只为单测注入 stub——
+	// 真网络拨号不可进单测；领域代码勿在别处改写。
+	checkDialFn func(profile Profile, target connTarget, timeout time.Duration) (*ldap.Conn, error)
+	// checkProbeFn 是 ldap/check bind 段的会话探活（缺省 probeBindSession，
+	// RootDSE base 读取）。同上，仅单测注入用。
+	checkProbeFn func(conn *ldap.Conn) error
 }
 
 // NewService 创建空连接表。
 func NewService() *Service {
 	return &Service{
-		conns:       map[string]*connEntry{},
-		SchemaCache: NewSchemaCache(0), // 0 → schema.go 默认 10 分钟 TTL
+		conns:        map[string]*connEntry{},
+		SchemaCache:  NewSchemaCache(0), // 0 → schema.go 默认 10 分钟 TTL
+		checkDialFn:  dialTransport,
+		checkProbeFn: probeBindSession,
 	}
 }
 

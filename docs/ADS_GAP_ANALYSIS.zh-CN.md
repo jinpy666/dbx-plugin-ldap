@@ -16,7 +16,7 @@
 | LDAPS (ldaps://) | ✅ | ✅ tls_mode=ldaps（后端 ldaps/StartTLS 已绿 smoke） | ✅ | — |
 | StartTLS | ✅ | ✅ tls_mode=starttls | ✅ | — |
 | LDAPI (Unix socket) | ❌（ADS 无） | ✅ ldapi://（smoke_ldapi_test） | ✅ | 超越项，保持 |
-| 连接测试（只测网络连通） | ✅ Check Network Parameter | 🔶 宿主连接表单有 test capability（整体 bind 测试）；无"仅网络/仅认证"分段测试 | ❌ | P1：sidecar `ldap/check`（network|bind 两级），连接表单已可挂 |
+| 连接测试（只测网络连通） | ✅ Check Network Parameter | ✅ `ldap/check`（network 全新短拨号测延迟 ∥ bind 会话探活两级，无副作用）+ 连接面板每行检查（本轮） | ✅ | — |
 | 网络超时/读超时 | ✅ | 🔶 单一 timeout_secs（缺省 30） | 🔶 | P2：拆 dial/read 两档 |
 | 引用（referral）跟随策略 | ✅ follow/ignore/manage | ❌ | ❌ | P1：go-ldap ReferralEnabled + 配置项 |
 | 别名处理（browse/search 解引用） | ✅ 分开设置 | 🔶 搜索有 derefAliases，浏览树无 | 🔶 | P2 |
@@ -66,11 +66,11 @@
 | 值转义（RFC 4515） | ✅ | ✅ \5c/\2a/\28/\29/\00 + UTF-8 hex 串解码 | ✅ | — |
 | schema 驱动属性下拉 | ✅ | ✅ datalist（schema 缓存 30min + 常用集兜底） | ✅ | — |
 | 保存的搜索（Saved Searches） | ✅ 文件夹管理 | ✅ 预设（结构化条件 + 过滤器串，sidecar 持久化） | ✅ | P2：预设分组/排序 |
-| 搜索历史 | ✅ | ❌ | ❌ | P1：本地最近 N 条过滤器历史下拉 |
+| 搜索历史 | ✅ | ✅ 本地最近 10 条（成功才入队、去重、localStorage 持久化，下拉应用不自动运行；本轮） | ✅ | — |
 | 分页搜索（Paged Results 控件） | ✅ | ✅ pageSize | ✅ | — |
 | 服务器端排序控件 | ✅ | ❌（客户端列排序） | ❌ | P2 |
 | 搜索范围 base/one/sub | ✅ | ✅ | ✅ | — |
-| 结果批量操作（删除/移动） | ✅ Batch Operations Wizard | ❌（单条操作） | ❌ | P1：结果多选批量删除/移动 |
+| 结果批量操作（删除/移动） | ✅ Batch Operations Wizard | ✅ 多选批量删除（确认 + 逐条非递归）+ 批量移动（保留 RDN、目标父 DN 校验；失败计数明示）（本轮收齐） | ✅ | — |
 
 ## 6. 目录浏览与条目编辑
 
@@ -79,8 +79,9 @@
 | DN 树浏览 + 懒加载 | ✅ | ✅ 虚拟列表 + 计数徽章 | ✅ | — |
 | 树关键字过滤 | ✅ | ✅（远程子树过滤） | ✅ | — |
 | 条目查看/编辑（表单） | ✅ | ✅ 属性增删改 + 多值行 | ✅ | — |
-| LDIF 视图（直接编辑生效） | ✅ | 🔶 只读 LDIF tab | 🔶 | P1：LDIF 编辑 → apply |
+| LDIF 视图（直接编辑生效） | ✅ | ✅ LDIF 页签可写态直接编辑：切页签 leaveLdif 守卫解析回表单、保存时 syncRowsFromLdif 落为 modify changes（对账销账，代码已在库） | ✅ | — |
 | 新条目向导（objectClass 模板） | ✅ | ✅ 模板向导 + schema must 铺开（M6-N4） | ✅ | JSON 自定义模板引擎不做 |
+| objectClass 专用编辑器（chips + 类选择器） | ✅ ObjectClass Editor | ✅ chips 行编辑 + 选择器（搜索/MUST 预览/已选禁重复）+ 保存前变更预览 + OID 格式校验（本轮） | ✅ | — |
 | 二进制属性（图片/hex/base64 查看器） | ✅ | ✅ 预览/hex/PEM 三视图 + 上传（M6-N3） | ✅ | — |
 | 密码修改扩展操作（passwd） | ✅ | ❌（走 modify userPassword，前端哈希辅助已落地 M6-N2） | 🔶 | P2：RFC 3062 extend |
 | 条目复制/粘贴、书签 | ✅ | ❌ | ❌ | P2 |
@@ -122,6 +123,8 @@
 | 七语 i18n | ✅ 多语 | ✅ 七语（en/es/it/ja/pt-BR/zh-CN/zh-TW） | ✅ | — |
 | 键盘操作（↑/↓/Enter 打开条目） | ✅ | ✅ | ✅ | — |
 | 列宽持久化 | ✅ | ✅ | ✅ | — |
+| 紧凑搜索条（高级区折叠 + 记忆） | ✅ Quick Search | ❌ 表单常驻展开 | ✅（本轮：折叠快捷条 ⇄ 展开完整表单双形态，localStorage 记忆，MCP focus intent 自动展开） | — |
+| 连接标识（协议/认证徽章、最近条目） | ✅ 连接属性页 | 🔶 仅方言徽章 | ✅（本轮：协议·认证徽章 + 最近打开条目下拉） | — |
 | UI 自动化测试 | ❌（手工/ SWTbots） | 🔶 vitest 单测 + mock 走查；本轮补组件测试 + 浏览器走查脚本（scripts/ui_test.mjs，入 test.sh） | ✅（本轮） | 持续：关键流 e2e（shared/host-e2e） |
 
 ## 11. 追赶路线（并入 IMPL_PLAN M5/M6/M7）

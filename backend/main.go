@@ -8,7 +8,7 @@
 //
 //	connection/test | connection/connect | connection/disconnect   （本文件实现）
 //	ldap/search | ldap/count | ldap/entry/get | ldap/rootDse | ldap/schema |
-//	ldap/entry/add | ldap/entry/modify | ldap/entry/delete |
+//	ldap/check | ldap/entry/add | ldap/entry/modify | ldap/entry/delete |
 //	ldap/entry/childrenCount | ldap/entry/modifyDn |
 //	ldap/connections/statuses |
 //	ldap/presets/list | ldap/presets/save | ldap/presets/remove    （转发 internal/ldapconn）
@@ -172,6 +172,8 @@ func (h *pluginHandler) Handle(
 		return h.forwardRootDSE(params)
 	case "ldap/schema":
 		return h.forwardSchema(params)
+	case "ldap/check":
+		return h.forwardCheck(params)
 	case "ldap/entry/add":
 		return h.forwardAddEntry(params)
 	case "ldap/entry/modify":
@@ -306,6 +308,22 @@ func (h *pluginHandler) forwardSchema(params json.RawMessage) (any, *dbxpluginsd
 		return nil, bizError(err)
 	}
 	return metadata, nil
+}
+
+// forwardCheck 处理 ldap/check（连接分级检查：network 全新短拨号测延迟 +
+// bind 既有会话探活，实现见 ldapconn/check.go）。检查只读、无副作用：不
+// 建连、不发审计；网络不通/会话失效等结果在 ok/network/bind 包络内表达，
+// 仅未知 connectionId、非法 level 等入口错误走业务错误。
+func (h *pluginHandler) forwardCheck(params json.RawMessage) (any, *dbxpluginsdk.PluginError) {
+	var req ldapconn.LDAPCheckRequest
+	if perr := decodeParams(params, &req); perr != nil {
+		return nil, perr
+	}
+	result, err := h.svc.Check(getContext(), req)
+	if err != nil {
+		return nil, bizError(err)
+	}
+	return result, nil
 }
 
 func (h *pluginHandler) forwardAddEntry(params json.RawMessage) (any, *dbxpluginsdk.PluginError) {

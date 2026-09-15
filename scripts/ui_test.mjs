@@ -79,6 +79,31 @@ const expectEqual = (actual, expected, label) => {
 
 // -- 走查流 --------------------------------------------------------------------
 
+// 折叠默认态用例必须最先跑：后续既有用例都假定高级区可见（hidden 元素
+// 对 fill 不可交互），先验证折叠态再展开，是其余用例的前置。
+test("compact search bar: collapsed by default, quick filter runs directly", async (page) => {
+  await page.locator(".search-form-compact").waitFor();
+  expectEqual(await page.locator(".filter-block").isVisible(), false, "advanced sections hidden while collapsed");
+  await page.locator(".compact-filter").fill("(uid=user0003)");
+  await page.locator(".search-form-compact button[type='submit']").click();
+  // 行数断言同时验证快捷条输入真正落到过滤器（空过滤器会回退匹配全部、返回多行）。
+  await page.waitForFunction(() => document.querySelectorAll(".result-row").length === 1, undefined, { timeout: 5000 });
+  expectEqual(await page.locator(".result-row").first().getAttribute("title"), "uid=user0003,ou=people,dc=demo,dc=dbx", "compact filter applied");
+  await captureReview(page, "ldap-round8-compact-bar");
+});
+
+test("expanding the compact bar reveals the advanced form and persists", async (page) => {
+  await page.locator(".search-form-compact .compact-toggle").click();
+  await page.locator(".filter-block").waitFor();
+  expectEqual(await page.locator(".filter-block").isVisible(), true, "advanced sections visible after expand");
+  // 展开保留快捷条切出的源码模式（源码是唯一权威表示）：输入值必须原样在场。
+  expectEqual(await page.locator(".filter-source input").inputValue(), "(uid=user0003)", "compact typing landed in source mode");
+  expectEqual(await page.evaluate(() => window.localStorage.getItem("dbx.ldap.ui.searchCollapsed")), "0", "expanded state persisted");
+  // 切回构建器，让后续既有用例继续在"构建器 + 单个子句"的假设下运行。
+  await page.locator(".search-form .mode-switch button").nth(0).click();
+  expectEqual(await page.locator(".qb-preview").first().innerText(), "(uid=user0003)", "source filter round-trips into builder");
+});
+
 test("builder preview: equals", async (page) => {
   await page.locator(".qb-attr").first().fill("uid");
   await page.locator(".qb-value").first().fill("admin");
@@ -375,6 +400,23 @@ test("RootDSE export includes explicitly requested operational metadata", async 
   await download.delete();
 });
 
+// 搜索历史放在写操作用例之间：批量用例的 finally 清理会触发审计通知并覆盖
+// .notice，历史通知断言必须在无审计事件的窗口内做。此前用例已多次成功搜索，
+// 历史至少一条；点首条 = 应用到表单但不自动运行。
+test("filter history applies a previous search without auto-running", async (page) => {
+  const rowsBefore = await page.locator(".result-row").count();
+  await page.getByRole("button", { name: "历史过滤器" }).click();
+  // 只在历史面板内找条目:Run 按钮的 title 也是过滤器串(以"("开头),不能全局匹配。
+  const item = page.locator(".history-panel .history-item").first();
+  await item.waitFor();
+  const filter = await item.getAttribute("title");
+  await item.click();
+  // .notice 有 3.5s TTL,上一条通知可能仍在屏——必须轮询文本而不是等元素出现。
+  await page.waitForFunction(() => document.querySelector(".notice")?.textContent === "已应用历史过滤器", undefined, { timeout: 3000 });
+  expectEqual(await page.locator(".qb-preview").first().innerText(), filter, "history filter lands in the builder preview");
+  expectEqual(await page.locator(".result-row").count(), rowsBefore, "applying history does not auto-run the search");
+});
+
 test("source searches preserve escaped UTF-8 and order integer attributes numerically", async (page) => {
   const baseDn = "ou=round7-filter,dc=demo,dc=dbx";
   await page.evaluate(async (root) => {
@@ -408,6 +450,88 @@ test("source searches preserve escaped UTF-8 and order integer attributes numeri
 
 // intent 走查放在用例链末尾：applyIntentSearch 会整体替换表单状态，
 // 不影响前面用例的顺序假设。user0001 已被 rename 用例移走，选 user0002。
+
+// 最近条目/协议徽章在批量用例之前跑：批量用例结束时结果表为空，
+// 而本用例依赖仍有一行结果可双击。
+test("toolbar recent entries reopens an entry and the protocol badge renders", async (page) => {
+  expectEqual(await page.locator(".toolbar .badge[title='连接协议与认证方式']").innerText(), "LDAP", "protocol badge derived from mock connection");
+  await page.locator(".result-row").first().dblclick();
+  await page.locator(".editor-modal").waitFor();
+  await page.locator(".editor-modal").getByRole("button", { name: "取消", exact: true }).click();
+  await page.getByRole("button", { name: "最近打开" }).click();
+  const item = page.locator(".context-menu button[role='menuitem']").first();
+  await item.waitFor();
+  const dn = await item.getAttribute("title");
+  if (!dn || !dn.includes("=")) throw new Error(`recent item lacks a DN title: ${dn}`);
+  await item.click();
+  await page.locator(".editor-modal").waitFor();
+  await page.locator(".editor-modal").getByRole("button", { name: "取消", exact: true }).click();
+});
+
+test("result batch select arms the bar and batch-deletes via confirm", async (page) => {
+  const root = "ou=round8-batch,dc=demo,dc=dbx";
+  await page.evaluate(async (base) => {
+    const add = (dn, attributes) => window.dbxPlugin.invoke("ldap/entry/add", { dn, attributes });
+    await add(base, { objectClass: ["organizationalUnit"], ou: ["round8-batch"] });
+    for (const uid of ["batch-a", "batch-b"]) {
+      await add(`uid=${uid},${base}`, { objectClass: ["inetOrgPerson", "posixAccount"],
+        cn: [uid], sn: ["Fixture"], uid: [uid], uidNumber: ["1000"], gidNumber: ["1000"], homeDirectory: [`/home/${uid}`] });
+    }
+  }, root);
+  try {
+    await page.locator(".search-form > label.field input").first().fill(root);
+    await page.locator(".search-form .mode-switch button").nth(1).click();
+    await page.locator(".filter-source input").fill("(uid=batch-*)");
+    await page.locator(".search-form button[type='submit']").click();
+    await page.waitForFunction(() => document.querySelectorAll(".result-row").length === 2);
+    await page.locator(".result-row .cell-check input").first().click();
+    expectEqual(await page.locator(".editor-modal").count(), 0, "checkbox click does not open entry");
+    await page.locator(".result-row .cell-check input").nth(1).click();
+    expectEqual(await page.locator(".batch-bar").isVisible(), true, "batch bar armed");
+    expectEqual(await page.locator(".batch-count").innerText(), "已选 2 项", "batch count copy");
+    await captureReview(page, "ldap-round8-batch-bar");
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator(".batch-delete").click();
+    await page.waitForFunction(() => document.querySelectorAll(".result-row").length === 0);
+  } finally {
+    await page.evaluate((dn) => window.dbxPlugin.invoke("ldap/entry/delete", { dn, recursive: true }), root);
+  }
+});
+
+test("batch move relocates selected entries keeping their RDNs", async (page) => {
+  const source = "ou=round9-move,dc=demo,dc=dbx";
+  const target = "ou=round9-target,dc=demo,dc=dbx";
+  await page.evaluate(async ([from, to]) => {
+    const add = (dn, attributes) => window.dbxPlugin.invoke("ldap/entry/add", { dn, attributes });
+    await add(from, { objectClass: ["organizationalUnit"], ou: ["round9-move"] });
+    await add(to, { objectClass: ["organizationalUnit"], ou: ["round9-target"] });
+    for (const uid of ["mv-a", "mv-b"]) {
+      await add(`uid=${uid},${from}`, { objectClass: ["inetOrgPerson", "posixAccount"],
+        cn: [uid], sn: ["Fixture"], uid: [uid], uidNumber: ["1000"], gidNumber: ["1000"], homeDirectory: [`/home/${uid}`] });
+    }
+  }, [source, target]);
+  try {
+    await page.locator(".search-form > label.field input").first().fill(source);
+    await page.locator(".search-form .mode-switch button").nth(1).click();
+    await page.locator(".filter-source input").fill("(uid=mv-*)");
+    await page.locator(".search-form button[type='submit']").click();
+    await page.waitForFunction(() => document.querySelectorAll(".result-row").length === 2);
+    await page.locator(".result-row .cell-check input").first().click();
+    await page.locator(".result-row .cell-check input").nth(1).click();
+    await page.locator(".batch-move").click();
+    const dialog = page.locator(".small-modal");
+    await dialog.waitFor();
+    await dialog.locator("input[type='text']").first().fill(target);
+    await dialog.locator(".primary-button").click();
+    await dialog.waitFor({ state: "hidden" });
+    const moved = await page.evaluate(async (dn) => window.dbxPlugin.invoke("ldap/entry/get", { dn, attributes: ["uid"] }), `uid=mv-a,${target}`);
+    expectEqual(moved.entry.attributes.uid.join(","), "mv-a", "entry relocated under the target parent with RDN kept");
+  } finally {
+    await page.evaluate((dn) => window.dbxPlugin.invoke("ldap/entry/delete", { dn, recursive: true }), source);
+    await page.evaluate((dn) => window.dbxPlugin.invoke("ldap/entry/delete", { dn, recursive: true }), target);
+  }
+});
+
 test("MCP ui intent fills the form, runs the search and reports state", async (page) => {
   await page.evaluate(() => {
     const reports = [];

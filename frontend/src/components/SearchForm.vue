@@ -4,10 +4,11 @@
 // + scope/attributes/sizeLimit/pageSize/typesOnly/derefAliases
 // + 预设（持久化过滤器串，应用时重建构建器；sidecar 不存 conditions）。
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
-import { Play, Save, Terminal, Trash2 } from "@lucide/vue";
+import { ChevronDown, ChevronUp, History, Play, Save, Terminal, Trash2 } from "@lucide/vue";
 import { getLdapConnectionId, ldapApi, type LdapSearchPreset, type LdapScope } from "../lib/api";
 import { validateLDAPFilter, buildNodeFilter, collectBuilderErrors, parseFilterStructure, toBuilderRoot, createBuilderClause, createBuilderGroup, type BuilderGroup } from "../lib/ldapFilter";
 import { parseLdapSearchCommand, type LdapSearchCommandFailure } from "../lib/ldapSearchCommand";
+import { parsePsAdCommand } from "../lib/psCommandImport";
 import { deriveSchemaMetadata, useLdapSchemaCache } from "../lib/schemaCache";
 import { t } from "../lib/i18n";
 import FilterGroup from "./FilterGroup.vue";
@@ -133,6 +134,159 @@ function presentFilter(filter: string) {
   }
 }
 
+// -- 折叠快捷条（对标 Apache Directory Studio 的快捷搜索形态）------------------
+// 默认折叠：完整面板常驻太占空间。高级区用 hidden 属性收起而非卸载，
+// 构建器/源码输入态与焦点都保留，展开即时还原，切换不改任何表单值。
+// 偏好记忆 localStorage；宿主 webview 禁存储时静默降级为仅内存态（同 DnTree 侧栏宽）。
+
+const SEARCH_COLLAPSED_KEY = "dbx.ldap.ui.searchCollapsed";
+
+function readStoredCollapsed(): boolean {
+  try {
+    const stored = localStorage.getItem(SEARCH_COLLAPSED_KEY);
+    // 无记录视为折叠（新用户默认紧凑形态）；只有显式 "0" 才记忆为展开。
+    return stored === null ? true : stored === "1";
+  } catch {
+    return true;
+  }
+}
+
+function persistCollapsed(value: boolean) {
+  try {
+    localStorage.setItem(SEARCH_COLLAPSED_KEY, value ? "1" : "0");
+  } catch {
+    /* 存储不可用（隐私模式等）：仅内存态 */
+  }
+}
+
+const collapsed = ref(readStoredCollapsed());
+
+function toggleCollapsed() {
+  collapsed.value = !collapsed.value;
+  // 面板跟随各自锚点分写两份模板，切换形态时不把打开状态带过去。
+  historyOpen.value = false;
+  persistCollapsed(collapsed.value);
+}
+
+/** 宿主入口（MCP focus intent 等接线用）：把表单展开到完整形态，不动任何表单值。 */
+function expandSearch() {
+  collapsed.value = false;
+  historyOpen.value = false;
+  persistCollapsed(collapsed.value);
+}
+
+// -- 历史过滤器（对账表 P1，对标 ADS 搜索历史）---------------------------------
+// 本地留存最近 N 条搜索过滤器（localStorage，宿主 webview 禁存储时静默降级，
+// 同 DnTree 侧栏宽）。应用只回填表单不自动运行，保持"先确认后运行"的节奏。
+
+interface SearchHistoryEntry {
+  filter: string;
+  baseDn: string;
+  scope: LdapScope;
+  attributes: string;
+}
+
+const SEARCH_HISTORY_KEY = "dbx.ldap.ui.searchHistory";
+const SEARCH_HISTORY_MAX = 10;
+
+// 存储内容可能被旧版本或人为写坏：读取时只接受形状完整的条目。
+function isHistoryEntry(value: unknown): value is SearchHistoryEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.filter === "string" &&
+    typeof entry.baseDn === "string" &&
+    typeof entry.attributes === "string" &&
+    (entry.scope === "base" || entry.scope === "one" || entry.scope === "sub")
+  );
+}
+
+function readStoredHistory(): SearchHistoryEntry[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter(isHistoryEntry).slice(0, SEARCH_HISTORY_MAX) : [];
+  } catch {
+    return []; // 存储不可用/JSON 损坏：降级为空历史
+  }
+}
+
+function persistHistory() {
+  try {
+    localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(searchHistory.value));
+  } catch {
+    /* 存储不可用（隐私模式等）：仅内存态 */
+  }
+}
+
+const searchHistory = ref<SearchHistoryEntry[]>(readStoredHistory());
+
+function sameHistoryEntry(a: SearchHistoryEntry, b: SearchHistoryEntry): boolean {
+  return a.filter === b.filter && a.baseDn === b.baseDn && a.scope === b.scope && a.attributes === b.attributes;
+}
+
+/** 宿主（App）在搜索成功后调用入队并持久化：与队首逐字段相同不重复记，
+ * 更早的相同条目前移（对标 ADS 语义），上限 10 条。filter 存实际生效串
+ * （toModel 已兜底 (objectClass=*)，照存）。 */
+function recordSearch(model: SearchFormModel) {
+  const entry: SearchHistoryEntry = { filter: model.filter, baseDn: model.baseDn, scope: model.scope, attributes: model.attributes };
+  if (searchHistory.value[0] && sameHistoryEntry(searchHistory.value[0], entry)) return;
+  searchHistory.value = [entry, ...searchHistory.value.filter((existing) => !sameHistoryEntry(existing, entry))].slice(0, SEARCH_HISTORY_MAX);
+  persistHistory();
+}
+
+// 两种形态各挂一个触发按钮（快捷条 / filter-head 右侧），切换同一个下拉状态；
+// 面板绝对定位于各自按钮下方，因此按分支各写一份面板模板（不引入浮动层）。
+const historyOpen = ref(false);
+// filter-head 常驻 DOM（靠 hidden 收起），两个锚点须各自持 ref，
+// 外点判定对两个容器做 containment（同一时刻只有一个面板可见）。
+const historyRootCompact = ref<HTMLElement | null>(null);
+const historyRootExpanded = ref<HTMLElement | null>(null);
+
+function toggleHistory() {
+  if (props.disabled) return;
+  historyOpen.value = !historyOpen.value;
+}
+
+function applyHistory(entry: SearchHistoryEntry) {
+  if (props.disabled) return;
+  draft.value.baseDn = entry.baseDn;
+  draft.value.scope = entry.scope;
+  draft.value.attributes = entry.attributes;
+  // 过滤器串走既有 presentFilter：可解析进构建器，不可解析落源码模式（源码是唯一权威表示）。
+  presentFilter(entry.filter);
+  historyOpen.value = false;
+  emit("notify", t("search.historyApplied"));
+}
+
+function clearHistory() {
+  // 历史是本地持久化数据：清空前确认（同预设删除的先例）。
+  if (!window.confirm(t("search.historyClearConfirm"))) return;
+  searchHistory.value = [];
+  persistHistory();
+}
+
+// 外点/Esc 关闭：containment 判定（面板内点击不算外点），mount 注册、卸载清理（同 DnTree 右键菜单）。
+function onHistoryDocClick(event: MouseEvent) {
+  if (!historyOpen.value) return;
+  const target = event.target as Node;
+  if (historyRootCompact.value?.contains(target) || historyRootExpanded.value?.contains(target)) return;
+  historyOpen.value = false;
+}
+
+function onHistoryDocKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") historyOpen.value = false;
+}
+
+onMounted(() => {
+  document.addEventListener("click", onHistoryDocClick);
+  document.addEventListener("keydown", onHistoryDocKeydown);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("click", onHistoryDocClick);
+  document.removeEventListener("keydown", onHistoryDocKeydown);
+});
+
 // -- base DN / fields ---------------------------------------------------------
 
 // 树节点联动改写 Base DN 的一次性高亮（UI 扫描 P2-7：此前静默改写，
@@ -156,7 +310,7 @@ function applyBaseDn(next: string, highlight = true) {
 
 onBeforeUnmount(() => window.clearTimeout(baseDnHighlightTimer));
 
-defineExpose({ applyBaseDn, runSubtreeAt, runFilterAt, applyIntentSearch });
+defineExpose({ applyBaseDn, runSubtreeAt, runFilterAt, applyIntentSearch, expandSearch, recordSearch });
 
 // 树右键「搜索此子树」直达（此前只改 Base 不执行，用户预期是马上出结果集）：
 // Base 指到该节点、范围强制切到子树并立即运行。过滤器沿用表单当前配置；
@@ -238,6 +392,27 @@ function activeFilter(): string {
   return builderMode.value ? generatedFilter.value : sourceFilter.value.trim();
 }
 
+// 快捷条过滤器框：构建器模式只展示生成串，用户一旦输入即落源码模式
+// （源码是唯一权威表示，同 runFilterAt），快捷条因此不设第二套过滤器状态。
+const compactFilterValue = computed(() => (builderMode.value ? generatedFilter.value : sourceFilter.value));
+
+function onCompactFilterInput(event: Event) {
+  if (props.disabled) return;
+  sourceFilter.value = (event.target as HTMLInputElement).value;
+  sourceParseError.value = false;
+  builderMode.value = false;
+}
+
+// 快捷条行内错误：空构建器条件（attribute_required）不算错——与右键子树搜索
+// 的兜底同义（匹配全部），红字常驻只会骚扰；条件填坏或源码非法才提示，
+// Run 按钮 title 始终兜底说明不可运行的原因。
+const compactFilterError = computed(() => {
+  if (filterValid.value) return "";
+  if (!builderMode.value) return t("search.filterInvalid");
+  const first = builderErrors.value[0];
+  return first && first.code !== "attribute_required" ? builderErrorMessage.value : "";
+});
+
 function toModel(): SearchFormModel {
   return { ...draft.value, filter: activeFilter() || "(objectClass=*)" };
 }
@@ -276,6 +451,37 @@ function commandFailureMessage(failure: LdapSearchCommandFailure): string {
 
 function applyCommand() {
   if (props.disabled) return;
+  const commandText = commandDraft.value.trim();
+  commandApplied.value = false;
+  // PowerShell AD/QAD 命令（Get-ADUser/Get-QADUser…）走专用解析器（阶段4）
+  if (/^get-(ad|qad)/iu.test(commandText)) {
+    const result = parsePsAdCommand(commandText);
+    if (!result.ok) {
+      commandWarnings.value = [];
+      commandError.value = t("search.psCommandError", { value: result.value ?? "" });
+      return;
+    }
+    draft.value = {
+      ...draft.value,
+      baseDn: result.search.baseDn || draft.value.baseDn,
+      filter: result.search.filter,
+      scope: result.search.scope,
+      attributes: result.search.attributes.join(", "),
+      sizeLimit: String(result.search.sizeLimit ?? 0),
+    };
+    presentFilter(result.search.filter);
+    const warnings: string[] = [];
+    for (const note of result.notes) {
+      if (note === "noSearchBase") warnings.push(t("search.psNoteNoSearchBase"));
+      else if (note.startsWith("op:")) warnings.push(t("search.psNoteOp", { op: note.slice(3) }));
+    }
+    if (result.ignored.length > 0) warnings.push(t("search.psIgnored", { flags: result.ignored.join(" ") }));
+    commandWarnings.value = warnings;
+    commandError.value = "";
+    commandApplied.value = true;
+    emit("notify", t("search.commandApplied"));
+    return;
+  }
   const result = parseLdapSearchCommand(commandDraft.value);
   commandApplied.value = false;
   if (!result.ok) {
@@ -426,25 +632,34 @@ const derefOptions = computed(() => [
 
 <template>
   <form class="search-form" @submit.prevent="run">
-    <label class="field">
-      <span>{{ t("search.baseDn") }}</span>
-      <input
-        v-model="draft.baseDn"
-        type="text"
-        class="mono"
-        :class="{ 'base-dn-flash': baseDnHighlighted }"
-        :title="baseDnHighlighted ? t('search.baseFollowed') : undefined"
-        :disabled="disabled"
-        spellcheck="false"
-      />
-    </label>
-    <label class="field">
-      <span>{{ t("search.scope") }}</span>
-      <select v-model="draft.scope" :disabled="disabled">
+    <div v-if="collapsed" class="search-form-compact">
+      <label class="field">
+        <input
+          v-model="draft.baseDn"
+          type="text"
+          class="mono"
+          :class="{ 'base-dn-flash': baseDnHighlighted }"
+          :title="baseDnHighlighted ? t('search.baseFollowed') : undefined"
+          :aria-label="t('search.baseDn')"
+          :disabled="disabled"
+          spellcheck="false"
+        />
+      </label>
+      <select v-model="draft.scope" class="compact-scope" :aria-label="t('search.scope')" :disabled="disabled">
         <option v-for="option in scopeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
       </select>
-    </label>
-    <div class="field" style="justify-content: flex-end">
+      <input
+        :value="compactFilterValue"
+        type="text"
+        class="mono compact-filter"
+        :placeholder="t('search.filterPlaceholder')"
+        :aria-label="t('search.filter')"
+        :aria-invalid="!builderMode && !sourceValid"
+        :disabled="disabled"
+        spellcheck="false"
+        @input="onCompactFilterInput"
+      />
+      <span v-if="compactFilterError" class="form-error" role="alert">{{ compactFilterError }}</span>
       <button
         class="primary-button compact"
         type="submit"
@@ -453,19 +668,121 @@ const derefOptions = computed(() => [
       >
         <Play aria-hidden="true" />{{ running ? t("search.running") : t("search.run") }}
       </button>
-      <span v-if="builderMode && !filterValid" class="form-error">{{ builderErrorMessage }}</span>
+      <!-- 历史入口（快捷条）：挂在 Run 旁，与「调条件 → 搜索」动作贴近；切换与展开态同一个下拉状态。 -->
+      <div ref="historyRootCompact" class="search-history">
+        <button
+          type="button"
+          class="toolbar-button history-toggle"
+          :disabled="disabled"
+          :aria-expanded="historyOpen"
+          :aria-label="t('search.historyTitle')"
+          :title="t('search.historyTitle')"
+          @click="toggleHistory"
+        >
+          <History aria-hidden="true" />
+        </button>
+        <!-- 面板绝对定位于本按钮下方；两种形态共享状态/处理器，模板按锚点各写一份（不引入浮动层）。 -->
+        <div v-if="historyOpen" class="history-panel">
+          <div class="history-head">
+            <span>{{ t("search.historyTitle") }}</span>
+            <button type="button" class="history-clear" :disabled="!searchHistory.length" @click="clearHistory">{{ t("search.historyClear") }}</button>
+          </div>
+          <p v-if="searchHistory.length === 0" class="history-empty">{{ t("search.historyEmpty") }}</p>
+          <ul v-else class="history-list">
+            <li v-for="(entry, index) in searchHistory" :key="index">
+              <button type="button" class="history-item" :title="entry.filter" @click="applyHistory(entry)">
+                <span class="mono history-filter">{{ entry.filter }}</span>
+                <span class="history-meta">{{ entry.scope }} · {{ entry.baseDn || "—" }} · {{ entry.attributes || "—" }}</span>
+              </button>
+            </li>
+          </ul>
+        </div>
+      </div>
+      <button type="button" class="toolbar-button compact-toggle" :aria-expanded="!collapsed" :aria-label="t('search.advanced')" :title="t('search.advancedExpand')" @click="toggleCollapsed">
+        <ChevronDown aria-hidden="true" />
+      </button>
     </div>
 
-    <div class="filter-block">
+    <template v-else>
+      <label class="field">
+        <span>{{ t("search.baseDn") }}</span>
+        <input
+          v-model="draft.baseDn"
+          type="text"
+          class="mono"
+          :class="{ 'base-dn-flash': baseDnHighlighted }"
+          :title="baseDnHighlighted ? t('search.baseFollowed') : undefined"
+          :disabled="disabled"
+          spellcheck="false"
+        />
+      </label>
+      <label class="field">
+        <span>{{ t("search.scope") }}</span>
+        <select v-model="draft.scope" :disabled="disabled">
+          <option v-for="option in scopeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+        </select>
+      </label>
+      <div class="field" style="justify-content: flex-end">
+        <div class="run-row">
+          <button
+            class="primary-button compact"
+            type="submit"
+            :disabled="disabled || running || !filterValid || !numericValid"
+            :title="!numericValid ? t('search.invalidNumber') : !filterValid ? t('search.filterInvalid') : activeFilter() || t('search.filterAll')"
+          >
+            <Play aria-hidden="true" />{{ running ? t("search.running") : t("search.run") }}
+          </button>
+          <button type="button" class="toolbar-button compact-toggle" :aria-expanded="!collapsed" :aria-label="t('search.advanced')" :title="t('search.advancedCollapse')" @click="toggleCollapsed">
+            <ChevronUp aria-hidden="true" />
+          </button>
+        </div>
+        <span v-if="builderMode && !filterValid" class="form-error">{{ builderErrorMessage }}</span>
+      </div>
+    </template>
+
+    <div class="filter-block" :hidden="collapsed">
       <div class="filter-head">
         <span>{{ t("search.filter") }}</span>
-        <span class="mode-switch">
-          <button type="button" :class="{ 'is-active': builderMode }" :disabled="disabled" @click="builderMode || switchToBuilder()">
-            {{ t("search.modeBuilder") }}
-          </button>
-          <button type="button" :class="{ 'is-active': !builderMode }" :disabled="disabled" @click="builderMode && switchToSource()">
-            {{ t("search.modeSource") }}
-          </button>
+        <!-- 历史入口放 filter-head 右侧（与模式开关归组）：放预设行行首会成为
+             .search-presets 的首个按钮，打乱既有 spec 按索引断言的「预设保存/删除」次序。 -->
+        <span class="filter-head-tools">
+          <span class="mode-switch">
+            <button type="button" :class="{ 'is-active': builderMode }" :disabled="disabled" @click="builderMode || switchToBuilder()">
+              {{ t("search.modeBuilder") }}
+            </button>
+            <button type="button" :class="{ 'is-active': !builderMode }" :disabled="disabled" @click="builderMode && switchToSource()">
+              {{ t("search.modeSource") }}
+            </button>
+          </span>
+          <div ref="historyRootExpanded" class="search-history">
+            <button
+              type="button"
+              class="toolbar-button history-toggle"
+              :disabled="disabled"
+              :aria-expanded="historyOpen"
+              :aria-label="t('search.historyTitle')"
+              :title="t('search.historyTitle')"
+              @click="toggleHistory"
+            >
+              <History aria-hidden="true" />
+            </button>
+            <!-- filter-head 常驻 DOM（hidden 收起）：折叠态只让快捷条面板存在，避免双面板同挂。 -->
+            <div v-if="!collapsed && historyOpen" class="history-panel">
+              <div class="history-head">
+                <span>{{ t("search.historyTitle") }}</span>
+                <button type="button" class="history-clear" :disabled="!searchHistory.length" @click="clearHistory">{{ t("search.historyClear") }}</button>
+              </div>
+              <p v-if="searchHistory.length === 0" class="history-empty">{{ t("search.historyEmpty") }}</p>
+              <ul v-else class="history-list">
+                <li v-for="(entry, index) in searchHistory" :key="index">
+                  <button type="button" class="history-item" :title="entry.filter" @click="applyHistory(entry)">
+                    <span class="mono history-filter">{{ entry.filter }}</span>
+                    <span class="history-meta">{{ entry.scope }} · {{ entry.baseDn || "—" }} · {{ entry.attributes || "—" }}</span>
+                  </button>
+                </li>
+              </ul>
+            </div>
+          </div>
         </span>
       </div>
 
@@ -494,7 +811,7 @@ const derefOptions = computed(() => [
       <p class="filter-hint">{{ t("search.filterEmptyHint") }}</p>
     </div>
 
-    <div class="search-extra">
+    <div class="search-extra" :hidden="collapsed">
       <label class="field">
         <span>{{ t("search.attributes") }}</span>
         <input v-model="draft.attributes" type="text" :disabled="disabled" spellcheck="false" />
@@ -523,7 +840,7 @@ const derefOptions = computed(() => [
         </select>
       </label>
     </div>
-    <div class="command-import">
+    <div class="command-import" :hidden="collapsed">
       <button type="button" class="toolbar-button" :disabled="disabled" :aria-expanded="commandOpen" :title="t('search.commandImport')" @click="commandOpen = !commandOpen">
         <Terminal aria-hidden="true" /><span>{{ t("search.commandImport") }}</span>
       </button>
@@ -547,7 +864,7 @@ const derefOptions = computed(() => [
         <p v-if="commandApplied" class="command-ok">{{ t("search.commandApplied") }}</p>
       </div>
     </div>
-    <div class="search-presets">
+    <div class="search-presets" :hidden="collapsed">
       <span class="muted">{{ t("search.presets") }}</span>
       <select v-model="selectedPresetId" :disabled="disabled || presetPending" @change="applyPreset">
         <option value="">{{ t("search.presetsEmpty") }}</option>

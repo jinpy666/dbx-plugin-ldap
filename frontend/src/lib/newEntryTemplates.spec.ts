@@ -7,6 +7,7 @@ import {
   listTemplates,
   mayAttributesFor,
   mustAttributesFor,
+  sortTemplatesForDialect,
   resolveTemplate,
   type LdapSchema,
 } from "./newEntryTemplates";
@@ -39,8 +40,8 @@ const SCHEMA: LdapSchema = {
 
 describe("listTemplates / resolveTemplate", () => {
   it("ships the four built-in templates plus blank, in a stable order", () => {
-    expect(listTemplates().map((template) => template.id)).toEqual(["user", "group", "ou", "simpleObject", "blank"]);
-    expect(BUILTIN_TEMPLATES).toHaveLength(5);
+    expect(listTemplates().map((template) => template.id)).toEqual(["user", "group", "ou", "simpleObject", "blank", "adUser", "posixUser", "posixGroup", "ipaUser"]);
+    expect(BUILTIN_TEMPLATES).toHaveLength(9);
   });
 
   it("preseeds the user template with the inetOrgPerson chain and common may set", () => {
@@ -149,5 +150,22 @@ describe("buildDn", () => {
     expect(parentDn).toBe(PARENT);
     expect(isLikelyRdn(rdn)).toBe(true);
     expect(rdnConfirmationToken(dn)).toBe('Doe, "John" + Q <2>;');
+  });
+});
+
+describe("sortTemplatesForDialect (阶段5)", () => {
+  it("orders matching dialect first, universal next, others last", () => {
+    const ordered = sortTemplatesForDialect(listTemplates(), "ad");
+    expect(ordered.map((template) => template.id)[0]).toBe("adUser");
+    expect(ordered.map((template) => template.id).slice(-3)).toEqual(["posixUser", "posixGroup", "ipaUser"]);
+  });
+
+  it("keeps posix/ipa templates first for their own dialect", () => {
+    expect(sortTemplatesForDialect(listTemplates(), "posix").map((template) => template.id).slice(0, 2)).toEqual(["posixUser", "posixGroup"]);
+    expect(sortTemplatesForDialect(listTemplates(), "ipa").map((template) => template.id)[0]).toBe("ipaUser");
+  });
+
+  it("returns the original order for unknown/missing dialect", () => {
+    expect(sortTemplatesForDialect(listTemplates(), "").map((template) => template.id)).toEqual(listTemplates().map((template) => template.id));
   });
 });

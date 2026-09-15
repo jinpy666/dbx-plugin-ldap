@@ -57,3 +57,36 @@ describe("SearchForm ldapsearch command import", () => {
     expect(wrapper.findAll(".command-warn")).toHaveLength(2);
   });
 });
+
+describe("SearchForm Get-AD command import (阶段4)", () => {
+  it("parses a Get-ADUser command into the search fields", async () => {
+    const wrapper = await mountForm();
+    const textarea = await openCommandPanel(wrapper);
+    await textarea.setValue(
+      "Get-ADUser -Filter 'SamAccountName -like \"a*\"' -SearchBase 'OU=People,DC=demo,DC=dbx' -SearchScope OneLevel",
+    );
+    await wrapper.find(".command-actions button").trigger("click");
+    expect((baseInput(wrapper).element as HTMLInputElement).value).toBe("OU=People,DC=demo,DC=dbx");
+    expect((scopeSelect(wrapper).element as HTMLSelectElement).value).toBe("one");
+    expect(wrapper.find(".qb-preview").text()).toBe("(sAMAccountName=a*)");
+    expect(wrapper.emitted("notify")).toHaveLength(1);
+  });
+
+  it("keeps the current Base DN when -SearchBase is absent and warns", async () => {
+    const wrapper = await mountForm();
+    const textarea = await openCommandPanel(wrapper);
+    await textarea.setValue("Get-QADUser -LdapFilter '(objectClass=inetOrgPerson)'");
+    await wrapper.find(".command-actions button").trigger("click");
+    expect((baseInput(wrapper).element as HTMLInputElement).value).toBe("dc=demo,dc=dbx");
+    expect(wrapper.find(".command-warn").text()).toContain("-SearchBase");
+  });
+
+  it("reports unparseable PS filters as errors without applying", async () => {
+    const wrapper = await mountForm();
+    const textarea = await openCommandPanel(wrapper);
+    await textarea.setValue("Get-ADUser -Filter 'sn -weird \"x\"'");
+    await wrapper.find(".command-actions button").trigger("click");
+    expect(wrapper.find(".command-import .form-error").exists()).toBe(true);
+    expect(wrapper.emitted("notify")).toBeUndefined();
+  });
+});

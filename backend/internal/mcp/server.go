@@ -312,7 +312,8 @@ func (s *Server) uiSchema(args map[string]any) (map[string]any, error) {
 
 // renderSchemaNames 把 schema 元数据折算为 ldap_ui_schema 响应形状：
 // attributeNames 保持服务端顺序、objectClassNames 排序输出，各自按
-// schemaNameLimit 截断并带截断标志。
+// schemaNameLimit 截断并带截断标志；dialect/vendor 摘要随响应透出
+//（阶段5：MCP agent 按方言适配，如 AD FILETIME 时间过滤）。
 func renderSchemaNames(metadata ldapconn.LDAPSchemaMetadata) map[string]any {
 	attributeNames := clampStrings(metadata.AttributeNames, schemaNameLimit)
 	classNames := make([]string, 0, len(metadata.ObjectClassAttributes))
@@ -326,6 +327,9 @@ func renderSchemaNames(metadata ldapconn.LDAPSchemaMetadata) map[string]any {
 		"attributeNamesTruncated": len(metadata.AttributeNames) > schemaNameLimit,
 		"objectClassNames":        classNames,
 		"objectClassTruncated":    len(metadata.ObjectClassAttributes) > schemaNameLimit,
+		"dialect":                 metadata.Dialect,
+		"vendorName":              metadata.VendorName,
+		"productName":             metadata.ProductName,
 	}
 }
 

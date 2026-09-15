@@ -116,6 +116,8 @@ describe("EntryEditorDialog", () => {
     expect(saveButton(wrapper).attributes("disabled")).toBeUndefined();
     entryModifyMock.mockResolvedValue({ success: true });
     await saveButton(wrapper).trigger("click");
+    // edit 态保存先出变更预览：确认后才真正发 modify。
+    await wrapper.find(".changes-confirm").trigger("click");
     await flushPromises();
     expect(entryModifyMock).toHaveBeenCalledWith(entry.dn, [{ operation: "replace", attribute: "sn", values: ["Updated surname"] }]);
   });
@@ -123,13 +125,16 @@ describe("EntryEditorDialog", () => {
   it("updates MUST feedback when objectClass changes, while tolerating the original hidden sn", async () => {
     const wrapper = trackEditor({ canWrite: true, open: true, entry: demoEntry });
     expect(wrapper.find(".required-attributes").exists()).toBe(false);
-    const classes = attrRows(wrapper).find((row) => (row.find("input").element as HTMLInputElement).value === "objectClass")!.find("textarea");
-    await classes.setValue("top\nperson\ngroupOfNames");
+    // objectClass 行已是 chips 编辑（无 textarea），改经 LDIF 页签驱动类变化。
+    await wrapper.findAll(".mode-switch button")[1].trigger("click");
+    const ldif = wrapper.find(".ldif-editor");
+    const original = (ldif.element as HTMLTextAreaElement).value;
+    await ldif.setValue(original.replace("objectClass: person", "objectClass: person\nobjectClass: groupOfNames"));
     expect(wrapper.find(".required-attributes").text()).toContain("member");
     expect(wrapper.find(".required-attributes").text()).not.toContain("sn");
-    await classes.setValue("top\nperson");
+    await ldif.setValue(original);
     expect(wrapper.find(".required-attributes").exists()).toBe(false);
-    await classes.setValue("");
+    await ldif.setValue(original.replace("\nobjectClass: top\nobjectClass: person", ""));
     expect(wrapper.find(".required-attributes").text()).toContain("objectClass");
     expect(saveButton(wrapper).attributes("disabled")).toBeDefined();
   });
@@ -298,6 +303,8 @@ describe("EntryEditorDialog", () => {
     await attrRows(wrapper)[1].find("textarea").setValue("new text");
     expect(wrapper.find("footer .muted").text()).toBe("有未保存的修改");
     await saveButton(wrapper).trigger("click");
+    // edit 态保存先出变更预览：确认后才真正发 modify。
+    await wrapper.find(".changes-confirm").trigger("click");
     await flushPromises();
     expect(entryModifyMock).toHaveBeenCalledWith("cn=alice,dc=demo,dc=dbx", [
       { operation: "replace", attribute: "description", values: ["new text"] },
@@ -320,6 +327,8 @@ describe("EntryEditorDialog", () => {
     const wrapper = trackEditor({ canWrite: true, open: true, entry: demoEntry });
     await attrRows(wrapper)[0].find("textarea").setValue("alice2");
     await saveButton(wrapper).trigger("click");
+    // 预览确认后才触达 API；失败后 error 冒泡、表单恢复可用。
+    await wrapper.find(".changes-confirm").trigger("click");
     await flushPromises();
     expect(wrapper.emitted("error")?.[0]).toEqual(["modify boom"]);
     expect(saveButton(wrapper).text()).toBe("保存");
@@ -498,6 +507,8 @@ describe("EntryEditorDialog", () => {
     await wrapper.findAll(".mode-switch button")[0].trigger("click");
     expect(wrapper.find(".hint").text()).toContain("dn 行不能用于重命名");
     await saveButton(wrapper).trigger("click");
+    // 预览确认后才真正发 modify。
+    await wrapper.find(".changes-confirm").trigger("click");
     await flushPromises();
     // modify 仍发往原 DN（LDIF 里的改名请求被忽略），属性变更正常保存。
     expect(entryModifyMock).toHaveBeenCalledTimes(1);

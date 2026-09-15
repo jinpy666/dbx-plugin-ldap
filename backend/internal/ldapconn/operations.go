@@ -91,18 +91,27 @@ func (s *Service) Search(ctx context.Context, req LDAPSearchRequest) (LDAPSearch
 	var entries []LDAPEntry
 	truncated := false
 	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
+		// AD 兼容（KN-LDAP 真实连接验证发现）：分页控件与 SizeLimit 同用、
+		// 且匹配总数超过 SizeLimit 时，AD 直接返回 Size Limit Exceeded
+		//（分页失效）。分页路径把上限交给客户端聚合（aggregateLimit），
+		// LDAP 请求不携带 SizeLimit；非分页路径保持原语义。
+		sizeLimitField := 0
+		pageSize := normalizeLDAPPageSize(req.PageSize)
+		if pageSize <= 0 {
+			sizeLimitField = normalizeLDAPSizeLimit(req.SizeLimit)
+		}
 		searchReq := ldap.NewSearchRequest(
 			baseDN,
 			ldapSearchScope(req.Scope),
 			ldapDerefAliases(req.DerefAliases),
-			normalizeLDAPSizeLimit(req.SizeLimit),
+			sizeLimitField,
 			0,
 			req.TypesOnly,
 			filter,
 			attrs,
 			nil,
 		)
-		if pageSize := normalizeLDAPPageSize(req.PageSize); pageSize > 0 {
+		if pageSize > 0 {
 			var result []*ldap.Entry
 			var searchErr error
 			result, truncated, searchErr = pagedSearchEntries(conn, searchReq, pageSize, aggregateLimit(req.SizeLimit))

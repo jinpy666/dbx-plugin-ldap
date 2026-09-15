@@ -52,9 +52,11 @@ const invalid = computed(() => {
   return isFiletime.value ? !isFiletimeShape(props.modelValue) : !isGeneralizedTimeShape(props.modelValue);
 });
 
-// datetime-local 选择器的双向绑定：解析失败/哨兵值时选择器显示空。
+// datetime-local 选择器的双向绑定：解析失败/哨兵值时选择器显示空
+//（0 / INT64_MAX 不是真实时间点，渲染成 1601 年会误导）。
 const pickerValue = computed(() => {
   if (isFiletime.value) {
+    if (sentinelLabel.value) return "";
     const date = filetimeToDate(props.modelValue);
     return date ? toDatetimeLocalValue(date) : "";
   }
