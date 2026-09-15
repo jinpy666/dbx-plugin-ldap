@@ -14,6 +14,7 @@ import { escapeLdapFilterValue } from "./lib/ldapFilter";
 import { friendlyLdapError } from "./lib/ldapErrors";
 import { writeClipboardText } from "./lib/clipboard";
 import { serializeEntriesToCsv, serializeEntriesToJson, serializeEntriesToLdifText } from "./lib/ldapExporter";
+import { randomUUID } from "./lib/uuid";
 import DnTree from "./components/DnTree.vue";
 import SearchForm, { type SearchFormModel } from "./components/SearchForm.vue";
 import ResultTable from "./components/ResultTable.vue";
@@ -232,7 +233,7 @@ const unsubscribeContext: Array<() => void> = [];
 const unsubscribeEvent: Array<() => void> = [];
 
 const connectionId = computed(() => String(hostContext.value.connectionId || ""));
-const fallbackWorkbenchId = crypto.randomUUID();
+const fallbackWorkbenchId = randomUUID();
 const workbenchId = computed(() => String(hostContext.value.workbenchId || fallbackWorkbenchId));
 const connection = computed<ConnectionSummary>(() => {
   const value = hostContext.value.connection;
