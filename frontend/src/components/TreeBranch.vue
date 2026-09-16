@@ -117,7 +117,7 @@ const truncatedTitle = computed(() => {
         <ChevronRight v-else />
       </button>
       <span class="tree-label">
-        <TreeNodeIcon :dn="node.dn" :base-dn="baseDn" :expanded="node.expanded" />
+        <TreeNodeIcon :dn="node.dn" :base-dn="baseDn" :object-class="node.objectClass" :expanded="node.expanded" />
         <span class="tree-name">{{ node.label }}</span>
       </span>
       <span v-if="node.loading" class="tree-badge tree-badge--loading" :title="t('tree.loading')">…</span>

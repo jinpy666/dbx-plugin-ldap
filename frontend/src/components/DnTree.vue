@@ -10,7 +10,7 @@ import { friendlyLdapError } from "../lib/ldapErrors";
 import { splitFirstDnRdn } from "../lib/dn";
 import { nextFocusIndex } from "../lib/modal";
 import { t } from "../lib/i18n";
-import { compareDnByLabel, compareDnForTree, flattenDnTree, isFetchTruncated, nextFetchLimit, nextTreeFocusIndex, TREE_FETCH_PAGE, type DnTreeNode } from "../lib/dnTree";
+import { compareDnByLabel, compareDnForTree, flattenDnTree, isFetchTruncated, nextFetchLimit, nextTreeFocusIndex, objectClassValues, TREE_FETCH_PAGE, type DnTreeNode } from "../lib/dnTree";
 import VirtualList from "./VirtualList.vue";
 import TreeBranch from "./TreeBranch.vue";
 import TreeNodeIcon from "./TreeNodeIcon.vue";
@@ -134,8 +134,8 @@ function nodeLabel(dn: string): string {
   return rdn || dn || "-";
 }
 
-function makeNode(dn: string): DnTreeNode {
-  return { dn, label: nodeLabel(dn), expanded: false, loaded: false, loading: false, children: [] };
+function makeNode(dn: string, objectClass: string[] = []): DnTreeNode {
+  return { dn, label: nodeLabel(dn), objectClass, expanded: false, loaded: false, loading: false, children: [] };
 }
 
 // 懒加载单页抓取（scope=one + sizeLimit=单页）。返回截断标记：达到上限即
@@ -152,11 +152,10 @@ async function fetchChildren(dn: string, limit: number = TREE_FETCH_PAGE): Promi
     derefAliases: "never",
   });
   const children = result.entries
-    .map((entry) => entry.dn)
-    .filter((child) => child && child !== dn)
+    .filter((entry) => entry.dn && entry.dn !== dn)
     // 同级容器优先：ou 组在前、cn 组居中、其余类型殿后，组内沿用原字典序。
-    .sort(compareDnForTree)
-    .map(makeNode);
+    .sort((left, right) => compareDnForTree(left.dn, right.dn))
+    .map((entry) => makeNode(entry.dn, objectClassValues(entry.attributes)));
   return { children, truncated: isFetchTruncated(result.entries.length, limit) };
 }
 
@@ -531,7 +530,7 @@ onBeforeUnmount(onMountedCleanup);
               <button class="tree-node" :data-tree-index="index" role="treeitem" aria-level="1" :aria-selected="selectedDn === item.dn" :title="item.dn" :disabled="disabled" @click.stop="selectNode(makeNode(item.dn))" @dblclick.stop="emit('view', item.dn)" @contextmenu.prevent.stop="openContextMenu($event, item.dn)">
                 <span class="tree-row" :class="{ selected: selectedDn === item.dn }">
                   <span class="tree-label">
-                    <TreeNodeIcon :dn="item.dn" />
+                    <TreeNodeIcon :dn="item.dn" :object-class="objectClassValues(item.attributes)" />
                     <span class="tree-name">{{ nodeLabel(item.dn) }}</span>
                   </span>
                 </span>

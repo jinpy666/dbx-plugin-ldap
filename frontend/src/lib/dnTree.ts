@@ -5,6 +5,8 @@ import { splitFirstDnRdn } from "./dn";
 export interface DnTreeNode {
   dn: string;
   label: string;
+  /** LDAP objectClass values used to choose the node icon. */
+  objectClass?: string[];
   expanded: boolean;
   loaded: boolean;
   loading: boolean;
@@ -17,6 +19,39 @@ export interface DnTreeNode {
 
 /** 树节点图标种类：root 按 baseDn 命中判定，其余按首个 RDN 属性类型区分。 */
 export type DnNodeKind = "root" | "dc" | "ou" | "cn" | "uid" | "o" | "other";
+
+/** Semantic icon kinds derived from LDAP objectClass values. */
+export type ObjectClassNodeKind = "domain" | "container" | "person" | "group" | "organization" | "application" | "device" | "alias" | "other";
+
+/**
+ * Return objectClass values from an LDAP attribute map without relying on the
+ * server's attribute-name casing. LDAP attribute names are case-insensitive,
+ * while a few servers preserve the spelling used in the request.
+ */
+export function objectClassValues(attributes: Record<string, unknown> | undefined): string[] {
+  if (!attributes) return [];
+  const key = Object.keys(attributes).find((name) => name.toLowerCase() === "objectclass");
+  const values = key ? attributes[key] : undefined;
+  if (Array.isArray(values)) return values.map(String).map((value) => value.trim()).filter(Boolean);
+  return typeof values === "string" && values.trim() ? [values.trim()] : [];
+}
+
+/**
+ * Choose a semantic icon kind from the entry's objectClass values. More
+ * specific classes win over structural ancestors such as `top`.
+ */
+export function objectClassNodeKind(objectClasses: readonly string[]): ObjectClassNodeKind {
+  const classes = new Set(objectClasses.map((value) => value.trim().toLowerCase()).filter(Boolean));
+  if (["alias", "referral"].some((name) => classes.has(name))) return "alias";
+  if (["group", "groupofnames", "groupofuniquenames", "posixgroup", "groupofurls", "groupofentries"].some((name) => classes.has(name))) return "group";
+  if (["inetorgperson", "organizationalperson", "person", "user", "contact", "posixaccount", "account"].some((name) => classes.has(name))) return "person";
+  if (["computer", "device", "iphost", "printer", "host"].some((name) => classes.has(name))) return "device";
+  if (["applicationprocess", "applicationentity", "serviceconnectionpoint", "service"].some((name) => classes.has(name))) return "application";
+  if (["organizationalunit", "container", "builtindomain", "builtin-domain", "builtincontainer", "domain", "locality", "country"].some((name) => classes.has(name))) return "container";
+  if (["organization", "organizationalrole"].some((name) => classes.has(name))) return "organization";
+  if (["dcobject", "domainrelatedobject", "dnsdomain"].some((name) => classes.has(name))) return "domain";
+  return "other";
+}
 
 /**
  * 节点种类判定（图标选择用）：`baseDn` 命中即 root；否则取首个 RDN 的属性

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { childBadgeText, compareDnByLabel, compareDnForTree, dnNodeKind, flattenDnTree, isFetchTruncated, nextFetchLimit, nextTreeFocusIndex, TREE_FETCH_PAGE, type DnTreeNode } from "./dnTree";
+import { childBadgeText, compareDnByLabel, compareDnForTree, dnNodeKind, flattenDnTree, isFetchTruncated, nextFetchLimit, nextTreeFocusIndex, objectClassNodeKind, objectClassValues, TREE_FETCH_PAGE, type DnTreeNode } from "./dnTree";
 
 // Node factory kept local so the spec stays free of component imports.
 function node(dn: string, overrides: Partial<DnTreeNode> = {}): DnTreeNode {
@@ -133,6 +133,21 @@ describe("dnNodeKind (tree kind icons)", () => {
     expect(dnNodeKind("l=Beijing,c=CN")).toBe("other");
     expect(dnNodeKind("noequalsign")).toBe("other");
     expect(dnNodeKind("")).toBe("other");
+  });
+});
+
+describe("objectClass icon classification", () => {
+  it("reads objectClass case-insensitively from LDAP attributes", () => {
+    expect(objectClassValues({ ObjectClass: ["top", "inetOrgPerson"] })).toEqual(["top", "inetOrgPerson"]);
+    expect(objectClassValues({ objectclass: "person" })).toEqual(["person"]);
+  });
+
+  it("prefers semantic objectClass types over the DN naming attribute", () => {
+    expect(objectClassNodeKind(["top", "organizationalUnit"])).toBe("container");
+    expect(objectClassNodeKind(["top", "inetOrgPerson"])).toBe("person");
+    expect(objectClassNodeKind(["top", "groupOfNames"])).toBe("group");
+    expect(objectClassNodeKind(["top", "applicationProcess"])).toBe("application");
+    expect(objectClassNodeKind(["top", "alias"])).toBe("alias");
   });
 });
 

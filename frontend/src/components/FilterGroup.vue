@@ -3,18 +3,25 @@
 // 条件行（属性 + 运算符 + 值）、嵌套组增删。节点对象由 SearchForm.vue 持有
 // （ref 深层响应式），此处直接原地变更以保持实现轻量（无外部状态库）。
 // 层级限制：根组 depth=0，组内嵌组 depth=1 为最大（≤2 层嵌套）。
+import { ref } from "vue";
 import { Plus, X } from "@lucide/vue";
 import { createBuilderClause, createBuilderGroup, type BuilderClause, type BuilderGroup, type BuilderOp } from "../lib/ldapFilter";
 import { t } from "../lib/i18n";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   group: BuilderGroup;
   depth: number;
   disabled?: boolean;
-  listId: string;
-}>();
+  /** Kept optional so nested groups and older callers can render safely. */
+  listId?: string;
+  attributeOptions?: string[];
+}>(), {
+  listId: "",
+  attributeOptions: () => [],
+});
 
 const MAX_DEPTH = 1;
+const activeAttributeId = ref<string>();
 
 const operatorOptions: Array<{ value: BuilderOp; labelKey: string }> = [
   { value: "equals", labelKey: "search.opEquals" },
@@ -48,6 +55,34 @@ function removeChild(index: number) {
 
 function isClause(node: BuilderGroup["children"][number]): node is BuilderClause {
   return node.kind === "clause";
+}
+
+function optionsFor(node: BuilderClause) {
+  const query = node.attribute.trim().toLowerCase();
+  return props.attributeOptions
+    .filter((option) => !query || option.toLowerCase().includes(query))
+    .slice(0, 100);
+}
+
+function openAttributePicker(node: BuilderClause) {
+  if (!props.disabled && props.attributeOptions.length > 0) activeAttributeId.value = node.id;
+}
+
+function closeAttributePicker() {
+  activeAttributeId.value = undefined;
+}
+
+function selectAttribute(node: BuilderClause, value: string) {
+  if (props.disabled) return;
+  node.attribute = value;
+  // Close synchronously after the click, so the next input focus cannot leave
+  // the native-looking picker hanging open in the advanced filter panel.
+  closeAttributePicker();
+}
+
+function onAttributeBlur() {
+  // Let an option's mousedown/click run before closing the picker.
+  window.setTimeout(closeAttributePicker, 0);
 }
 </script>
 
@@ -89,15 +124,37 @@ function isClause(node: BuilderGroup["children"][number]): node is BuilderClause
     <div v-if="group.children.length === 0" class="qb-empty">{{ t("search.builderEmptyGroup") }}</div>
     <div v-for="(node, index) in group.children" :key="node.id" class="qb-node">
       <template v-if="isClause(node)">
-        <input
-          v-model="node.attribute"
-          type="text"
-          class="mono qb-attr"
-          :list="listId"
-          :placeholder="t('search.builderAttrPlaceholder')"
-          :disabled="disabled"
-          spellcheck="false"
-        />
+        <div class="qb-attr-picker" @focusout="onAttributeBlur">
+          <input
+            v-model="node.attribute"
+            type="text"
+            class="mono qb-attr"
+            role="combobox"
+            :aria-expanded="activeAttributeId === node.id"
+            :aria-controls="activeAttributeId === node.id ? `${listId || 'ldap-attr-options'}-${node.id}` : undefined"
+            :placeholder="t('search.builderAttrPlaceholder')"
+            :disabled="disabled"
+            spellcheck="false"
+            @focus="openAttributePicker(node)"
+            @input="openAttributePicker(node)"
+          />
+          <div
+            v-if="activeAttributeId === node.id && optionsFor(node).length > 0"
+            :id="`${listId || 'ldap-attr-options'}-${node.id}`"
+            class="qb-attr-dropdown"
+            role="listbox"
+          >
+            <button
+              v-for="option in optionsFor(node)"
+              :key="option"
+              type="button"
+              class="qb-attr-option"
+              role="option"
+              @mousedown.prevent
+              @click="selectAttribute(node, option)"
+            >{{ option }}</button>
+          </div>
+        </div>
         <select v-model="node.op" :disabled="disabled">
           <option v-for="option in operatorOptions" :key="option.value" :value="option.value">{{ t(option.labelKey) }}</option>
         </select>
@@ -123,7 +180,7 @@ function isClause(node: BuilderGroup["children"][number]): node is BuilderClause
         </button>
       </template>
       <template v-else>
-        <FilterGroup :group="node" :depth="depth + 1" :disabled="disabled" :list-id="listId" />
+        <FilterGroup :group="node" :depth="depth + 1" :disabled="disabled" :list-id="listId" :attribute-options="attributeOptions" />
         <button
           type="button"
           class="qb-remove qb-remove--group"

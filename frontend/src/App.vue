@@ -1151,6 +1151,7 @@ onBeforeUnmount(() => {
       <div class="identity">
         <span class="connection-color" :style="connection.color ? { background: connection.color } : undefined" />
         <strong :title="identityText">{{ identityText }}</strong>
+        <span v-if="protocolBadge" class="badge mono identity-protocol" :title="t('protocol.badge')">{{ protocolBadge }}</span>
         <span v-if="!canWrite" class="read-only-badge">{{ t("readOnly") }}</span>
         <Loader2 v-if="!ready && !initError" class="icon-neutral spinning" aria-hidden="true" />
       </div>
@@ -1178,7 +1179,6 @@ onBeforeUnmount(() => {
           <History aria-hidden="true" />
         </button>
         <span v-if="serverBadge" class="badge mono" :title="t('connections.title')">{{ serverBadge }}</span>
-        <span v-if="protocolBadge" class="badge mono" :title="t('protocol.badge')">{{ protocolBadge }}</span>
         <span class="toolbar-separator" />
         <button class="icon-button" :disabled="!ready" :title="t('refresh')" @click="refreshTree">
           <RefreshCw aria-hidden="true" />

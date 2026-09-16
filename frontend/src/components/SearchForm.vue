@@ -62,7 +62,7 @@ const ATTR_LIST_ID = "ldap-builder-attr-options";
 const COMMON_ATTRIBUTES = [
   "objectClass", "cn", "sn", "givenName", "uid", "mail", "ou", "o", "dc",
   "displayName", "telephoneNumber", "member", "description", "title",
-  "sAMAccountName", "userPrincipalName", "createTimestamp", "modifyTimestamp",
+  "sAMAccountName", "userPrincipalName", "objectGUID", "createTimestamp", "modifyTimestamp",
 ];
 
 const { attributeNames, ensureLoaded } = useLdapSchemaCache({
@@ -753,7 +753,13 @@ const derefOptions = computed(() => [
       </div>
 
       <div v-if="builderMode" class="filter-builder">
-        <FilterGroup :group="builderRoot" :depth="0" :disabled="disabled" :list-id="ATTR_LIST_ID" />
+        <FilterGroup
+          :group="builderRoot"
+          :depth="0"
+          :disabled="disabled"
+          :list-id="ATTR_LIST_ID"
+          :attribute-options="attributeOptions"
+        />
         <p class="qb-preview mono" :title="t('search.filter')">{{ generatedFilter || "(objectClass=*)" }}</p>
       </div>
       <div v-else class="filter-source">
@@ -771,9 +777,6 @@ const derefOptions = computed(() => [
         />
         <span v-if="!sourceValid || sourceParseError" :id="filterErrorId" class="form-error" role="alert">{{ !sourceValid ? t("search.filterInvalid") : t("search.builderParseFailed") }}</span>
       </div>
-      <datalist :id="ATTR_LIST_ID">
-        <option v-for="name in attributeOptions" :key="name" :value="name" />
-      </datalist>
       <p class="filter-hint">{{ t("search.filterEmptyHint") }}</p>
     </div>
 

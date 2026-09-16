@@ -124,6 +124,17 @@ describe("TreeBranch kind icon", () => {
     expect(kindClass("o=acme,dc=demo,dc=dbx")).toContain("icon-emerald");
     expect(kindClass("c=CN,o=acme")).toContain("icon-neutral");
   });
+
+  it("uses objectClass semantics instead of the first RDN attribute", () => {
+    const wrapper = mountBranch(makeNode({ dn: "cn=people,dc=demo,dc=dbx", objectClass: ["top", "organizationalUnit"] }));
+    expect(wrapper.find(".tree-kind-icon").classes()).toContain("icon-amber");
+    expect(wrapper.find(".tree-kind-icon").classes()).not.toContain("icon-blue");
+  });
+
+  it("renders group entries with the group icon class", () => {
+    const wrapper = mountBranch(makeNode({ dn: "cn=admins,dc=demo,dc=dbx", objectClass: ["top", "groupOfNames"] }));
+    expect(wrapper.find(".tree-kind-icon").classes()).toContain("icon-violet");
+  });
 });
 
 describe("TreeBranch lazy-node accessibility", () => {
