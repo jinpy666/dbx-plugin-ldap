@@ -3,8 +3,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildBuilderClauseFilter,
+  buildBinaryEqualityFilter,
   buildClauseFilter,
   buildEqualityFilter,
+  buildObjectGuidEqualityFilter,
   buildGroupFilter,
   buildNegatedFilter,
   buildNodeFilter,
@@ -16,6 +18,7 @@ import {
   combineFilters,
   createBuilderClause,
   createBuilderGroup,
+  EqualityFilter,
   escapeLdapFilterValue,
   isValidLDAPAttributeDescription,
   parseClauseItem,
@@ -104,6 +107,42 @@ describe("filter builders", () => {
     expect(
       buildQueryBuilderFilter({ join: "and", groups: [{ clauses: [{ field: "cn", op: "eq", value: "a" }] }, { clauses: [{ field: "uid", op: "eq", value: "b" }] }] }),
     ).toBe("(&(cn=a)(uid=b))");
+  });
+});
+
+describe("binary equality filters", () => {
+  it("encodes every byte as an RFC 4515 hex escape", () => {
+    const bytes = Uint8Array.from([0x00, 0x28, 0x29, 0x2a, 0x5c, 0xff]);
+    expect(buildBinaryEqualityFilter("userCertificate", bytes)).toBe(
+      "(userCertificate=\\00\\28\\29\\2a\\5c\\ff)",
+    );
+    expect(buildEqualityFilter("userCertificate", bytes)).toBe(
+      "(userCertificate=\\00\\28\\29\\2a\\5c\\ff)",
+    );
+  });
+
+  it("converts a canonical UUID to AD objectGUID mixed-endian bytes", () => {
+    const filter = buildObjectGuidEqualityFilter("12345678-1234-1234-1234-123456789abc");
+    expect(filter).toBe("(objectGUID=\\78\\56\\34\\12\\34\\12\\34\\12\\12\\34\\12\\34\\56\\78\\9a\\bc)");
+    expect(buildEqualityFilter("objectGUID", "12345678-1234-1234-1234-123456789abc")).toBe(filter);
+    const equality = new EqualityFilter({
+      attribute: "objectGUID",
+      value: Uint8Array.from([0x78, 0x56, 0x34, 0x12, 0x34, 0x12, 0x34, 0x12, 0x12, 0x34, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc]),
+    });
+    expect(equality.toString()).toBe(filter);
+    expect(JSON.stringify(equality)).toBe(JSON.stringify(filter));
+  });
+
+  it("escapes malicious text as data instead of filter syntax", () => {
+    const filter = buildEqualityFilter("objectGUID", "*)(|(objectClass=*))");
+    expect(filter).toBe("(objectGUID=\\2a\\29\\28|\\28objectClass=\\2a\\29\\29)");
+    expect(validateLDAPFilter(filter)).toBe(true);
+  });
+
+  it("rejects invalid binary attributes and malformed objectGUID lengths", () => {
+    expect(() => buildBinaryEqualityFilter("bad attr", Uint8Array.from([1]))).toThrow(/attribute description/);
+    expect(() => buildBinaryEqualityFilter("objectGUID", Uint8Array.from([1]))).toThrow(/16 bytes/);
+    expect(() => buildObjectGuidEqualityFilter("not-a-guid")).toThrow(/objectGUID/);
   });
 });
 

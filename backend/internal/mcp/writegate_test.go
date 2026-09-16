@@ -35,10 +35,10 @@ func TestServerEntryWriteInjectionStyleDN(t *testing.T) {
 	server.settings.ReportWaitMs = 1
 	connectWriteGateProfile(t, server, "wg-inject", `{"base_dn": "dc=example,dc=org"}`)
 	for _, dn := range []string{
-		"uid=a\nb,dc=example,dc=org",             // 审计日志注入面：换行
-		"uid=a\x00b,dc=example,dc=org",           // 空字节
-		"uid=a,dc=example,dc=org\nrm -rf /etc",   // 命令风格的垃圾尾
-		"uid=a\x1b[31m,dc=example,dc=org",        // ANSI 转义（0x1b）
+		"uid=a\nb,dc=example,dc=org",           // 审计日志注入面：换行
+		"uid=a\x00b,dc=example,dc=org",         // 空字节
+		"uid=a,dc=example,dc=org\nrm -rf /etc", // 命令风格的垃圾尾
+		"uid=a\x1b[31m,dc=example,dc=org",      // ANSI 转义（0x1b）
 	} {
 		_, err := server.entryWrite(map[string]any{"connectionId": "wg-inject", "action": "delete", "dn": dn})
 		if err == nil || !strings.Contains(err.Error(), "invalid dn") {
@@ -52,7 +52,7 @@ func TestServerEntryWriteInjectionStyleDN(t *testing.T) {
 	}
 	// RFC 4514 转义形态不受影响：错误只可能来自拨号层（连接不可达）。
 	if _, err := server.entryWrite(map[string]any{"connectionId": "wg-inject", "action": "add",
-		"dn": `uid=a\0Ab,dc=example,dc=org`,
+		"dn":         `uid=a\0Ab,dc=example,dc=org`,
 		"attributes": map[string]any{"objectClass": "inetOrgPerson", "uid": "a"}}); err == nil ||
 		strings.Contains(err.Error(), "invalid dn") {
 		t.Fatalf("escaped DN must pass the local gate (dial error expected): %v", err)

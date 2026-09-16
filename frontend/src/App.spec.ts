@@ -7,7 +7,10 @@ import App from "./App.vue";
 import { getLdapConnectionId, ldapApi, setLdapConnectionId } from "./lib/api";
 import { setWorkbenchLocale, workbenchLocale } from "./lib/i18n";
 
-const context = (id: string) => ({ connectionId: id, connection: { host: id, baseDn: "dc=" + id } });
+const context = (id: string, connectionPatch: Record<string, unknown> = {}) => ({
+  connectionId: id,
+  connection: { host: id, baseDn: "dc=" + id, ...connectionPatch },
+});
 let wrapper: ReturnType<typeof mount<typeof App>> | undefined;
 const treeStub = defineComponent({
   setup(_, { expose }) {
@@ -25,7 +28,7 @@ const searchStub = defineComponent({
   },
 });
 
-async function mountWithHost(legacy = false, both = false) {
+async function mountWithHost(legacy = false, both = false, connectionPatch: Record<string, unknown> = {}) {
   let receiveContext: ((next: Record<string, unknown>) => void) | undefined;
   let receiveEvent: ((event: DbxPluginEvent) => void) | undefined;
   const offContext = vi.fn();
@@ -34,7 +37,7 @@ async function mountWithHost(legacy = false, both = false) {
   const legacySubscribe = legacy ? subscribe : vi.fn(() => () => undefined);
   const invoke = vi.fn(async (_method: string, _params?: Record<string, unknown>): Promise<unknown> => ({ statuses: [], entries: [], count: 0, truncated: false }));
   window.dbxPlugin = {
-    ready: Promise.resolve(context("first")),
+    ready: Promise.resolve(context("first", connectionPatch)),
     request: vi.fn(async () => context("first")),
     locale: "en",
     invoke,
@@ -78,6 +81,12 @@ const editor = () => wrapper!.findComponent({ name: "EntryEditorDialog" });
 const recentButton = () => wrapper!.findAll("button[aria-label]").find((button) => button.attributes("aria-label")?.toLowerCase().includes("recent"))!;
 
 describe("App request feedback and recovery", () => {
+  it("keeps the protocol badge beside the connection name", async () => {
+    await mountWithHost(false, false, { port: 636, external_config: { tls_mode: "ldaps", auth_type: "simple" } });
+    expect(wrapper!.find(".identity .identity-protocol").text()).toBe("LDAPS · Simple");
+    expect(wrapper!.find(".toolbar-actions .identity-protocol").exists()).toBe(false);
+  });
+
   it("renders the first search page immediately, then appends the next cursor page", async () => {
     const host = await mountWithHost();
     host.invoke.mockImplementation(async (method) => {

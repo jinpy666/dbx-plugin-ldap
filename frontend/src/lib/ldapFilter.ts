@@ -54,12 +54,77 @@ export const buildPresenceFilter = (attribute: string): string => {
     return attr ? `(${attr}=*)` : '';
 };
 
+/**
+ * Encode raw assertion bytes using RFC 4515's \\hh form.
+ *
+ * This must not be passed through escapeLdapFilterValue: that helper escapes
+ * the backslashes intentionally introduced here and would turn the bytes
+ * into literal text.
+ */
+export function buildBinaryEqualityFilter(attribute: string, value: Uint8Array): string {
+    const attr = trimToString(attribute);
+    if (!isValidLDAPAttributeDescription(attr)) {
+        throw new Error('invalid LDAP attribute description');
+    }
+    if (!(value instanceof Uint8Array) || value.length === 0) {
+        throw new Error('binary equality value is required');
+    }
+    if (attr.toLowerCase() === 'objectguid' && value.length !== 16) {
+        throw new Error('objectGUID must contain exactly 16 bytes');
+    }
+
+    const assertion = Array.from(value, (byte) => `\\${byte.toString(16).padStart(2, '0')}`).join('');
+    return `(${attr}=${assertion})`;
+}
+
+/** Convert a canonical UUID into AD objectGUID wire bytes (mixed endian). */
+export function buildObjectGuidEqualityFilter(guid: string): string {
+    const match = /^([0-9a-f]{8})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{12})$/iu.exec(
+        String(guid ?? '').trim(),
+    );
+    if (!match) throw new Error('invalid objectGUID');
+
+    const hex = `${match[1]}${match[2]}${match[3]}${match[4]}${match[5]}`;
+    const bytes = Uint8Array.from(hex.match(/../gu)!, (part) => Number.parseInt(part, 16));
+    bytes.set(bytes.slice(0, 4).reverse(), 0);
+    bytes.set(bytes.slice(4, 6).reverse(), 4);
+    bytes.set(bytes.slice(6, 8).reverse(), 6);
+    return buildBinaryEqualityFilter('objectGUID', bytes);
+}
+
 export const buildEqualityFilter = (attribute: string, value: unknown): string => {
     const attr = trimToString(attribute);
+    if (value instanceof Uint8Array) return buildBinaryEqualityFilter(attr, value);
     const raw = String(value ?? '').trim();
     if (!attr || !raw) return '';
+    if (attr.toLowerCase() === 'objectguid' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(raw)) {
+        return buildObjectGuidEqualityFilter(raw);
+    }
     return `(${attr}=${escapeLdapFilterValue(raw)})`;
 };
+
+export interface EqualityFilterOptions {
+    attribute: string;
+    value: string | Uint8Array;
+}
+
+/** String-compatible equality filter value object for programmatic callers. */
+export class EqualityFilter {
+    private readonly rendered: string;
+
+    constructor(options: EqualityFilterOptions) {
+        this.rendered = buildEqualityFilter(options.attribute, options.value);
+        if (!this.rendered) throw new Error('attribute and value are required');
+    }
+
+    toString(): string {
+        return this.rendered;
+    }
+
+    toJSON(): string {
+        return this.rendered;
+    }
+}
 
 export const buildSubstringFilter = (attribute: string, value: unknown, mode: SubstringMode): string => {
     const attr = trimToString(attribute);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { childBadgeText, compareDnByLabel, compareDnForTree, dnNodeKind, flattenDnTree, nextTreeFocusIndex, TREE_FETCH_PAGE, type DnTreeNode } from "./dnTree";
+import { canExpandDnTreeNode, childBadgeText, compareDnByLabel, compareDnForTree, dnNodeKind, flattenDnTree, isDnTreeLeaf, isFetchTruncated, nextFetchLimit, nextTreeFocusIndex, objectClassNodeKind, objectClassValues, TREE_FETCH_PAGE, type DnTreeNode } from "./dnTree";
 
 // Node factory kept local so the spec stays free of component imports.
 function node(dn: string, overrides: Partial<DnTreeNode> = {}): DnTreeNode {
@@ -52,9 +52,22 @@ describe("flattenDnTree", () => {
   });
 });
 
-describe("lazy-load page configuration", () => {
-  it("uses a bounded 500-entry server-side cursor page", () => {
+describe("lazy-load truncation helpers (P1-2)", () => {
+  it("uses a 500-entry page shared with fetchChildren sizeLimit", () => {
     expect(TREE_FETCH_PAGE).toBe(500);
+  });
+
+  it("flags a fetch as truncated once the requested page limit is reached", () => {
+    expect(isFetchTruncated(500)).toBe(true);
+    expect(isFetchTruncated(501)).toBe(true);
+    expect(isFetchTruncated(499)).toBe(false);
+    expect(isFetchTruncated(3, 3)).toBe(true);
+  });
+
+  it("steps the next load-more limit by one page over the loaded count", () => {
+    expect(nextFetchLimit(500)).toBe(1000);
+    expect(nextFetchLimit(1000)).toBe(1500);
+    expect(nextFetchLimit(120, 40)).toBe(160);
   });
 
   it("never endorses the exact total while truncated: badge shows loaded count + '+'", () => {
@@ -120,6 +133,35 @@ describe("dnNodeKind (tree kind icons)", () => {
     expect(dnNodeKind("l=Beijing,c=CN")).toBe("other");
     expect(dnNodeKind("noequalsign")).toBe("other");
     expect(dnNodeKind("")).toBe("other");
+  });
+});
+
+describe("objectClass icon classification", () => {
+  it("reads objectClass case-insensitively from LDAP attributes", () => {
+    expect(objectClassValues({ ObjectClass: ["top", "inetOrgPerson"] })).toEqual(["top", "inetOrgPerson"]);
+    expect(objectClassValues({ objectclass: "person" })).toEqual(["person"]);
+  });
+
+  it("prefers semantic objectClass types over the DN naming attribute", () => {
+    expect(objectClassNodeKind(["top", "organizationalUnit"])).toBe("container");
+    expect(objectClassNodeKind(["top", "inetOrgPerson"])).toBe("person");
+    expect(objectClassNodeKind(["top", "groupOfNames"])).toBe("group");
+    expect(objectClassNodeKind(["top", "applicationProcess"])).toBe("application");
+    expect(objectClassNodeKind(["top", "alias"])).toBe("alias");
+  });
+
+  it("recognizes entry-like object classes as non-expandable leaves", () => {
+    for (const objectClass of [["top", "person"], ["top", "applicationProcess"], ["top", "groupOfNames"]]) {
+      const treeNode = { objectClass, loaded: false, children: [], truncated: false };
+      expect(isDnTreeLeaf(treeNode)).toBe(true);
+      expect(canExpandDnTreeNode(treeNode)).toBe(false);
+    }
+  });
+
+  it("recognizes a loaded entry with no children as a leaf", () => {
+    const treeNode = { objectClass: [], loaded: true, children: [], truncated: false };
+    expect(isDnTreeLeaf(treeNode)).toBe(true);
+    expect(canExpandDnTreeNode(treeNode)).toBe(false);
   });
 });
 

@@ -10,7 +10,7 @@ import { friendlyLdapError } from "../lib/ldapErrors";
 import { splitFirstDnRdn } from "../lib/dn";
 import { nextFocusIndex } from "../lib/modal";
 import { t } from "../lib/i18n";
-import { compareDnByLabel, compareDnForTree, flattenDnTree, nextTreeFocusIndex, TREE_FETCH_PAGE, type DnTreeNode } from "../lib/dnTree";
+import { canExpandDnTreeNode, compareDnByLabel, compareDnForTree, flattenDnTree, nextTreeFocusIndex, objectClassValues, TREE_FETCH_PAGE, type DnTreeNode } from "../lib/dnTree";
 import VirtualList from "./VirtualList.vue";
 import TreeBranch from "./TreeBranch.vue";
 import TreeNodeIcon from "./TreeNodeIcon.vue";
@@ -147,8 +147,8 @@ function nodeLabel(dn: string): string {
   return rdn || dn || "-";
 }
 
-function makeNode(dn: string): DnTreeNode {
-  return { dn, label: nodeLabel(dn), expanded: false, loaded: false, loading: false, children: [] };
+function makeNode(dn: string, objectClass: string[] = []): DnTreeNode {
+  return { dn, label: nodeLabel(dn), objectClass, expanded: false, loaded: false, loading: false, children: [] };
 }
 
 function currentConnectionId(): string {
@@ -199,7 +199,7 @@ function appendChildren(node: DnTreeNode, entries: LdapSearchPage["entries"]) {
     const key = dn.toLowerCase();
     if (!dn || key === node.dn.toLowerCase() || existing.has(key)) continue;
     existing.add(key);
-    node.children.push(makeNode(dn));
+    node.children.push(makeNode(dn, objectClassValues(entry.attributes)));
   }
   node.children.sort((left, right) => compareDnForTree(left.dn, right.dn));
 }
@@ -269,7 +269,7 @@ async function loadRoot() {
 }
 
 async function toggleNode(node: DnTreeNode) {
-  if (props.disabled) return;
+  if (props.disabled || !canExpandDnTreeNode(node)) return;
   closeContextMenu();
   selectedDn.value = node.dn;
   emit("select", node.dn);
@@ -301,6 +301,10 @@ function selectNode(node: DnTreeNode) {
   closeContextMenu();
   selectedDn.value = node.dn;
   emit("select", node.dn);
+}
+
+function viewNode(node: DnTreeNode) {
+  emit("view", node.dn);
 }
 
 // Continue the original LDAP cursor.  Re-running a one-level search with a
@@ -588,7 +592,7 @@ onBeforeUnmount(onMountedCleanup);
               <button class="tree-node" :data-tree-index="index" role="treeitem" aria-level="1" :aria-selected="selectedDn === item.dn" :title="item.dn" :disabled="disabled" @click.stop="selectNode(makeNode(item.dn))" @dblclick.stop="emit('view', item.dn)" @contextmenu.prevent.stop="openContextMenu($event, item.dn)">
                 <span class="tree-row" :class="{ selected: selectedDn === item.dn }">
                   <span class="tree-label">
-                    <TreeNodeIcon :dn="item.dn" />
+                    <TreeNodeIcon :dn="item.dn" :object-class="objectClassValues(item.attributes)" />
                     <span class="tree-name">{{ nodeLabel(item.dn) }}</span>
                   </span>
                 </span>
@@ -625,6 +629,7 @@ onBeforeUnmount(onMountedCleanup);
                 :disabled="disabled"
                 @toggle="toggleNode"
                 @select="selectNode"
+                @view="viewNode"
                 @menu="openContextMenu"
                 @load-more="loadMore"
               />

@@ -30,10 +30,10 @@ func mustErrCode(t *testing.T, decoded map[string]any, code float64) map[string]
 func TestStdioRobustMalformedBytes(t *testing.T) {
 	server := newTestStdioServer()
 	for name, line := range map[string][]byte{
-		"garbage":        []byte(`not json`),
-		"truncated":      []byte(`{"jsonrpc":"2.0","id":1,"method":`),
-		"raw-bytes":      {0xff, 0xfe, 0x7b, 0x7d}, // ÿþ{}
-		"nul-bytes":      {0x00, 0x01, 0x02},
+		"garbage":           []byte(`not json`),
+		"truncated":         []byte(`{"jsonrpc":"2.0","id":1,"method":`),
+		"raw-bytes":         {0xff, 0xfe, 0x7b, 0x7d}, // ÿþ{}
+		"nul-bytes":         {0x00, 0x01, 0x02},
 		"json-then-garbage": []byte(`{"jsonrpc":"2.0","id":1} trailing garbage`),
 	} {
 		decoded := decodeResponse(t, server.handleLine(line))
@@ -54,7 +54,7 @@ func TestStdioRobustMalformedBytes(t *testing.T) {
 func TestStdioRobustNotificationSilence(t *testing.T) {
 	server := newTestStdioServer()
 	for name, line := range map[string]string{
-		"initialized":   `{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		"initialized":    `{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		"unknown-notify": `{"jsonrpc":"2.0","method":"notifications/custom/x","params":{"a":1}}`,
 		"notify-with-id": `{"jsonrpc":"2.0","id":9,"method":"notifications/progress"}`,
 	} {
@@ -76,17 +76,17 @@ func TestStdioRobustNotificationSilence(t *testing.T) {
 func TestStdioRobustRequestShapes(t *testing.T) {
 	server := newTestStdioServer()
 	for name, line := range map[string]string{
-		"missing-id":       `{"jsonrpc":"2.0","method":"ping"}`,
-		"id-object":        `{"jsonrpc":"2.0","id":{"a":1},"method":"ping"}`,
-		"id-array":         `{"jsonrpc":"2.0","id":[1,2],"method":"ping"}`,
-		"id-true":          `{"jsonrpc":"2.0","id":true,"method":"ping"}`,
-		"missing-method":   `{"jsonrpc":"2.0","id":1}`,
-		"method-empty":     `{"jsonrpc":"2.0","id":1,"method":""}`,
-		"method-number":    `{"jsonrpc":"2.0","id":1,"method":42}`,
-		"method-object":    `{"jsonrpc":"2.0","id":1,"method":{"x":1}}`,
-		"jsonrpc-wrong":    `{"jsonrpc":"1.0","id":1,"method":"ping"}`,
-		"jsonrpc-number":   `{"jsonrpc":2.0,"id":1,"method":"ping"}`,
-		"empty-body":       `{}`,
+		"missing-id":     `{"jsonrpc":"2.0","method":"ping"}`,
+		"id-object":      `{"jsonrpc":"2.0","id":{"a":1},"method":"ping"}`,
+		"id-array":       `{"jsonrpc":"2.0","id":[1,2],"method":"ping"}`,
+		"id-true":        `{"jsonrpc":"2.0","id":true,"method":"ping"}`,
+		"missing-method": `{"jsonrpc":"2.0","id":1}`,
+		"method-empty":   `{"jsonrpc":"2.0","id":1,"method":""}`,
+		"method-number":  `{"jsonrpc":"2.0","id":1,"method":42}`,
+		"method-object":  `{"jsonrpc":"2.0","id":1,"method":{"x":1}}`,
+		"jsonrpc-wrong":  `{"jsonrpc":"1.0","id":1,"method":"ping"}`,
+		"jsonrpc-number": `{"jsonrpc":2.0,"id":1,"method":"ping"}`,
+		"empty-body":     `{}`,
 	} {
 		decoded := decodeResponse(t, server.handleLine([]byte(line)))
 		mustErrCode(t, decoded, -32600)
@@ -110,7 +110,7 @@ func TestStdioRobustRequestShapes(t *testing.T) {
 }
 
 // S-STDIO-R4 超长行：8 MiB arguments 的 tools/call → 工具层结构化报错
-//（连接门引导错误，不 panic 不挂死）；超 maxRequestLineBytes 的行 → -32700
+// （连接门引导错误，不 panic 不挂死）；超 maxRequestLineBytes 的行 → -32700
 // 拒绝；之后 ping 存活。
 func TestStdioRobustOversizedLines(t *testing.T) {
 	server := newTestStdioServer()

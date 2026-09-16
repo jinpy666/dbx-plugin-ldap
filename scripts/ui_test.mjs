@@ -266,7 +266,7 @@ test("search shows pending/failure states and retries without losing the query",
     window.__ldapRound5Invoke = invoke;
     let first = true;
     window.dbxPlugin.invoke = (method, params, options) => {
-      if (method === "ldap/search" && params.filter === "(uid=user0001)" && first) {
+      if (method === "ldap/search/start" && params.filter === "(uid=user0001)" && first) {
         first = false;
         return new Promise((_, reject) => { window.__ldapRound5Fail = () => reject(new Error("connection refused")); });
       }
@@ -510,13 +510,14 @@ test("result batch select arms the bar and batch-deletes via confirm", async (pa
     await page.locator(".filter-source input").fill("(uid=batch-*)");
     await page.locator(".search-form button[type='submit']").click();
     await page.waitForFunction(() => document.querySelectorAll(".ag-row").length === 2);
+    await page.waitForFunction(() => document.querySelectorAll(".ag-checkbox-input").length === 3);
     const firstRow = page.locator(RESULT_ROW).filter({ hasText: "uid=batch-a," }).first();
     const secondRow = page.locator(RESULT_ROW).filter({ hasText: "uid=batch-b," }).first();
     await firstRow.locator(".ag-checkbox-input-wrapper").click();
     await firstRow.locator(".ag-checkbox-input[aria-label*='checked']").waitFor();
-    await secondRow.locator(".ag-checkbox-input").focus();
-    await page.keyboard.press("Space");
+    await secondRow.locator(".ag-checkbox-input-wrapper").click();
     await secondRow.locator(".ag-checkbox-input[aria-label*='checked']").waitFor();
+    await page.waitForFunction(() => document.querySelector(".batch-count")?.textContent?.includes("2"));
     expectEqual(await page.locator(".editor-modal").count(), 0, "checkbox click does not open entry");
     expectEqual(await page.locator(".batch-bar").isVisible(), true, "batch bar armed");
     expectEqual(await page.locator(".batch-count").innerText(), "已选 2 项", "batch count copy");

@@ -62,4 +62,16 @@ describe("FilterGroup", () => {
     const wrapper = mount(FilterGroup, { props: { group, depth: 1, listId: "d" } });
     expect(wrapper.findAll(".qb-add")).toHaveLength(1);
   });
+
+  it("closes the attribute picker immediately after selecting an option", async () => {
+    const group: BuilderGroup = createBuilderGroup({ children: [createBuilderClause()] });
+    const wrapper = mount(FilterGroup, {
+      props: { group, depth: 0, listId: "test-datalist", attributeOptions: ["uid", "mail", "objectClass"] },
+    });
+    await wrapper.find(".qb-attr").trigger("focus");
+    expect(wrapper.find(".qb-attr-dropdown").exists()).toBe(true);
+    await wrapper.find(".qb-attr-option").trigger("click");
+    expect(group.children[0].kind === "clause" && group.children[0].attribute).toBe("uid");
+    expect(wrapper.find(".qb-attr-dropdown").exists()).toBe(false);
+  });
 });

@@ -84,11 +84,28 @@ describe("TreeBranch child-count badge", () => {
 });
 
 describe("TreeBranch row double-click", () => {
-  it("toggles the node on row double-click instead of opening the entry", async () => {
-    const wrapper = mountBranch(makeNode());
+  it("toggles an expandable node on row double-click", async () => {
+    const wrapper = mountBranch(makeNode({ loaded: false, expanded: false, objectClass: ["organizationalUnit"] }));
     await wrapper.find(".tree-node").trigger("dblclick");
     expect(wrapper.emitted("toggle")?.[0]).toEqual([wrapper.props("node")]);
     expect(wrapper.emitted("view")).toBeUndefined();
+  });
+
+  it("opens a person directly and does not render an expand button", async () => {
+    const wrapper = mountBranch(makeNode({ loaded: false, expanded: false, objectClass: ["top", "person"] }));
+    expect(wrapper.find("button.tree-twist").exists()).toBe(false);
+    expect(wrapper.find("[aria-expanded]").exists()).toBe(false);
+    await wrapper.find(".tree-node").trigger("dblclick");
+    expect(wrapper.emitted("view")?.[0]).toEqual([wrapper.props("node")]);
+    expect(wrapper.emitted("toggle")).toBeUndefined();
+  });
+
+  it("opens a service directly and does not render an expand button", async () => {
+    const wrapper = mountBranch(makeNode({ objectClass: ["top", "applicationProcess"] }));
+    expect(wrapper.find("button.tree-twist").exists()).toBe(false);
+    await wrapper.find(".tree-node").trigger("dblclick");
+    expect(wrapper.emitted("view")?.[0]).toEqual([wrapper.props("node")]);
+    expect(wrapper.emitted("toggle")).toBeUndefined();
   });
 
   it("does not toggle while disabled", async () => {
@@ -123,6 +140,17 @@ describe("TreeBranch kind icon", () => {
     expect(kindClass("uid=bob,ou=people,dc=demo,dc=dbx")).toContain("icon-blue");
     expect(kindClass("o=acme,dc=demo,dc=dbx")).toContain("icon-emerald");
     expect(kindClass("c=CN,o=acme")).toContain("icon-neutral");
+  });
+
+  it("uses objectClass semantics instead of the first RDN attribute", () => {
+    const wrapper = mountBranch(makeNode({ dn: "cn=people,dc=demo,dc=dbx", objectClass: ["top", "organizationalUnit"] }));
+    expect(wrapper.find(".tree-kind-icon").classes()).toContain("icon-amber");
+    expect(wrapper.find(".tree-kind-icon").classes()).not.toContain("icon-blue");
+  });
+
+  it("renders group entries with the group icon class", () => {
+    const wrapper = mountBranch(makeNode({ dn: "cn=admins,dc=demo,dc=dbx", objectClass: ["top", "groupOfNames"] }));
+    expect(wrapper.find(".tree-kind-icon").classes()).toContain("icon-violet");
   });
 });
 
