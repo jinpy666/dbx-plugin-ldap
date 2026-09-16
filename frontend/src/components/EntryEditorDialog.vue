@@ -55,6 +55,11 @@ const props = defineProps<{
   dnAttributes?: string[];
   schema?: LdapSchema;
   loading?: boolean;
+  /** Core fields are visible, but regular batches are still arriving. */
+  loadingMore?: boolean;
+  /** Association/binary fields are fetched only after the relevant tab opens. */
+  loadingDeferred?: boolean;
+  deferredAttributeCount?: number;
   loadError?: string;
   loadErrorDetail?: string;
   requestedDn?: string;
@@ -68,6 +73,7 @@ const emit = defineEmits<{
   (e: "openEntry", dn: string): void;
   (e: "openRelatedEntry", dn: string): void;
   (e: "retry"): void;
+  (e: "loadDeferred"): void;
 }>();
 
 const mode = ref<EditorMode>("view");
@@ -95,7 +101,7 @@ let suppressLdifSync = false;
 
 const isAdd = computed(() => mode.value === "add");
 const isRelationPresentation = computed(() => props.presentation === "relation");
-const editable = computed(() => props.canWrite && !saving.value && !props.loading && !props.loadError);
+const editable = computed(() => props.canWrite && !saving.value && !props.loading && !props.loadingMore && !props.loadingDeferred && !props.loadError);
 const ldifDraft = computed(() => {
   if (editorTab.value !== "ldif") return undefined;
   const parsed = parseLdif(ldifText.value);
@@ -231,10 +237,11 @@ function initFor(mode_: EditorMode, entry?: LdapEntry, parentDn?: string) {
   rdnDraft.value = splitFirstDnRdn(entry.dn).rdn;
   rows.value = entryToRows(entry);
   ldifText.value = serializeEntriesToLdif([{ dn: entry.dn, attributes: entry.attributes }], { includeVersion: false });
+  if (editorTab.value === "assoc") emit("loadDeferred");
 }
 
 watch(
-  () => [props.open, props.entry, props.parentDn, props.loading, props.loadError] as const,
+  () => [props.open, props.entry, props.parentDn, props.loading, props.loadingMore, props.loadingDeferred, props.loadError] as const,
   ([open]) => {
     if (!open || props.loading || props.loadError) return;
     initFor(props.entry ? "view" : "add", props.entry, props.parentDn);
@@ -250,6 +257,9 @@ watch([rows, rdnDraft], () => {
 function switchToLdif() {
   if (editorTab.value !== "ldif") syncLdifFromRows();
   editorTab.value = "ldif";
+  // An LDIF is expected to represent the complete entry, including binary
+  // values.  Request those fields only when the user explicitly enters it.
+  emit("loadDeferred");
 }
 
 // 离开 LDIF 页签的共用守卫：先把 LDIF 文本解析回 rows，成功才允许切走。
@@ -273,6 +283,7 @@ function switchToAssoc() {
   // 解析回 rows；解析失败保持 LDIF 页签（与切表单同语义，错误提示在场）。
   if (!leaveLdif()) return;
   editorTab.value = "assoc";
+  emit("loadDeferred");
 }
 
 function addRow() {
@@ -584,7 +595,7 @@ function onAssociationOpen(dn: string) {
 
 <template>
   <div v-if="open" :class="isRelationPresentation ? 'entry-editor-relation-host' : 'modal-backdrop'" @click.self="onBackdropClick">
-    <div class="modal editor-modal" :class="{ 'editor-modal--relation': isRelationPresentation }" role="dialog" :aria-modal="isRelationPresentation ? undefined : 'true'" :aria-label="title" :aria-busy="loading || undefined">
+    <div class="modal editor-modal" :class="{ 'editor-modal--relation': isRelationPresentation }" role="dialog" :aria-modal="isRelationPresentation ? undefined : 'true'" :aria-label="title" :aria-busy="loading || loadingMore || loadingDeferred || undefined">
       <header>
         <h2>{{ title }}</h2>
         <button class="icon-button" :title="t('close')" @click="emit('close')"><X /></button>
@@ -595,6 +606,7 @@ function onAssociationOpen(dn: string) {
         <button type="button" @click="emit('retry')">{{ t("retry") }}</button>
       </div>
       <template v-else>
+      <p v-if="loadingMore || loadingDeferred" class="hint" role="status">{{ t("editor.loading") }}</p>
       <div v-if="isAdd" class="attr-row">
         <label class="field">
           <span class="muted">{{ t("editor.rdn") }}</span>

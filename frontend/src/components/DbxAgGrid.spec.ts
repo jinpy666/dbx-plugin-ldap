@@ -27,6 +27,8 @@ vi.mock("ag-grid-community", () => ({
     const api = {
       setGridOption: vi.fn(),
       paginationGetPageSize: vi.fn(() => gridMock.pendingSize),
+      paginationGetCurrentPage: vi.fn(() => 0),
+      paginationGetTotalPages: vi.fn(() => 1),
       applyColumnState: vi.fn(),
       getColumnState: vi.fn(() => gridMock.storedColumnState),
       getAllDisplayedColumns: vi.fn(() => [
@@ -96,6 +98,19 @@ describe("DbxAgGrid", () => {
     wrapper.unmount();
   });
 
+  it("disables local sort, filters and checkbox selection while a server cursor is incomplete", () => {
+    const wrapper = mountGrid({ clientSideComplete: false });
+    const options = gridMock.created[0].options;
+    expect(options.rowSelection).toBeUndefined();
+    expect(options.defaultColDef?.sortable).toBe(false);
+    expect(options.defaultColDef?.filter).toBe(false);
+    expect(options.columnDefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "dn", sortable: false, filter: false }),
+      expect.objectContaining({ field: "cn", sortable: false, filter: false }),
+    ]));
+    wrapper.unmount();
+  });
+
   it("persists a pagination page size change per table key and emits it", () => {
     const wrapper = mountGrid();
     expect(gridMock.created[0].options.paginationPageSize).toBe(50);
@@ -103,6 +118,15 @@ describe("DbxAgGrid", () => {
     gridMock.created[0].options.onPaginationChanged?.({ api: lastApi(wrapper) } as never);
     expect(localStorage.getItem("dbx-ldap-grid-pagesize-spec-table")).toBe("123");
     expect(wrapper.emitted("pageSizeChanged")).toEqual([[123]]);
+  });
+
+  it("requests more only when the user reaches the final locally loaded page", () => {
+    const wrapper = mountGrid();
+    gridMock.created[0].options.onPaginationChanged?.({ api: lastApi(wrapper), newPage: false } as never);
+    expect(wrapper.emitted("pageNearEnd")).toBeUndefined();
+    gridMock.created[0].options.onPaginationChanged?.({ api: lastApi(wrapper), newPage: true } as never);
+    expect(wrapper.emitted("pageNearEnd")).toHaveLength(1);
+    wrapper.unmount();
   });
 
   it("skips persistence when the reported size is unchanged or invalid", () => {

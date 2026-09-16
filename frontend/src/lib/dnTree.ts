@@ -34,22 +34,8 @@ export function dnNodeKind(dn: string, baseDn = ""): DnNodeKind {
   return "other";
 }
 
-/**
- * 懒加载单页抓取上限。DnTree.vue 的 fetchChildren sizeLimit/pageSize 与
- * "加载更多"的步长都取这个常量，截断判定（isFetchTruncated）与之配套。
- */
+/** Each server-side tree-search page contains at most this many children. */
 export const TREE_FETCH_PAGE = 500;
-
-/** fetchChildren 截断判定：本次返回条数达到请求上限即视为"可能还有更多"
- *  （UI 扫描 P1-2：静默截断必须可见化，徽标不得在截断时背书精确总数）。 */
-export function isFetchTruncated(fetchedCount: number, page: number = TREE_FETCH_PAGE): boolean {
-  return fetchedCount >= page;
-}
-
-/** "加载更多"的下次抓取上限：在已加载数上再追加一页。 */
-export function nextFetchLimit(loadedCount: number, page: number = TREE_FETCH_PAGE): number {
-  return loadedCount + page;
-}
 
 /**
  * 子条目徽标文案：截断时只显示"已加载数+"（不背书完整性，精确总数放在

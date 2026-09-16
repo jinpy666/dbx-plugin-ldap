@@ -7,7 +7,8 @@
 // 装配：dbxpluginsdk.NewServer + Handler switch。方法表按实施文档 §5.2 全量：
 //
 //	connection/test | connection/connect | connection/disconnect   （本文件实现）
-//	ldap/search | ldap/count | ldap/entry/get | ldap/rootDse | ldap/schema |
+//	ldap/search | ldap/search/start | ldap/search/next | ldap/search/cancel |
+//	ldap/count | ldap/entry/get | ldap/rootDse | ldap/schema |
 //	ldap/check | ldap/entry/add | ldap/entry/modify | ldap/entry/delete |
 //	ldap/entry/childrenCount | ldap/entry/modifyDn |
 //	ldap/connections/statuses |
@@ -164,6 +165,12 @@ func (h *pluginHandler) Handle(
 
 	case "ldap/search":
 		return h.forwardSearch(params)
+	case "ldap/search/start":
+		return h.forwardSearchStart(params)
+	case "ldap/search/next":
+		return h.forwardSearchNext(params)
+	case "ldap/search/cancel":
+		return h.forwardSearchCancel(params)
 	case "ldap/count":
 		return h.forwardCount(params)
 	case "ldap/entry/get":
@@ -260,6 +267,41 @@ func (h *pluginHandler) forwardSearch(params json.RawMessage) (any, *dbxpluginsd
 		return nil, bizError(err)
 	}
 	return result, nil
+}
+
+func (h *pluginHandler) forwardSearchStart(params json.RawMessage) (any, *dbxpluginsdk.PluginError) {
+	var req ldapconn.LDAPSearchSessionRequest
+	if perr := decodeParams(params, &req); perr != nil {
+		return nil, perr
+	}
+	result, err := h.svc.SearchStart(getContext(), req)
+	if err != nil {
+		return nil, bizError(err)
+	}
+	return result, nil
+}
+
+func (h *pluginHandler) forwardSearchNext(params json.RawMessage) (any, *dbxpluginsdk.PluginError) {
+	var req ldapconn.LDAPSearchSessionNextRequest
+	if perr := decodeParams(params, &req); perr != nil {
+		return nil, perr
+	}
+	result, err := h.svc.SearchNext(getContext(), req)
+	if err != nil {
+		return nil, bizError(err)
+	}
+	return result, nil
+}
+
+func (h *pluginHandler) forwardSearchCancel(params json.RawMessage) (any, *dbxpluginsdk.PluginError) {
+	var req ldapconn.LDAPSearchSessionCancelRequest
+	if perr := decodeParams(params, &req); perr != nil {
+		return nil, perr
+	}
+	if err := h.svc.SearchCancel(getContext(), req); err != nil {
+		return nil, bizError(err)
+	}
+	return map[string]bool{"success": true}, nil
 }
 
 func (h *pluginHandler) forwardCount(params json.RawMessage) (any, *dbxpluginsdk.PluginError) {

@@ -14,7 +14,7 @@ import { extractEntryAttributeNames } from "../lib/ldapExporter";
 import { resultColumns, toResultRows } from "../lib/ldapGrid";
 import { t } from "../lib/i18n";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   entries: LdapEntry[];
   count: number;
   truncated: boolean;
@@ -28,7 +28,14 @@ const props = defineProps<{
   loading?: boolean;
   error?: string;
   errorDetail?: string;
-}>();
+  /** Results are complete only after the server-side search cursor is exhausted. */
+  complete?: boolean;
+  loadingMore?: boolean;
+  loadMoreError?: string;
+  loadMoreErrorDetail?: string;
+}>(), {
+  complete: true,
+});
 
 const emit = defineEmits<{
   (e: "open", dn: string): void;
@@ -37,6 +44,8 @@ const emit = defineEmits<{
   (e: "retry"): void;
   (e: "batchDelete", dns: string[]): void;
   (e: "batchMove", dns: string[]): void;
+  (e: "loadMore"): void;
+  (e: "retryMore"): void;
 }>();
 
 const grid = ref<InstanceType<typeof DbxAgGrid> | null>(null);
@@ -114,16 +123,23 @@ watch(
 );
 
 const hasEntries = computed(() => props.entries.length > 0);
+const complete = computed(() => props.complete);
 </script>
 
 <template>
   <section class="result-pane" :aria-busy="loading || undefined">
     <div v-if="!loading && !error" class="result-meta">
-      <span>{{ t("result.count", { count }) }}<span v-if="truncated" class="truncated-badge" style="margin-left: 8px">{{ t("result.truncated") }}</span><span v-else-if="atLimit" class="truncated-badge" style="margin-left: 8px" :title="t('result.atLimit', { limit: sizeLimit ?? 0 })">{{ t("result.atLimitBadge") }}</span></span>
+      <span>
+        <template v-if="complete">{{ t("result.count", { count }) }}</template>
+        <template v-else>{{ t("result.loaded", { count: entries.length }) }}</template>
+        <span v-if="truncated" class="truncated-badge" style="margin-left: 8px">{{ t("result.truncated") }}</span>
+        <span v-else-if="atLimit" class="truncated-badge" style="margin-left: 8px" :title="t('result.atLimit', { limit: sizeLimit ?? 0 })">{{ t("result.atLimitBadge") }}</span>
+        <span v-if="!complete" class="progress-badge" style="margin-left: 8px">{{ loadingMore ? t("search.running") : t("result.loadingMore") }}</span>
+      </span>
       <span class="pager">
-        <button v-if="hasEntries" :disabled="disabled" :title="t('result.exportLdif')" @click="emit('export', 'ldif')"><FileDown aria-hidden="true" /></button>
-        <button v-if="hasEntries" :disabled="disabled" :title="t('result.exportCsv')" @click="emit('export', 'csv')"><FileSpreadsheet aria-hidden="true" /></button>
-        <button v-if="hasEntries" :disabled="disabled" :title="t('result.exportJson')" @click="emit('export', 'json')"><FileJson aria-hidden="true" /></button>
+        <button v-if="hasEntries" :disabled="disabled || !complete" :title="complete ? t('result.exportLdif') : t('result.exportIncomplete')" @click="emit('export', 'ldif')"><FileDown aria-hidden="true" /></button>
+        <button v-if="hasEntries" :disabled="disabled || !complete" :title="complete ? t('result.exportCsv') : t('result.exportIncomplete')" @click="emit('export', 'csv')"><FileSpreadsheet aria-hidden="true" /></button>
+        <button v-if="hasEntries" :disabled="disabled || !complete" :title="complete ? t('result.exportJson') : t('result.exportIncomplete')" @click="emit('export', 'json')"><FileJson aria-hidden="true" /></button>
       </span>
     </div>
     <div v-if="loading" class="empty" role="status">{{ t("search.running") }}</div>
@@ -132,7 +148,12 @@ const hasEntries = computed(() => props.entries.length > 0);
       <button type="button" :disabled="disabled" @click="emit('retry')">{{ t("retry") }}</button>
     </div>
     <div v-else-if="!hasEntries" class="empty" role="status">{{ props.searched ? t("result.emptyNoMatch") : t("result.empty") }}</div>
-    <div v-else class="result-table" :title="t('result.keyboardHint')">
+    <div v-else class="result-table" :title="complete ? t('result.keyboardHint') : t('result.partialHint')">
+      <div v-if="!complete" class="partial-results" role="status">
+        <span>{{ t("result.partialHint") }}</span>
+        <button v-if="loadMoreError" type="button" class="toolbar-button" :title="loadMoreErrorDetail || loadMoreError" :disabled="loadingMore || disabled" @click="emit('retryMore')">{{ t("retry") }}</button>
+        <button v-else type="button" class="toolbar-button load-more" :disabled="loadingMore || disabled" @click="emit('loadMore')">{{ loadingMore ? t("search.running") : t("result.loadMore") }}</button>
+      </div>
       <!-- 批量操作条：选中数 > 0 时出现在表格之上 -->
       <div v-if="selectedCount > 0" class="batch-bar">
         <span class="batch-count">{{ t("result.batchSelected", { count: selectedCount }) }}</span>
@@ -148,9 +169,11 @@ const hasEntries = computed(() => props.entries.length > 0);
         :column-defs="columnDefs"
         table-key="result"
         column-state-key="result"
-        row-selection="multi"
+        :row-selection="complete ? 'multi' : false"
+        :client-side-complete="complete"
         @row-activate="activateRow"
         @selection-changed="onSelectionChanged"
+        @page-near-end="emit('loadMore')"
         @notify="emit('notify', $event)"
       />
     </div>
@@ -174,6 +197,20 @@ const hasEntries = computed(() => props.entries.length > 0);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.partial-results {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.progress-badge {
+  color: var(--muted-foreground);
 }
 .batch-bar .batch-delete {
   color: var(--destructive);

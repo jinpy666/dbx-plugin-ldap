@@ -58,6 +58,13 @@ type Service struct {
 	mu    sync.Mutex
 	conns map[string]*connEntry
 
+	// searchSessions keep dedicated LDAP connections for incremental paged
+	// searches. They are deliberately separate from connEntry.conn: an RFC 2696
+	// cookie is connection-scoped, so normal operations must never interleave on
+	// the socket that owns a cursor.
+	searchSessionsMu sync.Mutex
+	searchSessions   map[string]*ldapSearchSession
+
 	// SchemaCache 供 ldap/schema 实现使用（L-B schema.go 提供的类型）。
 	SchemaCache *SchemaCache
 
@@ -81,10 +88,11 @@ type Service struct {
 // NewService 创建空连接表。
 func NewService() *Service {
 	return &Service{
-		conns:        map[string]*connEntry{},
-		SchemaCache:  NewSchemaCache(0), // 0 → schema.go 默认 10 分钟 TTL
-		checkDialFn:  dialTransport,
-		checkProbeFn: probeBindSession,
+		conns:          map[string]*connEntry{},
+		searchSessions: map[string]*ldapSearchSession{},
+		SchemaCache:    NewSchemaCache(0), // 0 → schema.go 默认 10 分钟 TTL
+		checkDialFn:    dialTransport,
+		checkProbeFn:   probeBindSession,
 	}
 }
 
@@ -237,6 +245,8 @@ func (s *Service) Connect(params *lifecycle.Params) error {
 		old.closeLocked()
 		old.mu.Unlock()
 	}
+	// A reconnect/reconfiguration invalidates any cursor made for this id.
+	s.cancelSearchSessionsForConnection(profile.ID)
 	// 同 id 重复 connect 可能换了服务器/凭据（连接编辑后重连），旧 schema
 	// 元数据必须失效，否则最长 10 分钟内会拿到上一台服务器的 schema。
 	s.invalidateSchema(profile.ID)
@@ -291,6 +301,7 @@ func (s *Service) Disconnect(connectionID string) {
 	entry.mu.Lock()
 	entry.closeLocked()
 	entry.mu.Unlock()
+	s.cancelSearchSessionsForConnection(connectionID)
 	s.invalidateSchema(connectionID)
 }
 
@@ -308,6 +319,7 @@ func (s *Service) CloseAll() {
 		entry.closeLocked()
 		entry.mu.Unlock()
 	}
+	s.cancelAllSearchSessions()
 }
 
 // Get 返回连接的 Profile 副本（凭据字段不在 Profile 上）。

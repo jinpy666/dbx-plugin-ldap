@@ -5,7 +5,7 @@
 // 内建：排序/列内文本筛选/分页 + 页大小 localStorage 持久化（ldapGrid 存取）、
 // 多行复选框选择（表头全选，批量操作用）、行双击 / 单元格 Enter 激活、
 // 列宽列序持久化（columnStateKey）。
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   AllCommunityModule,
   ModuleRegistry,
@@ -41,14 +41,18 @@ const props = withDefaults(
     rowSelection?: "multi" | false;
     /** 列宽/列序持久化键（columnState）；缺省不持久化。 */
     columnStateKey?: string;
+    /** false 时数据只是服务器搜索会话的前缀，不能声称本地操作覆盖全部结果。 */
+    clientSideComplete?: boolean;
   }>(),
-  { rowSelection: "multi", columnStateKey: undefined },
+  { rowSelection: "multi", columnStateKey: undefined, clientSideComplete: true },
 );
 
 const emit = defineEmits<{
   (e: "rowActivate", data: unknown): void;
   (e: "selectionChanged", rows: unknown[]): void;
   (e: "pageSizeChanged", size: number): void;
+  /** User navigated to the last locally loaded page of an incomplete cursor. */
+  (e: "pageNearEnd"): void;
   (e: "notify", message: string): void;
 }>();
 
@@ -57,6 +61,11 @@ const pageSize = ref(loadPreferredPageSize(props.tableKey));
 let gridApi: GridApi | null = null;
 const contextMenuEl = ref<HTMLElement>();
 const contextMenu = ref<{ x: number; y: number; value: string; row: unknown; fields: string[] }>();
+const effectiveColumnDefs = computed(() =>
+  props.clientSideComplete
+    ? props.columnDefs
+    : props.columnDefs.map((definition) => ({ ...definition, sortable: false, filter: false })),
+);
 
 // 行 id：行 VM 带 id 字段直接用（ResultRow.id = DN）；兜底按对象身份分配稳定自增
 // id（重复空串 id 会让 ag-grid 行覆盖合并——kafka 侧走查发现的同类 bug）。
@@ -127,12 +136,12 @@ function onDocumentKeydown(event: KeyboardEvent) {
 
 function buildOptions(): GridOptions {
   return {
-    columnDefs: props.columnDefs,
+    columnDefs: effectiveColumnDefs.value,
     rowData: props.rowData,
     defaultColDef: {
-      sortable: true,
+      sortable: props.clientSideComplete,
       resizable: true,
-      filter: "agTextColumnFilter",
+      filter: props.clientSideComplete ? "agTextColumnFilter" : false,
       minWidth: 64,
       suppressHeaderMenuButton: false,
     },
@@ -147,7 +156,7 @@ function buildOptions(): GridOptions {
     headerHeight: 26,
     animateRows: false,
     suppressDragLeaveHidesColumns: true,
-    rowSelection: (props.rowSelection
+    rowSelection: (props.rowSelection && props.clientSideComplete
       ? { mode: "multiRow", checkboxes: true, headerCheckbox: true, enableClickSelection: false }
       : undefined) as RowSelectionOptions | undefined,
     getRowId: (params) => resolveRowId(params.data),
@@ -173,6 +182,9 @@ function buildOptions(): GridOptions {
         savePreferredPageSize(props.tableKey, size);
         emit("pageSizeChanged", size);
       }
+      // AG Grid also raises this event while it initializes or receives rows.
+      // `newPage` confines continuation to an explicit user page navigation.
+      if (event.newPage && event.api.paginationGetCurrentPage() >= event.api.paginationGetTotalPages() - 1) emit("pageNearEnd");
     },
     onColumnResized: (event) => {
       if (event.finished) persistColumnState();
@@ -211,7 +223,7 @@ watch(
   (rows) => gridApi?.setGridOption("rowData", rows),
 );
 watch(
-  () => props.columnDefs,
+  effectiveColumnDefs,
   (defs) => gridApi?.setGridOption("columnDefs", defs),
 );
 watch(

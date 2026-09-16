@@ -254,6 +254,56 @@ function search(params_: Record<string, unknown>) {
   return { entries, count: entries.length, truncated: paged && entries.length >= limit, baseDn, filter };
 }
 
+interface SearchSession {
+  entries: MockEntry[];
+  pageSize: number;
+  position: number;
+}
+
+const searchSessions = new Map<string, SearchSession>();
+let nextSearchSessionId = 1;
+
+// The fixture mirrors the sidecar's cursor protocol so the large People OU
+// demonstrates true continuation instead of repeatedly re-reading page one.
+function startSearchSession(params_: Record<string, unknown>) {
+  if (params.get("err") === "1") throw new Error("connection lost (fixture error injection)");
+  const baseDn = String(params_.baseDn ?? "").trim() || BASE_DN;
+  const filter = String(params_.filter ?? "").trim() || "(objectClass=*)";
+  const matches = compileFilter(filter);
+  const scope = String(params_.scope ?? "sub").trim().toLowerCase();
+  const pageSize = Math.max(1, Number(params_.pageSize) || 500);
+  if (needsAliasDereference(baseDn, scope, String(params_.derefAliases ?? "never").trim().toLowerCase())) {
+    throw new Error("alias dereferencing is not implemented in the fixture");
+  }
+  const entries = Array.from(directory.values()).filter((entry) => dnInSearchScope(entry.dn, baseDn, scope) && matches(entry));
+  const searchId = `fixture-search-${nextSearchSessionId++}`;
+  searchSessions.set(searchId, { entries, pageSize, position: 0 });
+  return nextSearchSession({ ...params_, searchId });
+}
+
+function nextSearchSession(params_: Record<string, unknown>) {
+  const searchId = String(params_.searchId ?? "");
+  const session = searchSessions.get(searchId);
+  if (!session) throw new Error("search session not found or expired");
+  const page = session.entries.slice(session.position, session.position + session.pageSize);
+  session.position += page.length;
+  const hasMore = session.position < session.entries.length;
+  if (!hasMore) searchSessions.delete(searchId);
+  return {
+    searchId,
+    entries: page.map((entry) => ({
+      dn: entry.dn,
+      attributes: selectAttributes(entry.attributes, params_.attributes, params_.typesOnly === true),
+    })),
+    hasMore,
+  };
+}
+
+function cancelSearchSession(params_: Record<string, unknown>) {
+  searchSessions.delete(String(params_.searchId ?? ""));
+  return { success: true };
+}
+
 // ldap/count（A-LDAP 契约：scope=one，上限 5000）——直接子条目精确计数，
 // 不受 search sizeLimit 截断影响；超上限折算为 truncated:true。
 function countChildren(params_: Record<string, unknown>): { count: number; truncated: boolean } {
@@ -346,10 +396,13 @@ const invoke: DbxPluginApi["invoke"] = async <T = unknown>(method: string, rawPa
   const input = (rawParams ?? {}) as Record<string, unknown>;
   let result: unknown = { success: true };
   if (method === "ldap/search") result = search(input);
+  else if (method === "ldap/search/start") result = startSearchSession(input);
+  else if (method === "ldap/search/next") result = nextSearchSession(input);
+  else if (method === "ldap/search/cancel") result = cancelSearchSession(input);
   else if (method === "ldap/entry/get") {
     const entry = get(String(input.dn ?? ""));
     if (!entry) throw new Error(`entry not found: ${input.dn}`);
-    result = { entry: { dn: entry.dn, attributes: selectAttributes(entry.attributes, input.attributes) } };
+    result = { entry: { dn: entry.dn, attributes: selectAttributes(entry.attributes, input.attributes, input.typesOnly === true) } };
   } else if (method === "ldap/rootDse") {
     result = {
       attributes: selectAttributes({

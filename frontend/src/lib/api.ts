@@ -32,6 +32,20 @@ export interface LdapSearchResult {
   truncated: boolean;
 }
 
+/**
+ * A server-side LDAP paged-search session. `entries` is deliberately only the
+ * page just read; callers must keep using the returned searchId until
+ * `hasMore` is false instead of restarting the same query with a larger limit.
+ */
+export interface LdapSearchPage {
+  entries: LdapEntry[];
+  hasMore: boolean;
+}
+
+export interface LdapSearchSessionResult extends LdapSearchPage {
+  searchId: string;
+}
+
 export interface LdapModifyChange {
   operation: "add" | "replace" | "delete";
   attribute: string;
@@ -105,11 +119,43 @@ async function callLdap<T>(method: string, params: Record<string, unknown> = {},
   return invoke<T>(method, { connectionId: requireConnectionId(), ...params }, options);
 }
 
+// Search sessions can outlive the currently selected connection briefly while
+// a host context change is being processed. Cancellation must be routed to the
+// connection which created the session, not whichever connection is current.
+async function callLdapForConnection<T>(connectionId: string, method: string, params: Record<string, unknown> = {}, options?: { timeoutMs?: number }): Promise<T> {
+  const api = window.dbxPlugin;
+  if (!api) throw new Error("DBX Host API unavailable");
+  const invoke = (api.invoke ?? api.request).bind(api);
+  return invoke<T>(method, { connectionId, ...params }, options);
+}
+
 // -- domain methods (§5.2 of IMPL_PLAN_DBX_LDAP) -----------------------------
 
 export const ldapApi = {
   search(params: LdapSearchRequest, options?: { timeoutMs?: number }) {
     return callLdap<LdapSearchResult>("ldap/search", { ...params }, options);
+  },
+
+  searchStart(params: LdapSearchRequest, options?: { timeoutMs?: number }) {
+    return callLdap<LdapSearchSessionResult>("ldap/search/start", { ...params }, options);
+  },
+
+  // `connectionId` is only used while disposing a search started by a
+  // connection that has since been switched away from.  callLdap deliberately
+  // permits this explicit value to override the current UI context.
+  searchNext(searchId: string, connectionId?: string, options?: { timeoutMs?: number }) {
+    return callLdap<LdapSearchPage>(
+      "ldap/search/next",
+      { searchId, ...(connectionId ? { connectionId } : {}) },
+      options,
+    );
+  },
+
+  searchCancel(searchId: string, connectionId?: string) {
+    return callLdap<{ success: boolean }>(
+      "ldap/search/cancel",
+      { searchId, ...(connectionId ? { connectionId } : {}) },
+    );
   },
 
   count(baseDn: string, filter?: string) {
@@ -120,8 +166,12 @@ export const ldapApi = {
     );
   },
 
-  entryGet(dn: string, attributes?: string[]) {
-    return callLdap<{ entry: LdapEntry }>("ldap/entry/get", { dn, ...(attributes ? { attributes } : {}) });
+  entryGet(dn: string, attributes?: string[], options?: { typesOnly?: boolean }) {
+    return callLdap<{ entry: LdapEntry }>("ldap/entry/get", {
+      dn,
+      ...(attributes ? { attributes } : {}),
+      ...(options?.typesOnly ? { typesOnly: true } : {}),
+    });
   },
 
   rootDse(attributes?: string[]) {

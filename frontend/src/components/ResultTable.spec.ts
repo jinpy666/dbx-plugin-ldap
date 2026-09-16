@@ -24,6 +24,7 @@ const DbxAgGridStub = defineComponent({
     tableKey: { type: String, default: "" },
     rowSelection: { type: [String, Boolean] as PropType<"multi" | false>, default: "multi" as const },
     columnStateKey: { type: String, default: undefined },
+    clientSideComplete: { type: Boolean, default: true },
   },
   emits: ["rowActivate", "selectionChanged"],
   setup(props, { emit, expose }) {
@@ -55,7 +56,7 @@ const DbxAgGridStub = defineComponent({
   },
 });
 
-function mountTable(props: { entries: LdapEntry[]; count: number; truncated?: boolean; searched?: boolean; atLimit?: boolean; sizeLimit?: number; loading?: boolean; error?: string; disabled?: boolean }) {
+function mountTable(props: { entries: LdapEntry[]; count: number; truncated?: boolean; searched?: boolean; atLimit?: boolean; sizeLimit?: number; loading?: boolean; error?: string; disabled?: boolean; complete?: boolean; loadingMore?: boolean; loadMoreError?: string; loadMoreErrorDetail?: string }) {
   return mount(ResultTable, {
     props: { truncated: false, ...props },
     global: { stubs: { DbxAgGrid: DbxAgGridStub } },
@@ -159,5 +160,26 @@ describe("ResultTable grid wiring (AG Grid)", () => {
     const disabledWrapper = mountTable({ entries: [entry], count: 1, disabled: true });
     for (const button of disabledWrapper.findAll(".pager button")) expect(button.attributes("disabled")).toBeDefined();
     disabledWrapper.unmount();
+  });
+
+  it("labels a cursor prefix as loaded and blocks global operations until it completes", async () => {
+    const wrapper = mountTable({ entries: [entry], count: 1, complete: false });
+    expect(wrapper.find(".result-meta").text()).toContain("已加载 1 条");
+    expect(wrapper.find(".partial-results").text()).toContain("当前仅显示已加载结果");
+    const grid = wrapper.findComponent({ name: "DbxAgGridStub" });
+    expect(grid.props("rowSelection")).toBe(false);
+    expect(grid.props("clientSideComplete")).toBe(false);
+    for (const button of wrapper.findAll(".pager button")) expect(button.attributes("disabled")).toBeDefined();
+    await wrapper.find(".load-more").trigger("click");
+    expect(wrapper.emitted("loadMore")).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("shows a retry instead of hiding already loaded results when a later page fails", async () => {
+    const wrapper = mountTable({ entries: [entry], count: 1, complete: false, loadMoreError: "connection lost" });
+    expect(wrapper.find(".grid-stub").exists()).toBe(true);
+    await wrapper.find(".partial-results button").trigger("click");
+    expect(wrapper.emitted("retryMore")).toHaveLength(1);
+    wrapper.unmount();
   });
 });

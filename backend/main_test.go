@@ -47,3 +47,20 @@ func TestForwardCheckParamGates(t *testing.T) {
 		t.Fatalf("invalid level perr = %v, want code -32000", perr)
 	}
 }
+
+func TestForwardSearchSessionParamGates(t *testing.T) {
+	handler := &pluginHandler{svc: ldapconn.NewService()}
+
+	if _, perr := handler.forwardSearchStart(json.RawMessage(`{"filter":"(objectClass=*)"}`)); perr == nil || perr.Code != -32602 {
+		t.Fatalf("start missing connectionId perr = %v, want code -32602", perr)
+	}
+	if _, perr := handler.forwardSearchNext(json.RawMessage(`{"searchId":"s"}`)); perr == nil || perr.Code != -32602 {
+		t.Fatalf("next missing connectionId perr = %v, want code -32602", perr)
+	}
+	if _, perr := handler.forwardSearchNext(json.RawMessage(`{"connectionId":"nope","searchId":"s"}`)); perr == nil || perr.Code != -32000 {
+		t.Fatalf("next unknown searchId perr = %v, want code -32000", perr)
+	}
+	if _, perr := handler.forwardSearchCancel(json.RawMessage(`{"connectionId":"nope"}`)); perr == nil || perr.Code != -32000 {
+		t.Fatalf("cancel missing searchId perr = %v, want code -32000", perr)
+	}
+}

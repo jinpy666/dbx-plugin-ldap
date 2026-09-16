@@ -4,13 +4,13 @@
 // buildTreeKeywordFilter / searchTreeFilterRemote），组件按 DBX 插件形态重实现。
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Clipboard, Copy, Download, Eye, Pencil, Plus, RefreshCw, Search, Trash2, Users, X } from "@lucide/vue";
-import { ldapApi, type LdapEntry } from "../lib/api";
+import { getLdapConnectionId, ldapApi, type LdapEntry, type LdapSearchPage, type LdapSearchSessionResult } from "../lib/api";
 import { buildTreeKeywordFilter } from "../lib/ldapFilter";
 import { friendlyLdapError } from "../lib/ldapErrors";
 import { splitFirstDnRdn } from "../lib/dn";
 import { nextFocusIndex } from "../lib/modal";
 import { t } from "../lib/i18n";
-import { compareDnByLabel, compareDnForTree, flattenDnTree, isFetchTruncated, nextFetchLimit, nextTreeFocusIndex, TREE_FETCH_PAGE, type DnTreeNode } from "../lib/dnTree";
+import { compareDnByLabel, compareDnForTree, flattenDnTree, nextTreeFocusIndex, TREE_FETCH_PAGE, type DnTreeNode } from "../lib/dnTree";
 import VirtualList from "./VirtualList.vue";
 import TreeBranch from "./TreeBranch.vue";
 import TreeNodeIcon from "./TreeNodeIcon.vue";
@@ -19,6 +19,8 @@ const props = defineProps<{
   baseDn: string;
   canWrite: boolean;
   disabled?: boolean;
+  /** Passed by App so an old search can be cancelled after a connection switch. */
+  connectionId?: string;
 }>();
 
 const emit = defineEmits<{
@@ -46,6 +48,17 @@ const filterResults = ref<LdapEntry[]>([]);
 const contextMenu = ref<{ x: number; y: number; dn: string }>();
 let filterSequence = 0;
 let filterTimer = 0;
+
+interface ChildSearchSession {
+  searchId: string;
+  connectionId: string;
+  hasMore: boolean;
+}
+
+// A node owns exactly one live server-side cursor.  Do not store this on the
+// reactive node object: sessions are transport state, not tree presentation.
+const childSessions = new Map<string, ChildSearchSession>();
+let treeGeneration = 0;
 
 const TREE_ATTRIBUTES = ["dn", "name", "cn", "ou", "objectClass"];
 // 请求列（只用于展示/补全，服务器对未知属性名回缺席名不报错）：树过滤命中
@@ -138,61 +151,101 @@ function makeNode(dn: string): DnTreeNode {
   return { dn, label: nodeLabel(dn), expanded: false, loaded: false, loading: false, children: [] };
 }
 
-// 懒加载单页抓取（scope=one + sizeLimit=单页）。返回截断标记：达到上限即
-// 视为"可能还有更多"（UI 扫描 P1-2）——截断必须可见化，徽标显示"已加载+"
-// 并提供加载更多入口，而不是静默丢掉后继条目。
-async function fetchChildren(dn: string, limit: number = TREE_FETCH_PAGE): Promise<{ children: DnTreeNode[]; truncated: boolean }> {
-  const result = await ldapApi.search({
+function currentConnectionId(): string {
+  return props.connectionId || getLdapConnectionId();
+}
+
+function nodeSessionKey(node: Pick<DnTreeNode, "dn">): string {
+  return node.dn.toLowerCase();
+}
+
+function nodeIsCurrent(node: DnTreeNode, generation: number, connectionId: string): boolean {
+  if (generation !== treeGeneration || connectionId !== currentConnectionId()) return false;
+  const key = nodeSessionKey(node);
+  // Vue wraps data assigned to a ref in a proxy, so object identity is not
+  // stable across the component boundary. DNs are unique within this tree.
+  const visit = (candidate?: DnTreeNode): boolean => nodeSessionKey(candidate ?? { dn: "" }) === key || !!candidate?.children.some(visit);
+  return visit(rootNode.value);
+}
+
+function cancelSearch(searchId: string, connectionId: string) {
+  // Cancellation is cleanup only.  A disconnected/expired sidecar must not
+  // replace an otherwise useful tree with an error banner.
+  void ldapApi.searchCancel(searchId, connectionId || undefined).catch(() => {});
+}
+
+function releaseNodeSessions(node?: DnTreeNode) {
+  if (!node) return;
+  for (const child of node.children) releaseNodeSessions(child);
+  const key = nodeSessionKey(node);
+  const session = childSessions.get(key);
+  if (!session) return;
+  childSessions.delete(key);
+  cancelSearch(session.searchId, session.connectionId);
+}
+
+function resetTreeSessions() {
+  treeGeneration += 1;
+  releaseNodeSessions(rootNode.value);
+}
+
+function appendChildren(node: DnTreeNode, entries: LdapSearchPage["entries"]) {
+  // LDAP paged-results is a continuation, not an offset.  Keep existing node
+  // objects so descendants that the user has expanded remain expanded, then
+  // add only genuinely new DNs.  Re-sorting affects display order only.
+  const existing = new Set(node.children.map((child) => child.dn.toLowerCase()));
+  for (const entry of entries) {
+    const dn = entry.dn.trim();
+    const key = dn.toLowerCase();
+    if (!dn || key === node.dn.toLowerCase() || existing.has(key)) continue;
+    existing.add(key);
+    node.children.push(makeNode(dn));
+  }
+  node.children.sort((left, right) => compareDnForTree(left.dn, right.dn));
+}
+
+function applyPage(node: DnTreeNode, session: ChildSearchSession, page: LdapSearchPage) {
+  appendChildren(node, page.entries);
+  session.hasMore = page.hasMore;
+  // Only the server cursor can establish completeness.  Never infer it from
+  // a short page, otherwise a server-side page policy could silently hide DNs.
+  node.truncated = page.hasMore;
+  if (page.hasMore) childSessions.set(nodeSessionKey(node), session);
+  else {
+    childSessions.delete(nodeSessionKey(node));
+    node.childCount = node.children.length;
+  }
+  node.loaded = true;
+}
+
+function childSearchRequest(dn: string) {
+  return {
     baseDn: dn,
     filter: "(objectClass=*)",
-    scope: "one",
+    scope: "one" as const,
     attributes: TREE_ATTRIBUTES,
-    sizeLimit: limit,
-    pageSize: limit,
-    derefAliases: "never",
-  });
-  const children = result.entries
-    .map((entry) => entry.dn)
-    .filter((child) => child && child !== dn)
-    // 同级容器优先：ou 组在前、cn 组居中、其余类型殿后，组内沿用原字典序。
-    .sort(compareDnForTree)
-    .map(makeNode);
-  return { children, truncated: isFetchTruncated(result.entries.length, limit) };
+    pageSize: TREE_FETCH_PAGE,
+    derefAliases: "never" as const,
+  };
 }
 
-// "加载更多"重取替换 children 时，保留已加载子节点的展开/加载状态（续载
-// 不折叠树、不丢深层展开）。DN 排序稳定，重取结果覆盖既有集合。
-function preserveExpansion(next: DnTreeNode[], previous: DnTreeNode[]) {
-  const byDn = new Map(previous.map((child) => [child.dn.toLowerCase(), child]));
-  for (const child of next) {
-    const old = byDn.get(child.dn.toLowerCase());
-    if (!old) continue;
-    child.expanded = old.expanded;
-    child.loaded = old.loaded;
-    child.loading = old.loading;
-    child.children = old.children;
-    child.childCount = old.childCount;
-    child.truncated = old.truncated;
+/** Starts one stable LDAP Paged Results cursor and applies its first page. */
+async function startChildren(node: DnTreeNode, generation: number): Promise<boolean> {
+  const connectionId = currentConnectionId();
+  const page = await ldapApi.searchStart(childSearchRequest(node.dn));
+  if (!nodeIsCurrent(node, generation, connectionId)) {
+    cancelSearch(page.searchId, connectionId);
+    return false;
   }
-}
-
-// 懒加载后异步取精确子条目数（ldap/count，one 层精确总数、上限 5000）：
-// 已加载数少于它即仍截断，同时纠正"返回条数恰好等于单页上限"的
-// isFetchTruncated 边界误判（如恰好 1000 条的 OU 首载会误标截断）。
-// count 失败静默保留估算值，不阻塞展开。
-async function refreshChildCount(node: DnTreeNode) {
-  try {
-    const { count } = await ldapApi.count(node.dn);
-    node.childCount = count;
-    node.truncated = node.children.length < count;
-  } catch {
-    // 静默：徽章保留 fetchChildren 的估算值
-  }
+  const session: ChildSearchSession = { searchId: page.searchId, connectionId, hasMore: page.hasMore };
+  applyPage(node, session, page);
+  return true;
 }
 
 async function loadRoot() {
+  resetTreeSessions();
   if (!hasBaseDn.value || props.disabled) return;
-  if (loadingRoot.value) return; // 刷新连点去重
+  const generation = treeGeneration;
   loadingRoot.value = true;
   treeError.value = "";
   treeErrorRaw.value = "";
@@ -200,21 +253,18 @@ async function loadRoot() {
     const node = makeNode(props.baseDn.trim());
     node.loading = true;
     rootNode.value = node;
-    const { children, truncated } = await fetchChildren(node.dn);
-    node.children = children;
-    node.loaded = true;
-    node.truncated = truncated;
-    node.childCount = node.children.length;
-    void refreshChildCount(node);
-    node.expanded = true;
+    if (await startChildren(node, generation)) node.expanded = true;
   } catch (cause) {
+    if (generation !== treeGeneration) return;
     rootNode.value = undefined;
     const raw = cause instanceof Error ? cause.message : String(cause);
     treeError.value = friendlyLdapError(raw);
     treeErrorRaw.value = treeError.value === raw ? "" : raw;
   } finally {
-    loadingRoot.value = false;
-    if (rootNode.value) rootNode.value.loading = false;
+    if (generation === treeGeneration) {
+      loadingRoot.value = false;
+      if (rootNode.value) rootNode.value.loading = false;
+    }
   }
 }
 
@@ -226,14 +276,10 @@ async function toggleNode(node: DnTreeNode) {
   // 加载中忽略重复点击（同一节点并发去重）；已加载节点直接折叠/展开。
   if (node.loading) return;
   if (!node.expanded && !node.loaded) {
+    const generation = treeGeneration;
     node.loading = true;
     try {
-      const { children, truncated } = await fetchChildren(node.dn);
-      node.children = children;
-      node.loaded = true;
-      node.truncated = truncated;
-      node.childCount = node.children.length;
-      void refreshChildCount(node);
+      if (!(await startChildren(node, generation))) return;
       // 本次懒展开成功：清除上一次失败的错误横幅（节点保持折叠，可重试）。
       treeError.value = "";
       treeErrorRaw.value = "";
@@ -245,7 +291,7 @@ async function toggleNode(node: DnTreeNode) {
       treeErrorRaw.value = treeError.value === raw ? "" : raw;
       return;
     } finally {
-      node.loading = false;
+      if (nodeIsCurrent(node, generation, currentConnectionId())) node.loading = false;
     }
   }
   node.expanded = !node.expanded;
@@ -257,19 +303,25 @@ function selectNode(node: DnTreeNode) {
   emit("select", node.dn);
 }
 
-// P1-2 截断续载：按"已加载数 + 一页"重取并整体替换 children（DN 排序稳定，
-// 结果覆盖既有集合），保留已展开子节点状态。全部加载完 truncated 归 false、
-// 徽标恢复精确数；失败走错误横幅、节点保持当前已加载状态可重试。
+// Continue the original LDAP cursor.  Re-running a one-level search with a
+// larger sizeLimit can duplicate work and skip/duplicate DNs while a directory
+// changes; this never uses an offset or re-query.
 async function loadMore(node: DnTreeNode) {
   if (props.disabled || node.loading) return;
+  const session = childSessions.get(nodeSessionKey(node));
+  if (!session || !session.hasMore) {
+    // Do not quietly mark a partial node as complete if the server session was
+    // lost.  The visible `+` badge remains and the user can refresh explicitly.
+    treeError.value = "The child search session expired; refresh this branch to continue.";
+    treeErrorRaw.value = "";
+    return;
+  }
+  const generation = treeGeneration;
   node.loading = true;
   try {
-    const { children, truncated } = await fetchChildren(node.dn, nextFetchLimit(node.children.length));
-    preserveExpansion(children, node.children);
-    node.children = children;
-    node.truncated = truncated;
-    if (!truncated) node.childCount = children.length;
-    void refreshChildCount(node);
+    const page = await ldapApi.searchNext(session.searchId, session.connectionId || undefined);
+    if (!nodeIsCurrent(node, generation, session.connectionId) || childSessions.get(nodeSessionKey(node)) !== session) return;
+    applyPage(node, session, page);
     treeError.value = "";
     treeErrorRaw.value = "";
   } catch (cause) {
@@ -277,7 +329,7 @@ async function loadMore(node: DnTreeNode) {
     treeError.value = friendlyLdapError(raw);
     treeErrorRaw.value = treeError.value === raw ? "" : raw;
   } finally {
-    node.loading = false;
+    if (nodeIsCurrent(node, generation, session.connectionId)) node.loading = false;
   }
 }
 
@@ -444,7 +496,7 @@ function menuAction(action: string) {
 }
 
 watch(
-  () => props.baseDn,
+  [() => props.baseDn, () => props.connectionId],
   () => {
     clearFilter();
     void loadRoot();
@@ -454,7 +506,10 @@ watch(
 watch(
   () => props.disabled,
   (next) => {
-    if (next) clearFilter();
+    if (next) {
+      clearFilter();
+      resetTreeSessions();
+    }
   },
 );
 
@@ -469,6 +524,7 @@ defineExpose({
     const walk = (node?: DnTreeNode): boolean => {
       if (!node) return false;
       if (node.dn === dn) {
+        releaseNodeSessions(node);
         node.loaded = false;
         node.expanded = false;
         node.truncated = false;
@@ -484,6 +540,7 @@ defineExpose({
 function onMountedCleanup() {
   window.clearTimeout(filterTimer);
   filterSequence += 1;
+  resetTreeSessions();
   document.removeEventListener("click", closeContextMenu);
 }
 
