@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { childBadgeText, compareDnByLabel, compareDnForTree, dnNodeKind, flattenDnTree, isFetchTruncated, nextFetchLimit, nextTreeFocusIndex, TREE_FETCH_PAGE, type DnTreeNode } from "./dnTree";
+import { childBadgeText, compareDnByLabel, compareDnForTree, dnNodeKind, flattenDnTree, nextTreeFocusIndex, TREE_FETCH_PAGE, type DnTreeNode } from "./dnTree";
 
 // Node factory kept local so the spec stays free of component imports.
 function node(dn: string, overrides: Partial<DnTreeNode> = {}): DnTreeNode {
@@ -52,22 +52,9 @@ describe("flattenDnTree", () => {
   });
 });
 
-describe("lazy-load truncation helpers (P1-2)", () => {
-  it("uses a 500-entry page shared with fetchChildren sizeLimit", () => {
+describe("lazy-load page configuration", () => {
+  it("uses a bounded 500-entry server-side cursor page", () => {
     expect(TREE_FETCH_PAGE).toBe(500);
-  });
-
-  it("flags a fetch as truncated once the requested page limit is reached", () => {
-    expect(isFetchTruncated(500)).toBe(true);
-    expect(isFetchTruncated(501)).toBe(true);
-    expect(isFetchTruncated(499)).toBe(false);
-    expect(isFetchTruncated(3, 3)).toBe(true);
-  });
-
-  it("steps the next load-more limit by one page over the loaded count", () => {
-    expect(nextFetchLimit(500)).toBe(1000);
-    expect(nextFetchLimit(1000)).toBe(1500);
-    expect(nextFetchLimit(120, 40)).toBe(160);
   });
 
   it("never endorses the exact total while truncated: badge shows loaded count + '+'", () => {

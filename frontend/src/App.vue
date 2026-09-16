@@ -1203,6 +1203,7 @@ onBeforeUnmount(() => {
       <DnTree
         ref="treeRef"
         :base-dn="baseDn"
+        :connection-id="connectionId"
         :can-write="canWrite"
         @select="selectEntry"
         @search-here="searchHere"

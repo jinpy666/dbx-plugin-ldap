@@ -5,7 +5,10 @@ import { defineComponent, h } from "vue";
 import { ldapApi, type LdapSearchResult } from "../lib/api";
 import DnTree from "./DnTree.vue";
 
-vi.mock("../lib/api", () => ({ ldapApi: { search: vi.fn(), count: vi.fn() } }));
+vi.mock("../lib/api", () => ({
+  getLdapConnectionId: vi.fn(() => ""),
+  ldapApi: { search: vi.fn(), searchStart: vi.fn(), searchNext: vi.fn(), searchCancel: vi.fn(), count: vi.fn() },
+}));
 
 // Only replace viewport measurement; exercise the real tree rows and API flow.
 const ListStub = defineComponent({
@@ -13,6 +16,9 @@ const ListStub = defineComponent({
   setup: (props, { slots }) => () => h("div", props.items.map((item: unknown, index: number) => slots.default?.({ item, index }))),
 });
 const search = vi.mocked(ldapApi.search);
+const searchStart = vi.mocked(ldapApi.searchStart);
+const searchNext = vi.mocked(ldapApi.searchNext);
+const searchCancel = vi.mocked(ldapApi.searchCancel);
 const count = vi.mocked(ldapApi.count);
 const baseDn = "dc=demo,dc=dbx";
 const hit = { dn: "cn=alice," + baseDn, attributes: { cn: ["alice"] } };
@@ -21,6 +27,9 @@ let wrapper: ReturnType<typeof mount<typeof DnTree>>;
 beforeEach(() => {
   vi.useFakeTimers();
   search.mockReset();
+  searchStart.mockReset();
+  searchNext.mockReset();
+  searchCancel.mockReset().mockResolvedValue({ success: true });
   count.mockReset().mockResolvedValue({ count: 0 });
   wrapper = mount(DnTree, {
     props: { baseDn, canWrite: true },
@@ -60,8 +69,8 @@ describe("DnTree keyboard navigation through virtual rows", () => {
   it("enters children and returns to parents without toggling an already requested state", async () => {
     const parent = { dn: "ou=people," + baseDn, attributes: {} };
     const child = { dn: "cn=alice," + parent.dn, attributes: {} };
-    search.mockResolvedValueOnce({ entries: [parent], count: 1, truncated: false });
-    search.mockResolvedValueOnce({ entries: [child], count: 1, truncated: false });
+    searchStart.mockResolvedValueOnce({ searchId: "root", entries: [parent], hasMore: false });
+    searchStart.mockResolvedValueOnce({ searchId: "parent", entries: [child], hasMore: false });
     count.mockResolvedValue({ count: 1 });
     await useRealList();
     (wrapper.find(".tree-node").element as HTMLElement).focus();
@@ -85,7 +94,7 @@ describe("DnTree keyboard navigation through virtual rows", () => {
 
   it("uses Home/End and adjacent arrows across unmounted rows while keeping a bounded DOM", async () => {
     const entries = Array.from({ length: 100 }, (_, index) => ({ dn: `cn=user${index},${baseDn}`, attributes: {} }));
-    search.mockResolvedValue({ entries, count: entries.length, truncated: false });
+    searchStart.mockResolvedValue({ searchId: "root", entries, hasMore: false });
     count.mockResolvedValue({ count: entries.length });
     await useRealList();
     (wrapper.find(".tree-node").element as HTMLElement).focus();
@@ -102,6 +111,7 @@ describe("DnTree keyboard navigation through virtual rows", () => {
 
   it("navigates the full filtered list and ignores hierarchy keys there", async () => {
     const entries = Array.from({ length: 100 }, (_, index) => ({ dn: `cn=user${index},${baseDn}`, attributes: {} }));
+    searchStart.mockResolvedValue({ searchId: "root", entries, hasMore: false });
     search.mockResolvedValue({ entries, count: entries.length, truncated: false });
     await useRealList();
     await filter("user");
@@ -121,6 +131,79 @@ async function filter(keyword: string) {
   await vi.advanceTimersByTimeAsync(300);
   await flushPromises();
 }
+
+describe("DnTree server-side child cursors", () => {
+  const titles = () => wrapper.findAll(".tree-node").map((item) => item.attributes("title"));
+
+  it("starts with one bounded page then appends only the next cursor page", async () => {
+    const first = { dn: "ou=people," + baseDn, attributes: {} };
+    const second = { dn: "cn=admins," + baseDn, attributes: {} };
+    searchStart.mockResolvedValueOnce({ searchId: "root-page", entries: [first], hasMore: true });
+    searchNext.mockResolvedValueOnce({ entries: [second], hasMore: false });
+
+    await wrapper.vm.refresh();
+    await flushPromises();
+
+    expect(searchStart).toHaveBeenCalledWith(expect.objectContaining({
+      baseDn,
+      scope: "one",
+      pageSize: 500,
+    }));
+    expect(search).not.toHaveBeenCalled();
+    expect(wrapper.find(".tree-badge--truncated").text()).toBe("1+");
+
+    await wrapper.find(".tree-badge--truncated").trigger("click");
+    await flushPromises();
+
+    expect(searchNext).toHaveBeenCalledWith("root-page", undefined);
+    expect(searchStart).toHaveBeenCalledTimes(1);
+    expect(titles()).toEqual([baseDn, first.dn, second.dn]);
+    expect(wrapper.find(".tree-badge--truncated").exists()).toBe(false);
+  });
+
+  it("keeps an already expanded child object when a later page is appended", async () => {
+    const parent = { dn: "ou=people," + baseDn, attributes: {} };
+    const leaf = { dn: "uid=alice," + parent.dn, attributes: {} };
+    const sibling = { dn: "cn=admins," + baseDn, attributes: {} };
+    searchStart.mockResolvedValueOnce({ searchId: "root-page", entries: [parent], hasMore: true });
+    searchStart.mockResolvedValueOnce({ searchId: "parent-page", entries: [leaf], hasMore: false });
+    searchNext.mockResolvedValueOnce({ entries: [sibling], hasMore: false });
+
+    await wrapper.vm.refresh();
+    await flushPromises();
+    await wrapper.findAll(".tree-node").find((item) => item.attributes("title") === parent.dn)!.trigger("dblclick");
+    await flushPromises();
+    expect(titles()).toContain(leaf.dn);
+
+    await wrapper.find(".tree-badge--truncated").trigger("click");
+    await flushPromises();
+    expect(titles()).toEqual([baseDn, parent.dn, leaf.dn, sibling.dn]);
+  });
+
+  it("cancels active cursors when refreshing, invalidating, unmounting, or switching connections", async () => {
+    searchStart
+      .mockResolvedValueOnce({ searchId: "refresh-old", entries: [], hasMore: true })
+      .mockResolvedValueOnce({ searchId: "refresh-new", entries: [], hasMore: true })
+      .mockResolvedValueOnce({ searchId: "connection-old", entries: [], hasMore: true })
+      .mockResolvedValueOnce({ searchId: "connection-new", entries: [], hasMore: true });
+
+    await wrapper.vm.refresh();
+    await wrapper.vm.refresh();
+    expect(searchCancel).toHaveBeenCalledWith("refresh-old", undefined);
+
+    wrapper.vm.invalidate(baseDn);
+    expect(searchCancel).toHaveBeenCalledWith("refresh-new", undefined);
+
+    await wrapper.vm.refresh();
+    await flushPromises();
+    await wrapper.setProps({ connectionId: "next-connection" });
+    await flushPromises();
+    expect(searchCancel).toHaveBeenCalledWith("connection-old", undefined);
+
+    wrapper.unmount();
+    expect(searchCancel).toHaveBeenCalledWith("connection-new", "next-connection");
+  });
+});
 
 describe("DnTree context menu presentation", () => {
   it("closes when selecting another filtered tree row", async () => {

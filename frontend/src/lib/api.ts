@@ -32,6 +32,17 @@ export interface LdapSearchResult {
   truncated: boolean;
 }
 
+/** A server-side paged search. `hasMore` is authoritative: callers must not
+ * infer completion from the number of entries in a page. */
+export interface LdapSearchPage {
+  entries: LdapEntry[];
+  hasMore: boolean;
+}
+
+export interface LdapSearchSessionResult extends LdapSearchPage {
+  searchId: string;
+}
+
 export interface LdapModifyChange {
   operation: "add" | "replace" | "delete";
   attribute: string;
@@ -110,6 +121,28 @@ async function callLdap<T>(method: string, params: Record<string, unknown> = {},
 export const ldapApi = {
   search(params: LdapSearchRequest, options?: { timeoutMs?: number }) {
     return callLdap<LdapSearchResult>("ldap/search", { ...params }, options);
+  },
+
+  searchStart(params: LdapSearchRequest, options?: { timeoutMs?: number }) {
+    return callLdap<LdapSearchSessionResult>("ldap/search/start", { ...params }, options);
+  },
+
+  // `connectionId` is only used while disposing a search started by a
+  // connection that has since been switched away from.  callLdap deliberately
+  // permits this explicit value to override the current UI context.
+  searchNext(searchId: string, connectionId?: string, options?: { timeoutMs?: number }) {
+    return callLdap<LdapSearchPage>(
+      "ldap/search/next",
+      { searchId, ...(connectionId ? { connectionId } : {}) },
+      options,
+    );
+  },
+
+  searchCancel(searchId: string, connectionId?: string) {
+    return callLdap<{ success: boolean }>(
+      "ldap/search/cancel",
+      { searchId, ...(connectionId ? { connectionId } : {}) },
+    );
   },
 
   count(baseDn: string, filter?: string) {
