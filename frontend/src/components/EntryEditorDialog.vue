@@ -71,7 +71,7 @@ const emit = defineEmits<{
   (e: "error", message: string): void;
   (e: "notify", message: string): void;
   (e: "openEntry", dn: string): void;
-  (e: "openRelatedEntry", dn: string): void;
+  (e: "openRelatedEntry", dn: string, attribute?: string): void;
   (e: "retry"): void;
   (e: "loadDeferred"): void;
 }>();
@@ -98,6 +98,7 @@ const requiredErrorId = useId();
 const rdnErrorId = useId();
 const parentErrorId = useId();
 let suppressLdifSync = false;
+let initializedIdentity = "";
 
 const isAdd = computed(() => mode.value === "add");
 const isRelationPresentation = computed(() => props.presentation === "relation");
@@ -207,11 +208,16 @@ watch([ldifText, editorTab], ([text, tab]) => {
 });
 
 function initFor(mode_: EditorMode, entry?: LdapEntry, parentDn?: string) {
+  const nextIdentity = entry ? `entry:${entry.dn.toLowerCase()}` : `add:${parentDn ?? ""}`;
+  const preserveTab = initializedIdentity === nextIdentity;
+  initializedIdentity = nextIdentity;
   mode.value = mode_;
   // 页签初始态：view 态尊重 initialTab（树「查看成员」直开关联页），其余
   // （含 add）一律回落表单——默认值不影响既有调用方的打开行为。
   const requestedTab = props.initialTab;
-  editorTab.value = mode_ === "view" && (requestedTab === "ldif" || requestedTab === "assoc") ? requestedTab : "form";
+  if (!preserveTab) {
+    editorTab.value = mode_ === "view" && (requestedTab === "ldif" || requestedTab === "assoc") ? requestedTab : "form";
+  }
   ldifError.value = "";
   ldifDnChanged.value = false;
   saving.value = false;
@@ -243,7 +249,11 @@ function initFor(mode_: EditorMode, entry?: LdapEntry, parentDn?: string) {
 watch(
   () => [props.open, props.entry, props.parentDn, props.loading, props.loadingMore, props.loadingDeferred, props.loadError] as const,
   ([open]) => {
-    if (!open || props.loading || props.loadError) return;
+    if (!open) {
+      initializedIdentity = "";
+      return;
+    }
+    if (props.loading || props.loadError) return;
     initFor(props.entry ? "view" : "add", props.entry, props.parentDn);
   },
   { immediate: true },
@@ -415,6 +425,22 @@ const isOidShape = (value: string) => /^\d+(\.\d+)+$/.test(value.trim());
 // DatetimeValueEditor 的 kind 收窄（模板 v-else-if 无法让 TS 收窄联合类型）。
 function datetimeKind(row: AttrRowDraft): "datetime" | "filetime" {
   return rowEditorKind(row) === "filetime" ? "filetime" : "datetime";
+}
+
+function valueFormatLabel(row: AttrRowDraft): string {
+  if (isObjectClassRow(row)) return t("ldap.valueEditors.formatObjectClass");
+  switch (editorKind(row.name)) {
+    case "password": return t("ldap.valueEditors.formatPassword");
+    case "binary": return t("ldap.valueEditors.formatBinary");
+    case "datetime": return t("ldap.valueEditors.formatGeneralizedTime");
+    case "filetime": return t("ldap.valueEditors.formatFiletime");
+    case "dn": return t("ldap.valueEditors.formatDn");
+    case "boolean": return t("ldap.valueEditors.formatBoolean");
+    case "integer": return t("ldap.valueEditors.formatInteger");
+    case "uac": return t("ldap.valueEditors.formatUac");
+    case "oid": return t("ldap.valueEditors.formatOid");
+    default: return t("ldap.valueEditors.formatText");
+  }
 }
 
 function rowValues(row: AttrRowDraft): string[] {
@@ -589,7 +615,10 @@ function onBackdropClick() {
 
 function onAssociationOpen(dn: string) {
   emit("openEntry", dn);
-  emit("openRelatedEntry", dn);
+}
+
+function onAssociationRelation(dn: string, attribute?: string) {
+  emit("openRelatedEntry", dn, attribute);
 }
 </script>
 
@@ -641,13 +670,26 @@ function onAssociationOpen(dn: string) {
       </div>
       <template v-if="editorTab === 'form'">
         <div ref="attrEditor" class="attr-editor">
+          <div class="attr-column-labels" aria-hidden="true">
+            <span>{{ t("editor.attribute") }}</span>
+            <span>{{ t("editor.values") }}</span>
+            <span></span>
+          </div>
           <p v-if="rows.length === 0" class="empty" role="status">{{ t("editor.noAttributes") }}</p>
           <datalist :id="attributeListId">
             <option v-for="option in attributeOptions" :key="option" :value="option" />
           </datalist>
           <div v-for="(row, index) in rows" :key="index" class="attr-row">
-            <input v-model="row.name" type="text" name="attr-name" :list="attributeListId" :placeholder="t('editor.attribute')" :aria-label="t('editor.attribute')" :disabled="!editable" spellcheck="false" />
-            <span class="attr-value-cell" role="group" :aria-label="row.name || t('editor.values')" :aria-describedby="fieldMissing(row.name) ? requiredErrorId : undefined">
+            <div class="attr-name-field">
+              <input v-model="row.name" type="text" name="attr-name" :list="attributeListId" :placeholder="t('editor.attribute')" :aria-label="t('editor.attribute')" :disabled="!editable" spellcheck="false" />
+              <div class="attr-meta">
+                <span class="attr-format-label">{{ valueFormatLabel(row) }}</span>
+                <span v-if="rowValues(row).length > 1" class="attr-count-label">{{ t("editor.valueCount", { count: rowValues(row).length }) }}</span>
+                <span v-if="mustAttributes.has(row.name.split(';')[0].trim().toLowerCase())" class="must-label must-mark" :title="t('editor.requiredAttributes')">★ MUST</span>
+              </div>
+            </div>
+            <div class="attr-value-field">
+              <span class="attr-value-cell" role="group" :aria-label="row.name || t('editor.values')" :aria-describedby="fieldMissing(row.name) ? requiredErrorId : undefined">
               <!-- objectClass 专用 chips 行：每 chip 一个类值，天然多值，
                    不走 textarea / 单值降级；值仍落回 valuesText 保持同步语义。 -->
               <template v-if="isObjectClassRow(row)">
@@ -706,6 +748,7 @@ function onAssociationOpen(dn: string) {
                 :disabled="!editable"
                 :base-dn="baseDn"
                 @update:model-value="row.valuesText = $event"
+                @open-reference="emit('openRelatedEntry', $event, row.name)"
               />
               <select
                 v-else-if="rowEditorKind(row) === 'boolean'"
@@ -756,9 +799,9 @@ function onAssociationOpen(dn: string) {
                 <textarea v-model="row.valuesText" rows="2" :placeholder="t('editor.values')" :aria-label="row.name || t('editor.values')" :aria-invalid="fieldMissing(row.name)" :aria-describedby="fieldMissing(row.name) ? requiredErrorId : undefined" :disabled="!editable" spellcheck="false" />
                 <small v-if="row.multiline" class="multiline-hint">{{ t("editor.multilineHint") }}</small>
               </template>
-            </span>
+              </span>
+            </div>
             <span class="attr-actions">
-              <span v-if="mustAttributes.has(row.name.split(';')[0].trim().toLowerCase())" class="must-mark" :title="t('editor.requiredAttributes')" aria-hidden="true">★</span>
               <button :title="t('editor.copyValue')" :aria-label="t('editor.copyValue')" :disabled="row.valuesText === ''" @click="copyText(row.valuesText)"><Copy aria-hidden="true" /></button>
               <button :title="t('editor.removeAttribute')" :disabled="!editable" @click="removeRow(index)"><Trash2 /></button>
             </span>
@@ -773,6 +816,7 @@ function onAssociationOpen(dn: string) {
         :dn-attributes="dnAttributes"
         :active="open && editorTab === 'assoc'"
         @open-entry="onAssociationOpen"
+        @open-relation="onAssociationRelation"
         @error="(m: string) => emit('error', m)"
         @notify="(m: string) => emit('notify', m)"
       />
@@ -783,7 +827,7 @@ function onAssociationOpen(dn: string) {
         <button v-if="editorTab === 'form' && !loading && !loadError" class="toolbar-button" style="margin-right: auto" :disabled="!editable" @click="addRow">
           <Plus aria-hidden="true" />{{ t("editor.addAttribute") }}
         </button>
-        <button type="button" @click="emit('close')">{{ t("cancel") }}</button>
+        <button type="button" @click="emit('close')">{{ isRelationPresentation ? t("close") : t("cancel") }}</button>
         <!-- 关联页签是只读视图：保存等编辑动作一并隐藏，仅保留取消（关闭）。 -->
         <button v-if="canWrite && editorTab !== 'assoc' && !loading && !loadError" type="button" class="primary-button" :disabled="!editable || rdnInvalid || parentInvalid || missingRequired.length > 0" @click="save">
           {{ saving ? "…" : t("save") }}

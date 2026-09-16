@@ -4,7 +4,7 @@
 // 形态预检（dn.ts isLikelyDn）给出非阻断提示。多值行由 dialog 降级回
 // textarea，不进本组件。
 import { computed, ref } from "vue";
-import { ListTree } from "@lucide/vue";
+import { ExternalLink, ListTree } from "@lucide/vue";
 import DnPickerDialog from "./DnPickerDialog.vue";
 import { isLikelyDn } from "../lib/dn";
 import { t } from "../lib/i18n";
@@ -18,6 +18,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
+  (e: "openReference", value: string): void;
 }>();
 
 const pickerOpen = ref(false);
@@ -33,19 +34,32 @@ function onPick(dn: string) {
 <template>
   <div class="dn-editor">
     <div class="dn-controls">
-      <input
-        class="mono dn-input"
-        type="text"
-        :value="modelValue"
-        :disabled="disabled"
-        :aria-label="t('ldap.valueEditors.rawValue')"
-        :aria-invalid="shapeHint"
-        :placeholder="'cn=user,ou=people,dc=example,dc=com'"
-        spellcheck="false"
-        @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
-      />
+      <label class="dn-control">
+        <span class="dn-control-label">{{ t("ldap.valueEditors.rawValue") }}</span>
+        <input
+          class="mono dn-input"
+          type="text"
+          :value="modelValue"
+          :disabled="disabled"
+          :aria-label="t('ldap.valueEditors.rawValue')"
+          :aria-invalid="shapeHint"
+          :placeholder="'cn=user,ou=people,dc=example,dc=com'"
+          spellcheck="false"
+          @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
+        />
+      </label>
       <button type="button" class="toolbar-button" :disabled="disabled || !baseDn" @click="pickerOpen = true">
         <ListTree aria-hidden="true" /><span>{{ t("ldap.valueEditors.pickFromTree") }}</span>
+      </button>
+      <button
+        type="button"
+        class="toolbar-button dn-open-reference"
+        :disabled="shapeHint || modelValue.trim() === ''"
+        :title="t('ldap.valueEditors.openReference')"
+        :aria-label="t('ldap.valueEditors.openReference')"
+        @click="emit('openReference', modelValue.trim())"
+      >
+        <ExternalLink aria-hidden="true" /><span>{{ t("ldap.valueEditors.openReference") }}</span>
       </button>
     </div>
     <p v-if="shapeHint" class="form-error">{{ t("ldap.valueEditors.dnShapeHint") }}</p>
@@ -62,11 +76,22 @@ function onPick(dn: string) {
 }
 .dn-controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  align-items: center;
+  align-items: flex-end;
+}
+.dn-control {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+.dn-control-label {
+  color: var(--muted-foreground);
+  font-size: 9px;
 }
 .dn-input {
-  flex: 1;
   min-width: 160px;
 }
 </style>

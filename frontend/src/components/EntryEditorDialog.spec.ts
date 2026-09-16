@@ -69,6 +69,8 @@ function mountEditor(props: {
   dnAttributes?: string[];
   schema?: LdapSchema;
   loading?: boolean;
+  loadingMore?: boolean;
+  loadingDeferred?: boolean;
   loadError?: string;
   requestedDn?: string;
 }) {
@@ -559,6 +561,23 @@ describe("EntryEditorDialog", () => {
     expect(wrapper.find(".ldif-editor").exists()).toBe(false);
     expect(wrapper.find("footer .primary-button").exists()).toBe(false);
     expect(wrapper.find("footer .toolbar-button").exists()).toBe(false);
+  });
+
+  it("keeps the association tab active while deferred attributes load", async () => {
+    const wrapper = trackEditor({ canWrite: true, open: true, entry: demoEntry, baseDn: "dc=demo,dc=dbx" });
+    await wrapper.findAll(".mode-switch button")[2].trigger("click");
+    expect(wrapper.findComponent({ name: "AssociationPanel" }).exists()).toBe(true);
+
+    await wrapper.setProps({ loadingDeferred: true });
+    expect(wrapper.findComponent({ name: "AssociationPanel" }).exists()).toBe(true);
+    await wrapper.setProps({
+      entry: { ...demoEntry, attributes: { ...demoEntry.attributes, member: ["uid=x,dc=demo,dc=dbx"] } },
+      loadingDeferred: false,
+    });
+    expect(wrapper.findComponent({ name: "AssociationPanel" }).props("attributes")).toMatchObject({
+      member: ["uid=x,dc=demo,dc=dbx"],
+    });
+    expect(wrapper.findComponent({ name: "AssociationPanel" }).exists()).toBe(true);
   });
 
   it("bubbles openEntry emitted by the AssociationPanel", async () => {

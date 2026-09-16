@@ -177,13 +177,15 @@ describe("DbxAgGrid", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     (window as unknown as { dbxPlugin?: unknown }).dbxPlugin = { clipboard: { writeText } };
     const wrapper = mountGrid();
+    const nativeEvent = new MouseEvent("contextmenu", { clientX: 30, clientY: 40, cancelable: true });
     gridMock.created[0].options.onCellContextMenu?.({
-      event: new MouseEvent("contextmenu", { clientX: 30, clientY: 40 }),
+      event: nativeEvent,
       data: row,
       value: row.cn,
       column: { getColDef: () => ({ field: "cn" }) },
       api: lastApi(wrapper),
     } as never);
+    expect(nativeEvent.defaultPrevented).toBe(true);
     await wrapper.vm.$nextTick();
     expect(wrapper.findAll(".grid-context-menu button").map((button) => button.text())).toEqual(["复制值", "复制行"]);
     await wrapper.findAll(".grid-context-menu button")[0].trigger("click");

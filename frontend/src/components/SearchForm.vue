@@ -4,13 +4,13 @@
 // + scope/attributes/sizeLimit/pageSize/typesOnly/derefAliases
 // + 预设（持久化过滤器串，应用时重建构建器；sidecar 不存 conditions）。
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
-import { ChevronDown, ChevronUp, History, Play, Save, Trash2 } from "@lucide/vue";
+import { ChevronDown, ChevronUp, Clock3, History, Play, Save, Trash2 } from "@lucide/vue";
 import { getLdapConnectionId, ldapApi, type LdapSearchPreset, type LdapScope } from "../lib/api";
 import { validateLDAPFilter, buildNodeFilter, collectBuilderErrors, parseFilterStructure, toBuilderRoot, createBuilderClause, createBuilderGroup, type BuilderGroup } from "../lib/ldapFilter";
 import { parseLdapSearchCommand, type LdapSearchCommandFailure } from "../lib/ldapSearchCommand";
 import { parsePsAdCommand } from "../lib/psCommandImport";
 import { deriveSchemaMetadata, useLdapSchemaCache } from "../lib/schemaCache";
-import { t } from "../lib/i18n";
+import { t, workbenchLocale } from "../lib/i18n";
 import FilterGroup from "./FilterGroup.vue";
 
 export interface SearchFormModel {
@@ -184,6 +184,7 @@ interface SearchHistoryEntry {
   baseDn: string;
   scope: LdapScope;
   attributes: string;
+  timestamp: number;
 }
 
 const SEARCH_HISTORY_KEY = "dbx.ldap.ui.searchHistory";
@@ -197,14 +198,17 @@ function isHistoryEntry(value: unknown): value is SearchHistoryEntry {
     typeof entry.filter === "string" &&
     typeof entry.baseDn === "string" &&
     typeof entry.attributes === "string" &&
-    (entry.scope === "base" || entry.scope === "one" || entry.scope === "sub")
+    (entry.scope === "base" || entry.scope === "one" || entry.scope === "sub") &&
+    (entry.timestamp === undefined || (typeof entry.timestamp === "number" && Number.isFinite(entry.timestamp)))
   );
 }
 
 function readStoredHistory(): SearchHistoryEntry[] {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter(isHistoryEntry).slice(0, SEARCH_HISTORY_MAX) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter(isHistoryEntry).map((entry) => ({ ...entry, timestamp: entry.timestamp ?? 0 })).slice(0, SEARCH_HISTORY_MAX)
+      : [];
   } catch {
     return []; // 存储不可用/JSON 损坏：降级为空历史
   }
@@ -228,7 +232,13 @@ function sameHistoryEntry(a: SearchHistoryEntry, b: SearchHistoryEntry): boolean
  * 更早的相同条目前移（对标 ADS 语义），上限 10 条。filter 存实际生效串
  * （toModel 已兜底 (objectClass=*)，照存）。 */
 function recordSearch(model: SearchFormModel) {
-  const entry: SearchHistoryEntry = { filter: model.filter, baseDn: model.baseDn, scope: model.scope, attributes: model.attributes };
+  const entry: SearchHistoryEntry = {
+    filter: model.filter,
+    baseDn: model.baseDn,
+    scope: model.scope,
+    attributes: model.attributes,
+    timestamp: Date.now(),
+  };
   if (searchHistory.value[0] && sameHistoryEntry(searchHistory.value[0], entry)) return;
   searchHistory.value = [entry, ...searchHistory.value.filter((existing) => !sameHistoryEntry(existing, entry))].slice(0, SEARCH_HISTORY_MAX);
   persistHistory();
@@ -258,9 +268,18 @@ function applyHistory(entry: SearchHistoryEntry) {
   emit("notify", t("search.historyApplied"));
 }
 
+function formatHistoryTime(timestamp: number): string {
+  if (!timestamp) return "—";
+  try {
+    return new Intl.DateTimeFormat(workbenchLocale.value, { dateStyle: "short", timeStyle: "short" }).format(new Date(timestamp));
+  } catch {
+    return new Date(timestamp).toLocaleString();
+  }
+}
+
 function clearHistory() {
-  // 历史是本地持久化数据：清空前确认（同预设删除的先例）。
-  if (!window.confirm(t("search.historyClearConfirm"))) return;
+  // 搜索历史只是本地辅助数据，直接清空避免宿主 webview 的原生确认框
+  // 被拦截后看起来像按钮失效；面板保持打开并显示空状态。
   searchHistory.value = [];
   persistHistory();
 }
@@ -648,6 +667,7 @@ const derefOptions = computed(() => [
         <option v-for="option in scopeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
       </select>
       <input
+        v-if="collapsed"
         :value="compactFilterValue"
         type="text"
         class="mono compact-filter"
@@ -658,7 +678,7 @@ const derefOptions = computed(() => [
         spellcheck="false"
         @input="onCompactFilterInput"
       />
-      <span v-if="compactFilterError" class="form-error" role="alert">{{ compactFilterError }}</span>
+      <span v-if="collapsed && compactFilterError" class="form-error" role="alert">{{ compactFilterError }}</span>
       <!-- 历史入口（快捷条）：置于筛选条件切换与搜索之间左侧；切换与展开态同一个下拉状态。 -->
       <div ref="historyRootCompact" class="search-history">
         <button
@@ -676,14 +696,27 @@ const derefOptions = computed(() => [
         <div v-if="historyOpen" class="history-panel">
           <div class="history-head">
             <span>{{ t("search.historyTitle") }}</span>
-            <button type="button" class="history-clear" :disabled="!searchHistory.length" @click="clearHistory">{{ t("search.historyClear") }}</button>
+            <button
+              type="button"
+              class="history-clear"
+              :disabled="!searchHistory.length"
+              :aria-label="t('search.historyClear')"
+              :title="t('search.historyClear')"
+              @click.stop.prevent="clearHistory"
+            >
+              <Trash2 aria-hidden="true" />{{ t("search.historyClear") }}
+            </button>
           </div>
           <p v-if="searchHistory.length === 0" class="history-empty">{{ t("search.historyEmpty") }}</p>
           <ul v-else class="history-list">
-            <li v-for="(entry, index) in searchHistory" :key="index">
+            <li v-for="(entry, index) in searchHistory" :key="`${entry.timestamp}-${index}`">
               <button type="button" class="history-item" :title="entry.filter" @click="applyHistory(entry)">
-                <span class="mono history-filter">{{ entry.filter }}</span>
-                <span class="history-meta">{{ entry.scope }} · {{ entry.baseDn || "—" }} · {{ entry.attributes || "—" }}</span>
+                <span class="history-index" aria-hidden="true">{{ index + 1 }}</span>
+                <span class="history-content">
+                  <span class="mono history-filter">{{ entry.filter }}</span>
+                  <span class="history-meta">{{ entry.scope }} · {{ entry.baseDn || "—" }} · {{ entry.attributes || "—" }}</span>
+                  <span class="history-time"><Clock3 aria-hidden="true" />{{ formatHistoryTime(entry.timestamp) }}</span>
+                </span>
               </button>
             </li>
           </ul>

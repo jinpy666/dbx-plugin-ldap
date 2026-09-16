@@ -72,6 +72,14 @@ describe("EntryEditorDialog value editor routing", () => {
     expect(rowFor(wrapper, "manager").find(".dn-editor").exists()).toBe(true);
   });
 
+  it("opens a DN value as a relation with its source attribute", async () => {
+    const activeWrapper = track({ canWrite: true, open: true, entry, schema });
+    const row = rowFor(activeWrapper, "manager");
+    row.findComponent({ name: "DnValueEditor" }).vm.$emit("openReference", "cn=bob,dc=demo,dc=dbx");
+    await activeWrapper.vm.$nextTick();
+    expect(activeWrapper.emitted("openRelatedEntry")?.[0]).toEqual(["cn=bob,dc=demo,dc=dbx", "manager"]);
+  });
+
   it("degrades multi-valued DN attribute back to textarea", () => {
     expect(rowFor(wrapper, "member").find("textarea").exists()).toBe(true);
   });

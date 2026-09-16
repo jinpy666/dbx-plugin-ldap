@@ -41,7 +41,8 @@ const track = (props?: Parameters<typeof mountEditor>[0]) => {
 };
 
 const INPUT = ".dn-input";
-const PICK_BUTTON = ".dn-controls .toolbar-button";
+const PICK_BUTTON = ".dn-controls .toolbar-button:not(.dn-open-reference)";
+const OPEN_BUTTON = ".dn-open-reference";
 
 describe("DnValueEditor", () => {
   it("renders the value and writes edits back verbatim", async () => {
@@ -75,5 +76,18 @@ describe("DnValueEditor", () => {
 
   it("disables the text input in disabled mode", () => {
     expect((track({ disabled: true }).find(INPUT).element as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it("opens a valid reference even when value editing is disabled", async () => {
+    const dn = "cn=a,dc=demo,dc=dbx";
+    const wrapper = track({ modelValue: dn, disabled: true });
+    expect((wrapper.find(OPEN_BUTTON).element as HTMLButtonElement).disabled).toBe(false);
+    await wrapper.find(OPEN_BUTTON).trigger("click");
+    expect(wrapper.emitted("openReference")?.[0]).toEqual([dn]);
+  });
+
+  it("does not open an empty or malformed reference", () => {
+    expect((track({ modelValue: "" }).find(OPEN_BUTTON).element as HTMLButtonElement).disabled).toBe(true);
+    expect((track({ modelValue: "not a dn" }).find(OPEN_BUTTON).element as HTMLButtonElement).disabled).toBe(true);
   });
 });

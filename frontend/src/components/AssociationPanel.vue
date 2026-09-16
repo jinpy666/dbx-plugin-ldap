@@ -55,6 +55,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   (e: "openEntry", dn: string): void;
+  (e: "openRelation", dn: string, attribute?: string): void;
   (e: "error", message: string): void;
   (e: "notify", message: string): void;
 }>();
@@ -143,7 +144,7 @@ const dnReferenceGroups = computed<DnReferenceGroup[]>(() => {
 
 // 四个列表统一为 AssocEntry[]，走同一套过滤与两行式行渲染。
 const filteredMemberEntries = computed<AssocEntry[]>(() =>
-  memberDns.value.filter((dn) => passesFilter(dn)).map((dn) => ({ dn })),
+  memberDns.value.filter((dn) => passesFilter(dn)).map((dn) => ({ dn, attribute: "member" })),
 );
 const filteredReferenceEntries = computed<AssocEntry[]>(() =>
   dnReferenceGroups.value.flatMap((group) =>
@@ -208,7 +209,7 @@ watch(
 );
 
 const filteredMemberOfEntries = computed<AssocEntry[]>(() =>
-  memberOfDns.value.filter((dn) => passesFilter(dn)).map((dn) => ({ dn })),
+  memberOfDns.value.filter((dn) => passesFilter(dn)).map((dn) => ({ dn, attribute: "member" })),
 );
 
 // -- 被引用（核心引用属性 OR 过滤器子树反查，与所属区同款门控与防竞态） --------
@@ -268,7 +269,7 @@ watch(
 );
 
 const filteredReferencedByEntries = computed<AssocEntry[]>(() =>
-  referencedByDns.value.filter((dn) => passesFilter(dn)).map((dn) => ({ dn })),
+  referencedByDns.value.filter((dn) => passesFilter(dn)).map((dn) => ({ dn, attribute: t("associations.referenceField") })),
 );
 
 // Large member/reference attributes stay searchable without mounting every row.
@@ -329,6 +330,11 @@ const listResetKey = computed(() => `${props.dn}|${activeTab.value}|${filterText
 async function copyDnValue(dn: string) {
   emit("notify", (await writeClipboardText(dn)) ? t("copied") : t("copyFailed"));
 }
+
+function openAssociation(entry: AssocEntry) {
+  emit("openEntry", entry.dn);
+  emit("openRelation", entry.dn, entry.attribute);
+}
 </script>
 
 <template>
@@ -372,14 +378,13 @@ async function copyDnValue(dn: string) {
             class="tree-row assoc-row"
             :title="item.dn"
             style="cursor: pointer; height: 100%; gap: 6px"
-            @click="emit('openEntry', item.dn)"
+            @click="openAssociation(item)"
           >
             <span style="display: flex; min-width: 0; flex: 1; flex-direction: column; justify-content: center; gap: 1px">
               <span style="display: flex; min-width: 0; align-items: baseline; gap: 6px">
                 <!-- 第一行：RDN（mono、主文本） -->
                 <span class="mono" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ splitFirstDnRdn(item.dn).rdn }}</span>
-                <!-- 来源属性小字：仅 DN 引用页签的行有值 -->
-                <span v-if="item.attribute" class="muted assoc-attr" style="flex-shrink: 0; font-size: 10px">{{ item.attribute }}</span>
+                <span v-if="item.attribute" class="assoc-field-label assoc-attr">{{ item.attribute }}</span>
               </span>
               <!-- 第二行：完整 DN（muted、ellipsis；完整内容由行 title 悬停查看） -->
               <span class="muted" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px">{{ item.dn }}</span>
@@ -407,12 +412,12 @@ async function copyDnValue(dn: string) {
             class="tree-row assoc-row"
             :title="item.dn"
             style="cursor: pointer; height: 100%; gap: 6px"
-            @click="emit('openEntry', item.dn)"
+            @click="openAssociation(item)"
           >
             <span style="display: flex; min-width: 0; flex: 1; flex-direction: column; justify-content: center; gap: 1px">
               <span style="display: flex; min-width: 0; align-items: baseline; gap: 6px">
                 <span class="mono" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ splitFirstDnRdn(item.dn).rdn }}</span>
-                <span v-if="item.attribute" class="muted assoc-attr" style="flex-shrink: 0; font-size: 10px">{{ item.attribute }}</span>
+                <span v-if="item.attribute" class="assoc-field-label assoc-attr">{{ item.attribute }}</span>
               </span>
               <span class="muted" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px">{{ item.dn }}</span>
             </span>
@@ -444,12 +449,12 @@ async function copyDnValue(dn: string) {
               class="tree-row assoc-row"
               :title="item.dn"
               style="cursor: pointer; height: 100%; gap: 6px"
-              @click="emit('openEntry', item.dn)"
+              @click="openAssociation(item)"
             >
               <span style="display: flex; min-width: 0; flex: 1; flex-direction: column; justify-content: center; gap: 1px">
                 <span style="display: flex; min-width: 0; align-items: baseline; gap: 6px">
                   <span class="mono" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ splitFirstDnRdn(item.dn).rdn }}</span>
-                  <span v-if="item.attribute" class="muted assoc-attr" style="flex-shrink: 0; font-size: 10px">{{ item.attribute }}</span>
+                  <span v-if="item.attribute" class="assoc-field-label assoc-attr">{{ item.attribute }}</span>
                 </span>
                 <span class="muted" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px">{{ item.dn }}</span>
               </span>
@@ -483,12 +488,12 @@ async function copyDnValue(dn: string) {
               class="tree-row assoc-row"
               :title="item.dn"
               style="cursor: pointer; height: 100%; gap: 6px"
-              @click="emit('openEntry', item.dn)"
+              @click="openAssociation(item)"
             >
               <span style="display: flex; min-width: 0; flex: 1; flex-direction: column; justify-content: center; gap: 1px">
                 <span style="display: flex; min-width: 0; align-items: baseline; gap: 6px">
                   <span class="mono" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ splitFirstDnRdn(item.dn).rdn }}</span>
-                  <span v-if="item.attribute" class="muted assoc-attr" style="flex-shrink: 0; font-size: 10px">{{ item.attribute }}</span>
+                  <span v-if="item.attribute" class="assoc-field-label assoc-attr">{{ item.attribute }}</span>
                 </span>
                 <span class="muted" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px">{{ item.dn }}</span>
               </span>

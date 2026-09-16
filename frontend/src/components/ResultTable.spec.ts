@@ -170,8 +170,8 @@ describe("ResultTable grid wiring (AG Grid)", () => {
     expect(grid.props("rowSelection")).toBe(false);
     expect(grid.props("clientSideComplete")).toBe(false);
     for (const button of wrapper.findAll(".pager button")) expect(button.attributes("disabled")).toBeDefined();
-    await wrapper.find(".load-more").trigger("click");
-    expect(wrapper.emitted("loadMore")).toHaveLength(1);
+    expect(wrapper.find(".load-more").exists()).toBe(false);
+    expect(wrapper.find(".auto-load-status").exists()).toBe(true);
     wrapper.unmount();
   });
 

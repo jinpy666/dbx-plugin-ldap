@@ -99,8 +99,11 @@ function closeContextMenu() {
 
 function onCellContextMenu(event: CellContextMenuEvent) {
   const pointer = event.event;
+  // AG Grid's callback can arrive after the native event has already bubbled
+  // through the grid. Cancel it before validating the cell payload so a
+  // browser/webview context menu can never win the race with our menu.
+  if (pointer instanceof MouseEvent) pointer.preventDefault();
   if (!(pointer instanceof MouseEvent) || !event.data || !event.column) return;
-  pointer.preventDefault();
   const field = event.column.getColDef().field;
   if (typeof field !== "string" || !field) return;
   const fields = event.api
@@ -242,7 +245,7 @@ defineExpose({ deselectAll });
 </script>
 
 <template>
-  <div ref="host" class="dbx-grid ag-theme-quartz" />
+  <div ref="host" class="dbx-grid ag-theme-quartz" @contextmenu.prevent />
   <div v-if="contextMenu" ref="contextMenuEl" class="context-menu grid-context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @click.stop>
     <button type="button" @click="copyContext('value')">{{ t("result.copyValue") }}</button>
     <button type="button" @click="copyContext('row')">{{ t("result.copyRow") }}</button>

@@ -35,7 +35,6 @@ import type { LdapSchema } from "./lib/newEntryTemplates";
 import { parseAuditEvent, pushAuditItem, type AuditFeedItem } from "./lib/auditFeed";
 import { setupTooltipLayer, teardownTooltipLayer } from "./lib/tooltip";
 import { chunkEntryAttributes, ENTRY_PRIORITY_ATTRIBUTES, mergeEntryAttributes, partitionEntryAttributes } from "./lib/stagedEntry";
-import { loadPreferredPageSize } from "./lib/ldapGrid";
 import { useModalA11y } from "./lib/modal";
 import { useUiIntent, type UiIntentOutcome, type UiIntentSummary } from "../../shared/frontend/uiIntent";
 
@@ -78,7 +77,6 @@ const searchError = ref("");
 const searchErrorDetail = ref("");
 let searchRequestSeq = 0;
 let activeSearchSession: { id: string; connectionId: string } | undefined;
-let idlePrefetchHandle: number | undefined;
 // 空结果两态（UI 扫描 P2-3）：执行过搜索后的 0 条 ≠ "请先执行搜索"。
 const hasSearched = ref(false);
 // 恰好等于 sizeLimit 的"整页结果"信号（UI 扫描 P2-15）：契约 truncated 只在
@@ -126,6 +124,7 @@ const referenceOpen = ref(false);
 interface ReferenceTab {
   id: string;
   dn: string;
+  attribute?: string;
   entry?: LdapEntry;
   loading: boolean;
   loadError: string;
@@ -138,6 +137,7 @@ let nextReferenceTabId = 0;
 const activeReferenceTab = computed(() => referenceTabs.value.find((tab) => tab.id === activeReferenceTabId.value));
 const referenceEntry = computed(() => activeReferenceTab.value?.entry);
 const referenceRequestedDn = computed(() => activeReferenceTab.value?.dn ?? "");
+const referenceAttribute = computed(() => activeReferenceTab.value?.attribute ?? "");
 const referenceLoading = computed(() => activeReferenceTab.value?.loading ?? false);
 const referenceLoadError = computed(() => activeReferenceTab.value?.loadError ?? "");
 const referenceLoadErrorDetail = computed(() => activeReferenceTab.value?.loadErrorDetail ?? "");
@@ -481,50 +481,36 @@ async function onBatchMoveConfirm(targetParentDn: string) {
   });
 }
 
-function cancelIdlePrefetch() {
-  if (idlePrefetchHandle === undefined) return;
-  if (typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(idlePrefetchHandle);
-  else window.clearTimeout(idlePrefetchHandle);
-  idlePrefetchHandle = undefined;
-}
-
 function cancelActiveSearchSession() {
-  cancelIdlePrefetch();
   const session = activeSearchSession;
   activeSearchSession = undefined;
   if (session) void ldapApi.searchCancel(session.id, session.connectionId).catch(() => {});
 }
 
-function scheduleIdlePrefetch(request: number, searchId: string) {
-  // One low-priority look-ahead page makes scrolling/paging feel immediate,
-  // without silently walking a potentially huge directory to completion.
-  cancelIdlePrefetch();
-  const callback = () => {
-    idlePrefetchHandle = undefined;
-    if (request === searchRequestSeq && activeSearchSession?.id === searchId) void loadNextSearchPage();
-  };
-  idlePrefetchHandle = typeof window.requestIdleCallback === "function"
-    ? window.requestIdleCallback(callback, { timeout: 1000 })
-    : window.setTimeout(callback, 750);
-}
-
 async function loadNextSearchPage() {
   const session = activeSearchSession;
   const request = searchRequestSeq;
-  if (!session || loadingMore.value || searching.value) return;
+  if (!session || loadingMore.value) return;
   loadingMore.value = true;
   loadMoreError.value = "";
   loadMoreErrorDetail.value = "";
   try {
-    const page = await ldapApi.searchNext(session.id, session.connectionId);
-    if (request !== searchRequestSeq || activeSearchSession?.id !== session.id) return;
-    const entries = Array.isArray(page.entries) ? page.entries : [];
-    // Keep every page in server cursor order. Do not re-query with a larger
-    // limit or de-duplicate locally: either would risk skipping real entries.
-    results.value = [...results.value, ...entries];
-    resultCount.value = results.value.length;
-    resultsComplete.value = page.hasMore !== true;
-    if (resultsComplete.value) activeSearchSession = undefined;
+    // Consume the cursor continuously. The grid may still render its own
+    // local pages, but users should never have to click once per server page.
+    while (request === searchRequestSeq && activeSearchSession?.id === session.id) {
+      const page = await ldapApi.searchNext(session.id, session.connectionId);
+      if (request !== searchRequestSeq || activeSearchSession?.id !== session.id) return;
+      const entries = Array.isArray(page.entries) ? page.entries : [];
+      // Keep every page in server cursor order. Do not re-query with a larger
+      // limit or de-duplicate locally: either would risk skipping real entries.
+      results.value = [...results.value, ...entries];
+      resultCount.value = results.value.length;
+      resultsComplete.value = page.hasMore !== true;
+      if (resultsComplete.value) {
+        activeSearchSession = undefined;
+        break;
+      }
+    }
   } catch (cause) {
     if (request === searchRequestSeq && activeSearchSession?.id === session.id) {
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -537,9 +523,8 @@ async function loadNextSearchPage() {
 }
 
 function requestNextSearchPage() {
-  // A user-requested continuation supersedes the one scheduled look-ahead;
-  // otherwise a quick click could consume two pages back-to-back.
-  cancelIdlePrefetch();
+  // Normally the cursor is drained automatically. This remains as a recovery
+  // path when a later page failed and the user explicitly retries it.
   void loadNextSearchPage();
 }
 
@@ -548,16 +533,17 @@ function searchRequest(model: SearchFormModel): LdapSearchRequest {
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
-  const requestedPageSize = positiveInt(model.pageSize) ?? loadPreferredPageSize("result");
+  const requestedPageSize = positiveInt(model.pageSize) ?? 500;
   return {
     baseDn: model.baseDn.trim() || undefined,
     filter: model.filter.trim() || "(objectClass=*)",
     scope: model.scope,
     ...(attributes.length > 0 ? { attributes } : {}),
     sizeLimit: positiveInt(model.sizeLimit),
-    // Do not let the legacy default of 500 postpone the first visible grid
-    // page. A user-requested smaller page is still respected.
-    pageSize: Math.min(requestedPageSize, loadPreferredPageSize("result")),
+    // This is the LDAP transport page size, independent from the grid's local
+    // display pagination. The cursor is drained automatically after the first
+    // page, so a default search of 500 entries does not become ten clicks.
+    pageSize: requestedPageSize,
     typesOnly: model.typesOnly,
     derefAliases: model.derefAliases,
   };
@@ -605,7 +591,7 @@ async function runSearch(model: SearchFormModel) {
       truncated: resultTruncated.value,
       ...(anchorDn ? { anchor: anchorDn } : {}),
     });
-    if (activeSearchSession) scheduleIdlePrefetch(request, activeSearchSession.id);
+    if (activeSearchSession) void loadNextSearchPage();
   } catch (cause) {
     if (request === searchRequestSeq) {
       resultsComplete.value = true;
@@ -854,10 +840,11 @@ function closeReference() {
   activeReferenceTabId.value = "";
 }
 
-async function openReferencedEntry(dn: string) {
+async function openReferencedEntry(dn: string, attribute?: string) {
   dialogOpenToken++;
   const existing = referenceTabs.value.find((tab) => tab.dn.toLowerCase() === dn.toLowerCase());
   if (existing) {
+    if (attribute) existing.attribute = attribute;
     activeReferenceTabId.value = existing.id;
     referenceOpen.value = true;
     return;
@@ -865,6 +852,7 @@ async function openReferencedEntry(dn: string) {
   const tab: ReferenceTab = {
     id: `reference-${++nextReferenceTabId}`,
     dn,
+    attribute,
     loading: true,
     loadError: "",
     loadErrorDetail: "",
@@ -877,17 +865,20 @@ async function openReferencedEntry(dn: string) {
   void ensureDnAttributes();
   try {
     const result = await ldapApi.entryGet(dn);
-    if (!referenceTabs.value.includes(tab) || request !== tab.requestSeq) return;
-    tab.entry = result.entry;
+    const current = referenceTabs.value.find((item) => item.id === tab.id);
+    if (!current || request !== current.requestSeq) return;
+    current.entry = result.entry;
     recordRecentEntry(dn);
     uiIntent.reportSnapshot({ panel: "entry", anchor: dn });
   } catch (cause) {
-    if (!referenceTabs.value.includes(tab) || request !== tab.requestSeq) return;
+    const current = referenceTabs.value.find((item) => item.id === tab.id);
+    if (!current || request !== current.requestSeq) return;
     const message = cause instanceof Error ? cause.message : String(cause);
-    tab.loadError = friendlyLdapError(message);
-    tab.loadErrorDetail = tab.loadError === message ? "" : message;
+    current.loadError = friendlyLdapError(message);
+    current.loadErrorDetail = current.loadError === message ? "" : message;
   } finally {
-    if (referenceTabs.value.includes(tab) && request === tab.requestSeq) tab.loading = false;
+    const current = referenceTabs.value.find((item) => item.id === tab.id);
+    if (current && request === current.requestSeq) current.loading = false;
   }
 }
 
@@ -925,15 +916,17 @@ function retryReference() {
   tab.loading = true;
   const request = ++tab.requestSeq;
   void ldapApi.entryGet(dn).then((result) => {
-    if (!referenceTabs.value.includes(tab) || request !== tab.requestSeq) return;
-    tab.entry = result.entry;
-    tab.loading = false;
+    const current = referenceTabs.value.find((item) => item.id === tab.id);
+    if (!current || request !== current.requestSeq) return;
+    current.entry = result.entry;
+    current.loading = false;
   }).catch((cause) => {
-    if (!referenceTabs.value.includes(tab) || request !== tab.requestSeq) return;
+    const current = referenceTabs.value.find((item) => item.id === tab.id);
+    if (!current || request !== current.requestSeq) return;
     const message = cause instanceof Error ? cause.message : String(cause);
-    tab.loadError = friendlyLdapError(message);
-    tab.loadErrorDetail = tab.loadError === message ? "" : message;
-    tab.loading = false;
+    current.loadError = friendlyLdapError(message);
+    current.loadErrorDetail = current.loadError === message ? "" : message;
+    current.loading = false;
   });
 }
 
@@ -1548,7 +1541,10 @@ onBeforeUnmount(() => {
               @open-related-entry="openReferencedEntry"
             />
           </div>
-          <div class="entry-relation-connector" aria-hidden="true">→</div>
+          <div class="entry-relation-connector" aria-hidden="true">
+            <span class="entry-relation-arrow">→</span>
+            <span v-if="referenceAttribute" class="entry-relation-field-label">{{ referenceAttribute }}</span>
+          </div>
           <div class="entry-relation-pane">
             <div class="entry-relation-tabs" role="tablist" :aria-label="t('editor.relationTarget')">
               <div
@@ -1564,7 +1560,10 @@ onBeforeUnmount(() => {
                   :aria-selected="tab.id === activeReferenceTabId"
                   :title="tab.dn"
                   @click="selectReferenceTab(tab.id)"
-                >{{ splitFirstDnRdn(tab.dn).rdn || tab.dn }}</button>
+                >
+                  <span class="entry-relation-tab-name">{{ splitFirstDnRdn(tab.dn).rdn || tab.dn }}</span>
+                  <span v-if="tab.attribute" class="entry-relation-tab-attribute">{{ tab.attribute }}</span>
+                </button>
                 <button type="button" class="entry-relation-tab-close" :title="t('close')" :aria-label="t('close')" @click.stop="closeReferenceTab(tab.id)">
                   <X aria-hidden="true" />
                 </button>

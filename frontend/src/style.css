@@ -246,16 +246,21 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
    质感沿用 .context-menu 的 popover 约定。 */
 .search-history { position: relative; display: inline-flex; flex: 0 0 auto; }
 .search-history .history-toggle { flex: 0 0 auto; }
-.history-panel { position: absolute; top: calc(100% + 4px); right: 0; z-index: 40; display: flex; width: min(420px, 92vw); max-height: 280px; flex-direction: column; gap: 4px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; background: var(--popover); box-shadow: 0 12px 36px rgb(0 0 0 / 24%); color: var(--foreground); }
-.history-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; color: var(--muted-foreground); }
-.history-clear { border: 0; background: transparent; padding: 2px 4px; color: var(--primary); font-size: 10px; cursor: pointer; }
-.history-clear:hover:not(:disabled) { text-decoration: underline; }
-.history-empty { margin: 0; color: var(--muted-foreground); font-size: 10px; }
-.history-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
-.history-item { display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 100%; border: 1px solid transparent; border-radius: 4px; padding: 4px 6px; background: transparent; color: var(--foreground); font-size: 11px; text-align: left; cursor: pointer; }
-.history-item:hover { border-color: var(--border); background: var(--accent); }
+.history-panel { position: absolute; top: calc(100% + 5px); right: 0; z-index: 40; display: flex; width: min(460px, 92vw); max-height: 320px; flex-direction: column; gap: 6px; overflow: auto; border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border)); border-radius: 8px; padding: 8px; background: var(--popover); box-shadow: 0 14px 36px rgb(0 0 0 / 28%); color: var(--foreground); }
+.history-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 2px 5px; border-bottom: 1px solid var(--border); font-size: 10px; color: var(--muted-foreground); }
+.history-clear { display: inline-flex; min-height: 23px; align-items: center; gap: 4px; border: 1px solid color-mix(in srgb, var(--destructive) 42%, var(--border)); border-radius: 5px; padding: 2px 7px; background: color-mix(in srgb, var(--destructive) 9%, transparent); color: var(--destructive); font-size: 10px; cursor: pointer; }
+.history-clear svg { width: 12px; height: 12px; }
+.history-clear:hover:not(:disabled) { background: color-mix(in srgb, var(--destructive) 18%, transparent); }
+.history-empty { margin: 4px 2px; color: var(--muted-foreground); font-size: 10px; text-align: center; }
+.history-list { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.history-item { display: flex; min-width: 0; align-items: flex-start; gap: 8px; width: 100%; border: 1px solid transparent; border-radius: 5px; padding: 6px 7px; background: transparent; color: var(--foreground); font-size: 11px; text-align: left; cursor: pointer; }
+.history-item:hover { border-color: color-mix(in srgb, var(--primary) 38%, var(--border)); background: color-mix(in srgb, var(--accent) 78%, transparent); }
+.history-index { display: inline-grid; width: 18px; height: 18px; flex: 0 0 18px; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary); font-size: 10px; font-variant-numeric: tabular-nums; }
+.history-content { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
 .history-filter { overflow-wrap: anywhere; }
-.history-meta { color: var(--muted-foreground); font-size: 10px; overflow-wrap: anywhere; }
+.history-meta, .history-time { color: var(--muted-foreground); font-size: 10px; overflow-wrap: anywhere; }
+.history-time { display: inline-flex; align-items: center; gap: 4px; }
+.history-time svg { width: 11px; height: 11px; flex: 0 0 11px; }
 /* 展开态定位行：Run 与「收起高级区」并排 */
 .run-row { display: flex; align-items: center; gap: 4px; }
 .search-extra { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(70px, 100px) minmax(70px, 100px) auto auto; gap: 6px; align-items: end; grid-column: 1 / -1; }
@@ -497,23 +502,29 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .entry-relation-label { display: flex; min-width: 0; flex: 0 0 auto; align-items: baseline; gap: 8px; color: var(--foreground); font-size: 11px; }
 .entry-relation-label strong { color: var(--primary); font-size: 12px; }
 .entry-relation-label span { min-width: 0; overflow: hidden; color: var(--muted-foreground); font-family: var(--mono-font-family); text-overflow: ellipsis; white-space: nowrap; }
+.entry-relation-field-label { flex: 0 0 auto; overflow: hidden; max-width: 130px; border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border)); border-radius: 999px; padding: 2px 7px; background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary); font-family: var(--mono-font-family); font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .entry-relation-tabs { display: flex; min-width: 0; min-height: 34px; flex: 0 0 auto; align-items: center; gap: 4px; overflow-x: auto; border: 1px solid var(--border); border-radius: 7px; padding: 3px; background: color-mix(in srgb, var(--muted) 55%, transparent); scrollbar-width: thin; }
 .entry-relation-tab-shell { display: inline-flex; width: fit-content; max-width: 220px; height: 26px; min-width: 0; flex: 0 0 auto; align-items: stretch; overflow: hidden; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted-foreground); }
 .entry-relation-tab-shell:hover { background: color-mix(in srgb, var(--accent) 60%, transparent); color: var(--foreground); }
 .entry-relation-tab-shell.is-active { border-color: var(--border); background: var(--background); color: var(--foreground); box-shadow: 0 1px 2px rgb(0 0 0 / 12%); }
-.entry-relation-tab { display: flex; min-width: 0; align-items: center; overflow: hidden; border: 0; padding: 0 6px 0 8px; background: transparent; color: inherit; font: inherit; font-size: 11px; font-weight: 500; line-height: 1; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.entry-relation-tab { display: flex; min-width: 0; flex: 1; align-items: center; gap: 5px; overflow: hidden; border: 0; padding: 0 6px 0 8px; background: transparent; color: inherit; font: inherit; font-size: 11px; font-weight: 500; line-height: 1; white-space: nowrap; cursor: pointer; }
+.entry-relation-tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.entry-relation-tab-attribute { flex: 0 0 auto; color: var(--primary); font-family: var(--mono-font-family); font-size: 9px; }
 .entry-relation-tab:focus-visible, .entry-relation-tab-close:focus-visible { z-index: 1; outline: 2px solid var(--primary); outline-offset: -2px; }
 .entry-relation-tab-close { display: grid; width: 26px; height: 100%; flex: 0 0 26px; place-items: center; border: 0; border-radius: 0; padding: 0; background: transparent; color: inherit; cursor: pointer; }
 .entry-relation-tab-close:hover { background: color-mix(in srgb, var(--destructive) 14%, transparent); color: var(--destructive); }
 .entry-relation-tab-close svg { width: 12px; height: 12px; flex: 0 0 12px; }
 .assoc-pagination { display: flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 8px; padding-top: 2px; }
 .assoc-pagination .toolbar-button { min-width: 28px; min-height: 24px; padding: 1px 6px; }
-.entry-relation-connector { position: relative; display: grid; align-self: stretch; place-items: center; color: var(--primary); font-size: 20px; font-weight: 600; }
+.assoc-field-label { flex: 0 0 auto; overflow: hidden; max-width: 150px; border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border)); border-radius: 999px; padding: 1px 5px; background: color-mix(in srgb, var(--primary) 8%, transparent); color: var(--primary); font-family: var(--mono-font-family); font-size: 9px; line-height: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.entry-relation-connector { position: relative; display: flex; align-self: stretch; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: var(--primary); font-size: 20px; font-weight: 600; }
 .entry-relation-connector::before { position: absolute; inset: 0 50%; width: 1px; background: var(--border); content: ""; }
-.entry-relation-connector::after { position: relative; z-index: 1; padding: 4px 0; background: var(--popover); content: "→"; }
+.entry-relation-arrow, .entry-relation-connector .entry-relation-field-label { position: relative; z-index: 1; background: var(--popover); }
+.entry-relation-arrow { padding: 4px 0; }
+.entry-relation-connector .entry-relation-field-label { max-width: 92px; }
 .entry-editor-relation-host { display: flex; min-width: 0; min-height: 0; flex: 1; }
 .editor-modal--relation { width: 100%; height: 100%; max-height: none; min-height: 0; border: 0; border-radius: 0; padding: 0; background: transparent; box-shadow: none; }
-.editor-modal--relation > header > .icon-button { display: none; }
+.editor-modal--relation > header { display: none; }
 .editor-modal--relation > footer { min-height: 0; margin: 0; align-items: center; gap: 8px; border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: 0; padding: 8px 0 0; background: transparent; }
 .editor-modal--relation > footer > button { box-sizing: border-box; height: 28px; min-height: 28px; padding: 0 12px; white-space: nowrap; }
 .editor-modal--relation > footer > .toolbar-button { min-width: auto; padding: 0 10px; font-size: 11px; }
@@ -539,7 +550,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 /* Entry editor attribute rows */
 .attr-editor { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 6px; overflow: auto; }
+.attr-column-labels { display: grid; grid-template-columns: minmax(110px, 170px) 1fr auto; gap: 6px; padding: 0 2px; color: var(--muted-foreground); font-size: 10px; font-weight: 600; letter-spacing: .02em; }
 .attr-row { display: grid; grid-template-columns: minmax(110px, 170px) 1fr auto; gap: 6px; align-items: start; }
+.attr-name-field, .attr-value-field { min-width: 0; }
+.attr-name-field { display: flex; flex-direction: column; gap: 3px; }
+.attr-meta { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 3px; }
+.attr-value-field { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.attr-format-label, .attr-count-label, .must-label { overflow: hidden; border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; background: color-mix(in srgb, var(--accent) 65%, transparent); color: var(--muted-foreground); font-family: var(--mono-font-family); font-size: 9px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.attr-format-label { max-width: 100%; }
+.attr-count-label { color: var(--foreground); }
+.must-label { border-color: color-mix(in srgb, var(--primary) 30%, var(--border)); background: color-mix(in srgb, var(--primary) 8%, transparent); color: var(--primary); }
 .attr-row input[name="attr-name"], .attr-row textarea {
   border: 1px solid var(--border); border-radius: 4px; padding: 4px 7px;
   outline: none; background: var(--background); color: var(--foreground); font-size: 12px;
@@ -559,8 +579,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 /* 属性行操作列：复制 + 删除并排 */
 .attr-actions { display: flex; gap: 2px; align-items: center; }
 .attr-actions button svg { width: 14px; height: 14px; }
-/* MUST 属性 ★ 标记（条目 objectClass 的 required 属性行旁） */
-.attr-actions .must-mark { color: var(--muted-foreground); font-size: 11px; cursor: help; }
 /* 阶段2：值编辑器分流（时间/DN/布尔/整数）行内控件 */
 .attr-row .attr-value-cell input[type="text"], .attr-row .attr-value-cell select,
 .attr-row .attr-value-cell input[type="datetime-local"] {
@@ -616,12 +634,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 
 @media (max-width: 1100px) {
-  .entry-relation-layout { height: auto; max-height: calc(100vh - 32px); grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(360px, 1fr) 28px minmax(360px, 1fr); overflow: auto; }
+  .entry-relation-layout { height: auto; max-height: calc(100vh - 32px); grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto 28px auto; overflow: auto; }
   .entry-relation-header { grid-column: 1; }
   .entry-relation-pane { min-height: min(520px, 62vh); }
   .entry-relation-connector { min-height: 28px; }
   .entry-relation-connector::before { inset: 50% 0 auto; width: auto; height: 1px; }
-  .entry-relation-connector::after { padding: 0 8px; }
+  .entry-relation-connector { flex-direction: row; }
+  .entry-relation-arrow { padding: 0 6px; transform: rotate(90deg); }
+  .entry-relation-connector .entry-relation-field-label { max-width: 180px; }
 }
 
 @media (max-width: 640px) {

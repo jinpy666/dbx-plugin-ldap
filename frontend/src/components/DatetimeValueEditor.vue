@@ -80,24 +80,30 @@ function setNow() {
 <template>
   <div class="datetime-editor" :class="{ 'is-invalid': invalid }">
     <div class="datetime-controls">
-      <input
-        class="mono datetime-raw"
-        type="text"
-        :value="modelValue"
-        :disabled="disabled"
-        :aria-label="t('ldap.valueEditors.rawValue')"
-        :placeholder="isFiletime ? '132223104000000000' : '20260102030405Z'"
-        spellcheck="false"
-        @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
-      />
-      <input
-        class="datetime-picker"
-        type="datetime-local"
-        :value="pickerValue"
-        :disabled="disabled"
-        :aria-label="t('ldap.valueEditors.pickDate')"
-        @input="onPickerInput"
-      />
+      <label class="datetime-control">
+        <span class="datetime-control-label">{{ t("ldap.valueEditors.rawValue") }}</span>
+        <input
+          class="mono datetime-raw"
+          type="text"
+          :value="modelValue"
+          :disabled="disabled"
+          :aria-label="t('ldap.valueEditors.rawValue')"
+          :placeholder="isFiletime ? '132223104000000000' : '20260102030405Z'"
+          spellcheck="false"
+          @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
+        />
+      </label>
+      <label class="datetime-control">
+        <span class="datetime-control-label">{{ t("ldap.valueEditors.pickDate") }}</span>
+        <input
+          class="datetime-picker"
+          type="datetime-local"
+          :value="pickerValue"
+          :disabled="disabled"
+          :aria-label="t('ldap.valueEditors.pickDate')"
+          @input="onPickerInput"
+        />
+      </label>
       <button type="button" class="toolbar-button" :disabled="disabled" :title="t('ldap.valueEditors.now')" @click="setNow">
         <Clock aria-hidden="true" /><span>{{ t("ldap.valueEditors.now") }}</span>
       </button>
@@ -119,14 +125,25 @@ function setNow() {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  align-items: center;
+  align-items: flex-end;
+}
+.datetime-control {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 180px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+.datetime-control-label {
+  color: var(--muted-foreground);
+  font-size: 9px;
 }
 .datetime-raw {
-  flex: 1 1 180px;
   min-width: 140px;
 }
 .datetime-picker {
-  min-width: 200px;
+  min-width: 180px;
 }
 .datetime-preview {
   font-size: 12px;

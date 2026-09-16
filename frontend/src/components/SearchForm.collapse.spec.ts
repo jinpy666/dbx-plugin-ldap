@@ -56,13 +56,15 @@ describe("SearchForm collapsed quick bar", () => {
     await wrapper.vm.$nextTick();
     expect(compactBar(wrapper).exists()).toBe(true);
     expect(wrapper.find(".search-advanced").classes()).not.toContain("is-collapsed");
+    // 展开高级区后只保留高级区的过滤器控件，避免与快捷条文本框重复显示。
+    expect(wrapper.find(".search-form-compact .compact-filter").exists()).toBe(false);
     expect(wrapper.find(".qb-preview").isVisible()).toBe(true);
     expect(wrapper.find(".search-extra").isVisible()).toBe(true);
     expect(wrapper.find(".search-presets").isVisible()).toBe(true);
     expect((wrapper.find(".compact-scope").element as HTMLSelectElement).value).toBe("one");
     // 固定顶部行的收起按钮可再次折叠（title/aria 状态同步翻转）。
     const toggle = wrapper.find(".search-form-compact .compact-toggle");
-    expect(toggle.attributes("title")).toBe("收起搜索高级选项");
+    expect(toggle.attributes("title")).toBe("收起高级选项");
     await toggle.trigger("click");
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".search-advanced").classes()).toContain("is-collapsed");
@@ -72,7 +74,7 @@ describe("SearchForm collapsed quick bar", () => {
   it("expands via the toggle button on the compact bar", async () => {
     const wrapper = await mountForm();
     const toggle = compactBar(wrapper).find(".compact-toggle");
-    expect(toggle.attributes("aria-label")).toBe("高级筛选");
+    expect(toggle.attributes("aria-label")).toBe("高级");
     await toggle.trigger("click");
     await wrapper.vm.$nextTick();
     expect(compactBar(wrapper).exists()).toBe(true);

@@ -87,26 +87,35 @@ describe("App request feedback and recovery", () => {
     expect(wrapper!.find(".toolbar-actions .identity-protocol").exists()).toBe(false);
   });
 
-  it("renders the first search page immediately, then appends the next cursor page", async () => {
+  it("automatically drains every cursor page after rendering the first page", async () => {
     const host = await mountWithHost();
     host.invoke.mockImplementation(async (method) => {
       if (method === "ldap/search/start") return { searchId: "search-1", entries: [{ dn: "cn=first,dc=demo", attributes: {} }], hasMore: true };
-      if (method === "ldap/search/next") return { entries: [{ dn: "cn=second,dc=demo", attributes: {} }], hasMore: false };
+      if (method === "ldap/search/next") {
+        const nextCalls = host.invoke.mock.calls.filter(([name]) => name === "ldap/search/next").length;
+        return nextCalls === 1
+          ? { entries: [{ dn: "cn=second,dc=demo", attributes: {} }], hasMore: true }
+          : { entries: [{ dn: "cn=third,dc=demo", attributes: {} }], hasMore: false };
+      }
       return { statuses: [], success: true, attributeTypes: [], objectClasses: [] };
     });
     wrapper!.findComponent(searchStub).vm.$emit("run", searchModel);
     await flushPromises();
-    expect(resultsPane().props()).toMatchObject({ entries: [{ dn: "cn=first,dc=demo" }], count: 1, complete: false, loading: false });
-    resultsPane().vm.$emit("loadMore");
     await flushPromises();
-    expect(host.invoke).toHaveBeenCalledWith("ldap/search/next", { connectionId: "first", searchId: "search-1" }, undefined);
-    expect(resultsPane().props()).toMatchObject({ entries: [{ dn: "cn=first,dc=demo" }, { dn: "cn=second,dc=demo" }], count: 2, complete: true });
+    expect(host.invoke.mock.calls.filter(([method]) => method === "ldap/search/next")).toHaveLength(2);
+    expect(resultsPane().props()).toMatchObject({
+      entries: [{ dn: "cn=first,dc=demo" }, { dn: "cn=second,dc=demo" }, { dn: "cn=third,dc=demo" }],
+      count: 3,
+      complete: true,
+    });
   });
 
   it("cancels a prior search session when a new query replaces it", async () => {
     const host = await mountWithHost();
+    const nextPage = deferred<unknown>();
     host.invoke.mockImplementation(async (method) => {
       if (method === "ldap/search/start") return { searchId: "search-1", entries: [{ dn: "cn=first,dc=demo", attributes: {} }], hasMore: true };
+      if (method === "ldap/search/next") return nextPage.promise;
       return { statuses: [], success: true, attributeTypes: [], objectClasses: [] };
     });
     wrapper!.findComponent(searchStub).vm.$emit("run", searchModel);
@@ -116,25 +125,19 @@ describe("App request feedback and recovery", () => {
     expect(host.invoke).toHaveBeenCalledWith("ldap/search/cancel", { connectionId: "first", searchId: "search-1" }, undefined);
   });
 
-  it("prefetches one additional cursor page only after the browser becomes idle", async () => {
-    vi.useFakeTimers();
-    try {
-      const host = await mountWithHost();
-      host.invoke.mockImplementation(async (method) => {
-        if (method === "ldap/search/start") return { searchId: "search-1", entries: [{ dn: "cn=first,dc=demo", attributes: {} }], hasMore: true };
-        if (method === "ldap/search/next") return { entries: [{ dn: "cn=second,dc=demo", attributes: {} }], hasMore: true };
-        return { statuses: [], success: true, attributeTypes: [], objectClasses: [] };
-      });
-      wrapper!.findComponent(searchStub).vm.$emit("run", searchModel);
-      await flushPromises();
-      expect(host.invoke.mock.calls.some(([method]) => method === "ldap/search/next")).toBe(false);
-      await vi.advanceTimersByTimeAsync(750);
-      await flushPromises();
-      expect(host.invoke.mock.calls.filter(([method]) => method === "ldap/search/next")).toHaveLength(1);
-      expect(resultsPane().props()).toMatchObject({ count: 2, complete: false });
-    } finally {
-      vi.useRealTimers();
-    }
+  it("passes the requested transport page size instead of the grid display page size", async () => {
+    const host = await mountWithHost();
+    host.invoke.mockImplementation(async (method) => {
+      if (method === "ldap/search/start") return { searchId: "search-1", entries: [{ dn: "cn=first,dc=demo", attributes: {} }], hasMore: false };
+      return { statuses: [], success: true, attributeTypes: [], objectClasses: [] };
+    });
+    wrapper!.findComponent(searchStub).vm.$emit("run", searchModel);
+    await flushPromises();
+    expect(host.invoke).toHaveBeenCalledWith(
+      "ldap/search/start",
+      expect.objectContaining({ connectionId: "first", pageSize: 500 }),
+      undefined,
+    );
   });
 
   it("connects the pending state to form and results, then marks only a successful search as searched", async () => {
@@ -260,6 +263,32 @@ describe("App request feedback and recovery", () => {
     deferredFields.resolve({ entry: { dn: "cn=alice,dc=first", attributes: { member: ["cn=team,dc=first"], jpegPhoto: ["AA=="] } } });
     await flushPromises();
     expect(editor().props()).toMatchObject({ loadingDeferred: false, deferredAttributeCount: 0 });
+  });
+
+  it("opens a referenced entry in the relation workspace and keeps its field context", async () => {
+    const host = await mountWithHost();
+    host.invoke.mockImplementation(async (method, params) => {
+      if (method === "ldap/entry/get") {
+        const dn = String(params?.dn ?? "");
+        return { entry: { dn, attributes: { cn: ["Bob"] } } };
+      }
+      if (method === "ldap/schema") return { attributeTypes: [], objectClasses: [] };
+      return { statuses: [], success: true };
+    });
+
+    editor().vm.$emit("openRelatedEntry", "cn=bob,dc=first", "manager");
+    await flushPromises();
+    await flushPromises();
+
+    expect(wrapper!.find(".entry-relation-layout").exists()).toBe(true);
+    expect(wrapper!.find(".entry-relation-field-label").text()).toBe("manager");
+    const editors = wrapper!.findAllComponents({ name: "EntryEditorDialog" });
+    expect(editors).toHaveLength(2);
+    expect(editors[1].props()).toMatchObject({
+      loading: false,
+      requestedDn: "cn=bob,dc=first",
+      entry: { dn: "cn=bob,dc=first", attributes: { cn: ["Bob"] } },
+    });
   });
 });
 

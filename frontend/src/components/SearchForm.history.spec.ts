@@ -39,7 +39,7 @@ async function mountForm() {
 
 const record = (wrapper: Wrapper, model: SearchFormModel) => (wrapper.vm as unknown as Exposed).recordSearch(model);
 
-const storedHistory = () => JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? "[]") as Array<Record<string, string>>;
+const storedHistory = () => JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? "[]") as Array<Record<string, string | number>>;
 
 const historyToggle = (wrapper: Wrapper) => wrapper.find(".search-form-compact .history-toggle");
 
@@ -61,7 +61,8 @@ describe("SearchForm search history", () => {
     record(wrapper, baseModel());
     record(wrapper, baseModel({ filter: "(cn=admin)", scope: "one", baseDn: "ou=people,dc=demo,dc=dbx", attributes: "mail" }));
     expect(storedHistory()).toHaveLength(2);
-    expect(storedHistory()[0]).toEqual({ filter: "(cn=admin)", baseDn: "ou=people,dc=demo,dc=dbx", scope: "one", attributes: "mail" });
+    expect(storedHistory()[0]).toMatchObject({ filter: "(cn=admin)", baseDn: "ou=people,dc=demo,dc=dbx", scope: "one", attributes: "mail" });
+    expect(storedHistory()[0].timestamp).toEqual(expect.any(Number));
     wrapper.unmount();
     // 重挂载后从 localStorage 恢复，新条目在前。
     wrapper = await mountForm();
@@ -127,23 +128,14 @@ describe("SearchForm search history", () => {
     expect(wrapper.emitted("run")).toBeUndefined();
   });
 
-  it("clears the history after window.confirm and keeps it on dismiss", async () => {
-    const confirmSpy = vi.fn(() => true);
-    vi.stubGlobal("confirm", confirmSpy);
+  it("clears the history immediately and persists the empty state", async () => {
     wrapper = await mountForm();
     record(wrapper, baseModel());
     await historyToggle(wrapper).trigger("click");
     await wrapper.find(".history-clear").trigger("click");
-    expect(confirmSpy).toHaveBeenCalledWith("确认清空过滤器历史?");
     expect(wrapper.find(".history-empty").exists()).toBe(true);
     expect(wrapper.findAll(".history-item")).toHaveLength(0);
     expect(window.localStorage.getItem(HISTORY_KEY)).toBe("[]");
-    // 取消确认则保留历史。
-    record(wrapper, baseModel({ filter: "(cn=keep)" }));
-    vi.stubGlobal("confirm", vi.fn(() => false));
-    await wrapper.find(".history-clear").trigger("click");
-    expect(storedHistory().map((entry) => entry.filter)).toEqual(["(cn=keep)"]);
-    expect(wrapper.find(".history-item").text()).toContain("(cn=keep)");
   });
 
   it("keeps the history trigger reachable in both compact and expanded forms", async () => {

@@ -152,7 +152,7 @@ const complete = computed(() => props.complete);
       <div v-if="!complete" class="partial-results" role="status">
         <span>{{ t("result.partialHint") }}</span>
         <button v-if="loadMoreError" type="button" class="toolbar-button" :title="loadMoreErrorDetail || loadMoreError" :disabled="loadingMore || disabled" @click="emit('retryMore')">{{ t("retry") }}</button>
-        <button v-else type="button" class="toolbar-button load-more" :disabled="loadingMore || disabled" @click="emit('loadMore')">{{ loadingMore ? t("search.running") : t("result.loadMore") }}</button>
+        <span v-else class="auto-load-status">{{ loadingMore ? t("search.running") : t("result.loadingMore") }}</span>
       </div>
       <!-- 批量操作条：选中数 > 0 时出现在表格之上 -->
       <div v-if="selectedCount > 0" class="batch-bar">
