@@ -89,7 +89,7 @@ func hasRawControlChar(dn string) bool {
 // NormalizeWriteDN 导出给 MCP 写工具预检（两阶段 preview 签发一次性令牌
 // 之前早失败，不白烧令牌——MCP_ACCEPTANCE §5 预检前置）：空 DN/结构非法
 // DN（含换行/空字节等注入风格输入）返回与执行层一致的错误。返回规范化
-//（TrimSpace）DN。
+// （TrimSpace）DN。
 func NormalizeWriteDN(rawDN string) (string, error) {
 	return normalizeLDAPWriteDN(rawDN)
 }

@@ -1254,6 +1254,15 @@ onBeforeUnmount(() => {
     <template v-if="referenceOpen">
       <div class="entry-relation-backdrop" @click.self="closeActiveReference">
         <div class="entry-relation-layout" role="dialog" aria-modal="true" :aria-label="t('editor.relationTitle')">
+          <header class="entry-relation-header">
+            <div class="entry-relation-heading">
+              <strong>{{ t("editor.relationTitle") }}</strong>
+              <span :title="editorRequestedDn">{{ editorRequestedDn }}</span>
+            </div>
+            <button class="icon-button" :title="t('close')" :aria-label="t('close')" @click="closeEditor">
+              <X aria-hidden="true" />
+            </button>
+          </header>
           <div class="entry-relation-pane">
             <div class="entry-relation-label">
               <strong>{{ t("editor.relationSource") }}</strong>
@@ -1285,19 +1294,24 @@ onBeforeUnmount(() => {
           <div class="entry-relation-connector" aria-hidden="true">→</div>
           <div class="entry-relation-pane">
             <div class="entry-relation-tabs" role="tablist" :aria-label="t('editor.relationTarget')">
-              <button
+              <div
                 v-for="tab in referenceTabs"
                 :key="tab.id"
-                class="entry-relation-tab"
+                class="entry-relation-tab-shell"
                 :class="{ 'is-active': tab.id === activeReferenceTabId }"
-                role="tab"
-                :aria-selected="tab.id === activeReferenceTabId"
-                :title="tab.dn"
-                @click="selectReferenceTab(tab.id)"
               >
-                <span>{{ splitFirstDnRdn(tab.dn).rdn || tab.dn }}</span>
-                <X aria-hidden="true" @click.stop="closeReferenceTab(tab.id)" />
-              </button>
+                <button
+                  type="button"
+                  class="entry-relation-tab"
+                  role="tab"
+                  :aria-selected="tab.id === activeReferenceTabId"
+                  :title="tab.dn"
+                  @click="selectReferenceTab(tab.id)"
+                >{{ splitFirstDnRdn(tab.dn).rdn || tab.dn }}</button>
+                <button type="button" class="entry-relation-tab-close" :title="t('close')" :aria-label="t('close')" @click.stop="closeReferenceTab(tab.id)">
+                  <X aria-hidden="true" />
+                </button>
+              </div>
             </div>
             <div class="entry-relation-label">
               <strong>{{ t("editor.relationTarget") }}</strong>

@@ -15,6 +15,11 @@ export interface LdapEntry {
   attributes: Record<string, string[]>;
 }
 
+/** Programmatic filters are rendered before crossing the DBX JSON boundary. */
+export interface LdapFilterValue {
+  toString(): string;
+}
+
 export interface LdapSearchRequest {
   baseDn?: string;
   filter: string;
@@ -31,6 +36,8 @@ export interface LdapSearchResult {
   count: number;
   truncated: boolean;
 }
+
+type LdapSearchRequestInput = Omit<LdapSearchRequest, "filter"> & { filter: string | LdapFilterValue };
 
 export interface LdapModifyChange {
   operation: "add" | "replace" | "delete";
@@ -107,10 +114,15 @@ async function callLdap<T>(method: string, params: Record<string, unknown> = {},
 
 // -- domain methods (§5.2 of IMPL_PLAN_DBX_LDAP) -----------------------------
 
+function search(params: LdapSearchRequestInput, options?: { timeoutMs?: number }): Promise<LdapSearchResult>;
+function search(params: LdapSearchRequest, options?: { timeoutMs?: number }): Promise<LdapSearchResult>;
+function search(params: LdapSearchRequestInput, options?: { timeoutMs?: number }) {
+  const filter = typeof params.filter === "string" ? params.filter : params.filter.toString();
+  return callLdap<LdapSearchResult>("ldap/search", { ...params, filter }, options);
+}
+
 export const ldapApi = {
-  search(params: LdapSearchRequest, options?: { timeoutMs?: number }) {
-    return callLdap<LdapSearchResult>("ldap/search", { ...params }, options);
-  },
+  search,
 
   count(baseDn: string, filter?: string) {
     return callLdap<{ count: number; truncated?: boolean }>(

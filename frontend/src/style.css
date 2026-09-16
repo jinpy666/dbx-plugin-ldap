@@ -164,6 +164,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .tree-row.selected, .tree-row.selected:hover { background: var(--accent); color: var(--accent-foreground); }
 .tree-twist { display: inline-grid; width: 16px; height: 16px; flex: 0 0 16px; place-items: center; border: 0; border-radius: 3px; padding: 0; background: transparent; color: var(--muted-foreground); cursor: pointer; }
 .tree-twist:hover { background: color-mix(in srgb, var(--muted-foreground) 25%, transparent); }
+.tree-twist--placeholder { cursor: default; pointer-events: none; }
 .tree-twist svg { width: 12px; height: 12px; }
 .tree-label { min-width: 0; flex: 1; display: flex; align-items: center; gap: 6px; }
 /* 颜色由 TreeNodeIcon 的 icon-* 逐类配色类控制（此处不设 color 以免同优先级覆盖），
@@ -470,22 +471,53 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .small-modal { width: min(460px, 100%); }
 .editor-modal { width: min(780px, calc(100vw - 40px)); height: min(680px, calc(100vh - 40px)); }
 .editor-modal > .empty { flex: 1; }
-.entry-relation-backdrop { position: fixed; z-index: 80; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--overlay); }
-.entry-relation-layout { display: flex; width: min(1500px, 100%); height: min(760px, calc(100vh - 32px)); min-width: 0; min-height: 0; align-items: stretch; gap: 10px; }
-.entry-relation-pane { display: flex; min-width: 0; min-height: 0; flex: 1 1 0; flex-direction: column; gap: 6px; }
+.entry-relation-backdrop { position: fixed; z-index: 80; inset: 0; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 16px; background: var(--overlay); }
+.entry-relation-layout {
+  display: grid;
+  width: min(1500px, 100%);
+  height: min(820px, calc(100vh - 32px));
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) 32px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--popover);
+  color: var(--foreground);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 36%);
+}
+.entry-relation-header { display: flex; min-width: 0; grid-column: 1 / -1; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); padding: 0 0 10px; }
+.entry-relation-heading { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.entry-relation-heading strong { color: var(--foreground); font-size: 14px; font-weight: 600; }
+.entry-relation-heading span { min-width: 0; overflow: hidden; color: var(--muted-foreground); font-family: var(--mono-font-family); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.entry-relation-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 6px; overflow: hidden; }
 .entry-relation-label { display: flex; min-width: 0; flex: 0 0 auto; align-items: baseline; gap: 8px; color: var(--foreground); font-size: 11px; }
 .entry-relation-label strong { color: var(--primary); font-size: 12px; }
 .entry-relation-label span { min-width: 0; overflow: hidden; color: var(--muted-foreground); font-family: var(--mono-font-family); text-overflow: ellipsis; white-space: nowrap; }
-.entry-relation-tabs { display: flex; min-width: 0; flex: 0 0 auto; gap: 4px; overflow-x: auto; padding-bottom: 1px; }
-.entry-relation-tab { display: inline-flex; min-width: 0; max-width: 220px; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 5px 5px 0 0; padding: 4px 7px; background: var(--muted); color: var(--muted-foreground); font: inherit; font-size: 11px; cursor: pointer; }
-.entry-relation-tab > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.entry-relation-tab svg { width: 13px; height: 13px; flex: 0 0 auto; }
-.entry-relation-tab.is-active { border-color: var(--primary); background: var(--background); color: var(--foreground); }
+.entry-relation-tabs { display: flex; min-width: 0; min-height: 34px; flex: 0 0 auto; align-items: center; gap: 4px; overflow-x: auto; border: 1px solid var(--border); border-radius: 7px; padding: 3px; background: color-mix(in srgb, var(--muted) 55%, transparent); scrollbar-width: thin; }
+.entry-relation-tab-shell { display: inline-flex; width: fit-content; max-width: 220px; height: 26px; min-width: 0; flex: 0 0 auto; align-items: stretch; overflow: hidden; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted-foreground); }
+.entry-relation-tab-shell:hover { background: color-mix(in srgb, var(--accent) 60%, transparent); color: var(--foreground); }
+.entry-relation-tab-shell.is-active { border-color: var(--border); background: var(--background); color: var(--foreground); box-shadow: 0 1px 2px rgb(0 0 0 / 12%); }
+.entry-relation-tab { display: flex; min-width: 0; align-items: center; overflow: hidden; border: 0; padding: 0 6px 0 8px; background: transparent; color: inherit; font: inherit; font-size: 11px; font-weight: 500; line-height: 1; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.entry-relation-tab:focus-visible, .entry-relation-tab-close:focus-visible { z-index: 1; outline: 2px solid var(--primary); outline-offset: -2px; }
+.entry-relation-tab-close { display: grid; width: 26px; height: 100%; flex: 0 0 26px; place-items: center; border: 0; border-radius: 0; padding: 0; background: transparent; color: inherit; cursor: pointer; }
+.entry-relation-tab-close:hover { background: color-mix(in srgb, var(--destructive) 14%, transparent); color: var(--destructive); }
+.entry-relation-tab-close svg { width: 12px; height: 12px; flex: 0 0 12px; }
 .assoc-pagination { display: flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 8px; padding-top: 2px; }
 .assoc-pagination .toolbar-button { min-width: 28px; min-height: 24px; padding: 1px 6px; }
-.entry-relation-connector { display: grid; flex: 0 0 24px; align-self: center; place-items: center; color: var(--primary); font-size: 22px; font-weight: 600; }
+.entry-relation-connector { position: relative; display: grid; align-self: stretch; place-items: center; color: var(--primary); font-size: 20px; font-weight: 600; }
+.entry-relation-connector::before { position: absolute; inset: 0 50%; width: 1px; background: var(--border); content: ""; }
+.entry-relation-connector::after { position: relative; z-index: 1; padding: 4px 0; background: var(--popover); content: "→"; }
 .entry-editor-relation-host { display: flex; min-width: 0; min-height: 0; flex: 1; }
-.editor-modal--relation { width: 100%; height: 100%; max-height: none; min-height: 0; padding: 14px; }
+.editor-modal--relation { width: 100%; height: 100%; max-height: none; min-height: 0; border: 0; border-radius: 0; padding: 0; background: transparent; box-shadow: none; }
+.editor-modal--relation > header > .icon-button { display: none; }
+.editor-modal--relation > footer { min-height: 0; margin: 0; align-items: center; gap: 8px; border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: 0; padding: 8px 0 0; background: transparent; }
+.editor-modal--relation > footer > button { box-sizing: border-box; height: 28px; min-height: 28px; padding: 0 12px; white-space: nowrap; }
+.editor-modal--relation > footer > .toolbar-button { min-width: auto; padding: 0 10px; font-size: 11px; }
+.editor-modal--relation > footer > .toolbar-button svg { width: 14px; height: 14px; }
 .panel-modal { width: min(680px, calc(100vw - 40px)); height: min(600px, calc(100vh - 40px)); }
 .destructive-copy { display: flex; min-width: 0; align-items: flex-start; gap: 12px; }
 .destructive-copy > div { min-width: 0; }
@@ -584,9 +616,21 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 
 @media (max-width: 1100px) {
-  .entry-relation-layout { height: min(900px, calc(100vh - 32px)); flex-direction: column; overflow: auto; }
-  .entry-relation-pane { min-height: min(520px, calc(100vh - 90px)); flex: 1 0 auto; }
-  .entry-relation-connector { transform: rotate(90deg); }
+  .entry-relation-layout { height: auto; max-height: calc(100vh - 32px); grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(360px, 1fr) 28px minmax(360px, 1fr); overflow: auto; }
+  .entry-relation-header { grid-column: 1; }
+  .entry-relation-pane { min-height: min(520px, 62vh); }
+  .entry-relation-connector { min-height: 28px; }
+  .entry-relation-connector::before { inset: 50% 0 auto; width: auto; height: 1px; }
+  .entry-relation-connector::after { padding: 0 8px; }
+}
+
+@media (max-width: 640px) {
+  .entry-relation-backdrop { align-items: flex-start; padding: 6px; }
+  .entry-relation-layout { width: 100%; max-height: calc(100vh - 12px); gap: 0 8px; border-radius: 10px; padding: 10px; }
+  .entry-relation-heading strong { font-size: 13px; }
+  .entry-relation-label { align-items: flex-start; flex-direction: column; gap: 2px; }
+  .entry-relation-pane { min-height: min(440px, 64vh); }
+  .editor-modal--relation > footer { flex-wrap: wrap; }
 }
 
 /* 悬浮提示气泡（lib/tooltip.ts）：图标按钮 hover 的即时文字提示，禁用态

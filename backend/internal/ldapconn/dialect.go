@@ -53,7 +53,7 @@ func detectLDAPDialect(rootDSE LDAPEntry) (dialect, vendorName, productName stri
 }
 
 // applyLDAPDialectMetadata 把 RootDSE 方言检测结果写入 schema 元数据
-//（schema.go ResolveSchema / operations.go SchemaMetadata 共用）。
+// （schema.go ResolveSchema / operations.go SchemaMetadata 共用）。
 func applyLDAPDialectMetadata(metadata *LDAPSchemaMetadata, rootDSE LDAPEntry) {
 	dialect, vendorName, productName := detectLDAPDialect(rootDSE)
 	metadata.Dialect = dialect

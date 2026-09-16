@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { childBadgeText, compareDnByLabel, compareDnForTree, dnNodeKind, flattenDnTree, isFetchTruncated, nextFetchLimit, nextTreeFocusIndex, objectClassNodeKind, objectClassValues, TREE_FETCH_PAGE, type DnTreeNode } from "./dnTree";
+import { canExpandDnTreeNode, childBadgeText, compareDnByLabel, compareDnForTree, dnNodeKind, flattenDnTree, isDnTreeLeaf, isFetchTruncated, nextFetchLimit, nextTreeFocusIndex, objectClassNodeKind, objectClassValues, TREE_FETCH_PAGE, type DnTreeNode } from "./dnTree";
 
 // Node factory kept local so the spec stays free of component imports.
 function node(dn: string, overrides: Partial<DnTreeNode> = {}): DnTreeNode {
@@ -148,6 +148,20 @@ describe("objectClass icon classification", () => {
     expect(objectClassNodeKind(["top", "groupOfNames"])).toBe("group");
     expect(objectClassNodeKind(["top", "applicationProcess"])).toBe("application");
     expect(objectClassNodeKind(["top", "alias"])).toBe("alias");
+  });
+
+  it("recognizes entry-like object classes as non-expandable leaves", () => {
+    for (const objectClass of [["top", "person"], ["top", "applicationProcess"], ["top", "groupOfNames"]]) {
+      const treeNode = { objectClass, loaded: false, children: [], truncated: false };
+      expect(isDnTreeLeaf(treeNode)).toBe(true);
+      expect(canExpandDnTreeNode(treeNode)).toBe(false);
+    }
+  });
+
+  it("recognizes a loaded entry with no children as a leaf", () => {
+    const treeNode = { objectClass: [], loaded: true, children: [], truncated: false };
+    expect(isDnTreeLeaf(treeNode)).toBe(true);
+    expect(canExpandDnTreeNode(treeNode)).toBe(false);
   });
 });
 

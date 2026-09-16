@@ -7,7 +7,7 @@
 import { computed, ref } from "vue";
 import { ChevronDown, ChevronRight, Loader2 } from "@lucide/vue";
 import { t } from "../lib/i18n";
-import { childBadgeText, type DnTreeNode } from "../lib/dnTree";
+import { canExpandDnTreeNode, childBadgeText, type DnTreeNode } from "../lib/dnTree";
 import TreeNodeIcon from "./TreeNodeIcon.vue";
 
 const props = withDefaults(
@@ -24,14 +24,16 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: "toggle", node: DnTreeNode): void;
   (e: "select", node: DnTreeNode): void;
+  (e: "view", node: DnTreeNode): void;
   (e: "menu", event: MouseEvent, dn: string): void;
   (e: "loadMore", node: DnTreeNode): void;
 }>();
 const rowElement = ref<HTMLElement>();
+const canExpand = computed(() => canExpandDnTreeNode(props.node));
 
 function onToggle(event: MouseEvent | KeyboardEvent) {
   event.stopPropagation();
-  if (!props.disabled) emit("toggle", props.node);
+  if (!props.disabled && canExpand.value) emit("toggle", props.node);
 }
 
 function onSelect(event: MouseEvent | KeyboardEvent) {
@@ -43,6 +45,13 @@ function onMenu(event: MouseEvent) {
   event.preventDefault();
   event.stopPropagation();
   emit("menu", event, props.node.dn);
+}
+
+function onDoubleClick(event: MouseEvent) {
+  event.stopPropagation();
+  if (props.disabled) return;
+  if (canExpand.value) emit("toggle", props.node);
+  else emit("view", props.node);
 }
 
 function onLoadMore(event: MouseEvent) {
@@ -66,7 +75,10 @@ function onKeydown(event: KeyboardEvent) {
     event.stopPropagation();
     return;
   }
-  if (event.key === "ArrowRight" && !props.node.expanded && (!props.node.loaded || props.node.children.length > 0)) onToggle(event);
+  // A leaf has no local expand/collapse action. Let the tree-level keyboard
+  // handler process ArrowLeft so focus can still move to its parent row.
+  if (!canExpand.value) return;
+  if (event.key === "ArrowRight" && !props.node.expanded) onToggle(event);
   else if (event.key === "ArrowLeft" && props.node.expanded && props.node.children.length > 0) onToggle(event);
 }
 
@@ -91,17 +103,18 @@ const truncatedTitle = computed(() => {
     :tabindex="disabled ? -1 : 0"
     :aria-level="depth + 1"
     :aria-selected="selectedDn === node.dn"
-    :aria-expanded="!node.loaded || node.children.length > 0 ? node.expanded : undefined"
+    :aria-expanded="canExpand ? node.expanded : undefined"
     :aria-busy="node.loading"
     :aria-disabled="disabled || undefined"
     :title="node.dn"
     @click="onSelect"
-    @dblclick="onToggle"
+    @dblclick="onDoubleClick"
     @contextmenu="onMenu"
     @keydown="onKeydown"
   >
     <span class="tree-row" :class="{ selected: selectedDn === node.dn }" :style="{ paddingLeft: `${6 + depth * 14}px` }">
       <button
+        v-if="canExpand"
         class="tree-twist"
         type="button"
         tabindex="-1"
@@ -116,6 +129,7 @@ const truncatedTitle = computed(() => {
         <ChevronDown v-else-if="node.expanded && node.children.length > 0" />
         <ChevronRight v-else />
       </button>
+      <span v-else class="tree-twist tree-twist--placeholder" aria-hidden="true" />
       <span class="tree-label">
         <TreeNodeIcon :dn="node.dn" :base-dn="baseDn" :object-class="node.objectClass" :expanded="node.expanded" />
         <span class="tree-name">{{ node.label }}</span>

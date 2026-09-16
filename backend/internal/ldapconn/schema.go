@@ -123,7 +123,7 @@ func parseLDAPAttributeTypes(values []string) []LDAPSchemaAttributeType {
 }
 
 // stripLDAPSyntaxLength 剥离 SYNTAX 值的 {len} 长度后缀
-//（RFC 4517 允许 "1.2.3.4{64}" 形式，编辑器分流只关心 OID）。
+// （RFC 4517 允许 "1.2.3.4{64}" 形式，编辑器分流只关心 OID）。
 func stripLDAPSyntaxLength(syntax string) string {
 	if idx := strings.IndexByte(syntax, '{'); idx >= 0 {
 		return syntax[:idx]

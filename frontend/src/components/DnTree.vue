@@ -10,7 +10,7 @@ import { friendlyLdapError } from "../lib/ldapErrors";
 import { splitFirstDnRdn } from "../lib/dn";
 import { nextFocusIndex } from "../lib/modal";
 import { t } from "../lib/i18n";
-import { compareDnByLabel, compareDnForTree, flattenDnTree, isFetchTruncated, nextFetchLimit, nextTreeFocusIndex, objectClassValues, TREE_FETCH_PAGE, type DnTreeNode } from "../lib/dnTree";
+import { canExpandDnTreeNode, compareDnByLabel, compareDnForTree, flattenDnTree, isFetchTruncated, nextFetchLimit, nextTreeFocusIndex, objectClassValues, TREE_FETCH_PAGE, type DnTreeNode } from "../lib/dnTree";
 import VirtualList from "./VirtualList.vue";
 import TreeBranch from "./TreeBranch.vue";
 import TreeNodeIcon from "./TreeNodeIcon.vue";
@@ -218,7 +218,7 @@ async function loadRoot() {
 }
 
 async function toggleNode(node: DnTreeNode) {
-  if (props.disabled) return;
+  if (props.disabled || !canExpandDnTreeNode(node)) return;
   closeContextMenu();
   selectedDn.value = node.dn;
   emit("select", node.dn);
@@ -567,6 +567,7 @@ onBeforeUnmount(onMountedCleanup);
                 :disabled="disabled"
                 @toggle="toggleNode"
                 @select="selectNode"
+                @view="emit('view', $event.dn)"
                 @menu="openContextMenu"
                 @load-more="loadMore"
               />

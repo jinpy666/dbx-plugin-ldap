@@ -23,6 +23,17 @@ export type DnNodeKind = "root" | "dc" | "ou" | "cn" | "uid" | "o" | "other";
 /** Semantic icon kinds derived from LDAP objectClass values. */
 export type ObjectClassNodeKind = "domain" | "container" | "person" | "group" | "organization" | "application" | "device" | "alias" | "other";
 
+// These object classes describe entries rather than naming contexts. They do
+// not contain LDAP child entries in the directory tree, so rendering a twisty
+// for them only suggests an action that cannot succeed.
+const LEAF_OBJECT_CLASS_KINDS: ReadonlySet<ObjectClassNodeKind> = new Set([
+  "person",
+  "group",
+  "application",
+  "device",
+  "alias",
+]);
+
 /**
  * Return objectClass values from an LDAP attribute map without relying on the
  * server's attribute-name casing. LDAP attribute names are case-insensitive,
@@ -51,6 +62,17 @@ export function objectClassNodeKind(objectClasses: readonly string[]): ObjectCla
   if (["organization", "organizationalrole"].some((name) => classes.has(name))) return "organization";
   if (["dcobject", "domainrelatedobject", "dnsdomain"].some((name) => classes.has(name))) return "domain";
   return "other";
+}
+
+/** Whether a tree entry is known to be a leaf and should not offer expansion. */
+export function isDnTreeLeaf(node: Pick<DnTreeNode, "objectClass" | "loaded" | "children" | "truncated">): boolean {
+  if (node.objectClass?.length && LEAF_OBJECT_CLASS_KINDS.has(objectClassNodeKind(node.objectClass))) return true;
+  return node.loaded && node.children.length === 0 && !node.truncated;
+}
+
+/** Whether the tree row should render and handle an expansion affordance. */
+export function canExpandDnTreeNode(node: Pick<DnTreeNode, "objectClass" | "loaded" | "children" | "truncated">): boolean {
+  return !isDnTreeLeaf(node);
 }
 
 /**

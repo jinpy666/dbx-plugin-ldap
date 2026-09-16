@@ -23,6 +23,7 @@ func TestValidateLDAPFilter(t *testing.T) {
 		"(cn=*)",
 		"(cn=a*b*c)",
 		"(cn=\\2a)",
+		"(objectGUID=\\78\\56\\34\\12\\34\\12\\34\\12\\12\\34\\12\\34\\56\\78\\9a\\bc)",
 		"(:dn:2.5.13.2:=x)",
 		"(cn:caseExactMatch:=x)",
 	}
