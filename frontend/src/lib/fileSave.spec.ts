@@ -179,6 +179,18 @@ describe("saveTextFile", () => {
         expect(legacy.clicks).toBe(0);
     });
 
+    it("opens the picker before yielding to preserve the export button gesture", async () => {
+        const picker = installShowSaveFilePicker({ name: "picked.csv" });
+
+        const pending = saveTextFile({ name: "ldap-search.csv", contentType: "text/csv", text: PAYLOAD_TEXT });
+
+        // Chromium requires showSaveFilePicker to be called in the same task
+        // as the trusted click. A regression that awaits host detection first
+        // leaves this at zero and falls back to an anonymous download.
+        expect(picker.picked).toBe(1);
+        await expect(pending).resolves.toEqual({ status: "saved", name: "picked.csv", via: "browser" });
+    });
+
     it("treats a picker AbortError as a silent cancellation without legacy download", async () => {
         const picker = installShowSaveFilePicker({ pickError: new DOMException("user aborted", "AbortError") });
         const legacy = installLegacyDownload();

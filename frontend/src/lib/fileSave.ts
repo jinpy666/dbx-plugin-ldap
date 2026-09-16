@@ -89,6 +89,17 @@ function saveViaLegacyDownload(name: string, contentType: string, text: string):
 export async function saveTextFile(options: SaveTextOptions): Promise<SaveTextOutcome> {
     const { name, contentType, text } = options;
     const bytes = textEncoder.encode(text);
+
+    // `showSaveFilePicker()` must be invoked while the export button's user
+    // gesture is still active. Do not first await the optional host bridge in
+    // browser-only mode: that extra turn makes Chromium reject the picker
+    // with NotAllowedError and silently sends the file to the default
+    // download folder instead.
+    if (!window.dbxPlugin?.fileTransfer && typeof window.showSaveFilePicker === "function") {
+        const viaPicker = await saveViaFileSystemAccess(name, bytes);
+        if (viaPicker) return viaPicker;
+    }
+
     const viaHost = await saveViaHost(name, contentType, bytes);
     if (viaHost) return viaHost;
     const viaPicker = await saveViaFileSystemAccess(name, bytes);
