@@ -182,6 +182,35 @@ type LDAPSearchResult struct {
 	Filter    string      `json:"filter,omitempty"`
 }
 
+// LDAPSearchSessionRequest 对应 ldap/search/start。字段与 ldap/search 一致，
+// 但 pageSize 表示一次返回的页大小；服务端不会在首个响应前聚合剩余页面。
+type LDAPSearchSessionRequest = LDAPSearchRequest
+
+// LDAPSearchSessionNextRequest 对应 ldap/search/next。connectionId 将游标
+// 绑定到创建它的连接，避免一个连接上的调用方读取另一个连接的结果集。
+type LDAPSearchSessionNextRequest struct {
+	ConnectionID string `json:"connectionId"`
+	SearchID     string `json:"searchId"`
+}
+
+// LDAPSearchSessionCancelRequest 对应 ldap/search/cancel。
+type LDAPSearchSessionCancelRequest struct {
+	ConnectionID string `json:"connectionId"`
+	SearchID     string `json:"searchId"`
+}
+
+// LDAPSearchSessionResult 是 start/next 的增量页响应。Count 仅为当前页条数，
+// 不是昂贵的全量计数；hasMore=false 时该 searchId 自动释放。
+type LDAPSearchSessionResult struct {
+	SearchID  string      `json:"searchId,omitempty"`
+	Entries   []LDAPEntry `json:"entries"`
+	Count     int         `json:"count"`
+	HasMore   bool        `json:"hasMore"`
+	Truncated bool        `json:"truncated,omitempty"`
+	BaseDN    string      `json:"baseDn,omitempty"`
+	Filter    string      `json:"filter,omitempty"`
+}
+
 // LDAPGetEntryRequest 对应 ldap/entry/get。
 type LDAPGetEntryRequest struct {
 	ConnectionID string   `json:"connectionId"`
