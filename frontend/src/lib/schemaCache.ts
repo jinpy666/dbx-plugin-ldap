@@ -92,6 +92,13 @@ function parseAttributeType(definition: string): string[] {
     return extractKeywordValues(definition, 'NAME');
 }
 
+/** Numeric dotted OIDs are identifiers, not user-facing attribute names. */
+const NUMERIC_OID_RE = /^\d+(?:\.\d+)+$/u;
+
+function isNumericOid(value: string): boolean {
+    return NUMERIC_OID_RE.test(value.trim());
+}
+
 /** raw 定义串解析：SYNTAX（剥离 {len}）/ EQUALITY / SUP / 布尔标记。 */
 const SYNTAX_VALUE_RE = /\bSYNTAX\s+(\d+(?:\.\d+)+)(?:\{\d+\})?/iu;
 const EQUALITY_RE = /\bEQUALITY\s+([^\s)$]+)/iu;
@@ -179,7 +186,10 @@ export function deriveSchemaMetadata(attributeTypes: unknown, objectClasses: unk
         for (const name of parsed.names) {
             const key = name.toLowerCase();
             if (key) attributeInfo[key] = parsed.info;
-            if (!key || seenAttributes.has(key)) continue;
+            // Some servers expose OID-only definitions with `name` falling
+            // back to the OID. Keep their syntax metadata available, but do
+            // not surface the numeric identifier as an attribute name.
+            if (!key || isNumericOid(name) || seenAttributes.has(key)) continue;
             seenAttributes.add(key);
             attributeNames.push(name);
         }

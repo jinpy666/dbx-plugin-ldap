@@ -112,6 +112,21 @@ describe("SchemaPanel", () => {
     expect(columns(wrapper)[1].find("h3").text()).toBe("对象类 (0)");
   });
 
+  it("does not display OID-only attribute definitions", async () => {
+    schemaMock.mockResolvedValue({
+      attributeTypes: [
+        { oid: "1.2.840.113556.1.4.221", name: "1.2.840.113556.1.4.221", names: [] },
+        { oid: "2.5.4.3", name: "cn", names: ["cn"] },
+      ],
+      objectClasses: [],
+    });
+    const wrapper = trackPanel({ open: true });
+    await flushPromises();
+    expect(columns(wrapper)[0].find("h3").text()).toBe("属性类型 (1)");
+    expect(columns(wrapper)[0].findAll("li").map((li) => li.text())).toEqual(["cn"]);
+    expect(columns(wrapper)[0].text()).not.toContain("1.2.840.113556.1.4.221");
+  });
+
   it("emits error when the initial load fails", async () => {
     schemaMock.mockRejectedValue(new Error("schema boom"));
     const wrapper = trackPanel({ open: true });

@@ -36,12 +36,14 @@ describe("deriveSchemaMetadata sidecar struct shape (阶段1 真实格式)", () 
       [
         { oid: "1.2.3.9", name: "whenCreated", names: ["whenCreated"], syntax: GENERALIZED_TIME, noUserModification: true },
         { oid: "1.2.3.10", name: "cn", names: ["cn", "commonName"], syntax: "1.3.6.1.4.1.1466.115.121.1.15", equality: "caseIgnoreMatch" },
+        { oid: "1.2.840.113556.1.4.221", name: "1.2.840.113556.1.4.221", names: [], syntax: "1.3.6.1.4.1.1466.115.121.1.15" },
       ],
       [
         { oid: "2.5.6.6", name: "person", names: ["person"], must: ["sn", "cn"], may: ["userPassword"] },
       ],
     );
     expect(metadata.attributeNames).toEqual(["whenCreated", "cn", "commonName"]);
+    expect(metadata.attributeInfo?.["1.2.840.113556.1.4.221"]?.syntax).toBe("1.3.6.1.4.1.1466.115.121.1.15");
     expect(metadata.attributeInfo?.["whencreated"]).toEqual({ syntax: GENERALIZED_TIME, singleValue: false, noUserModification: true });
     expect(metadata.attributeInfo?.["commonname"]?.equality).toBe("caseIgnoreMatch");
     expect(metadata.objectClassAttributes["person"]).toEqual({ must: ["sn", "cn"], may: ["userPassword"] });
