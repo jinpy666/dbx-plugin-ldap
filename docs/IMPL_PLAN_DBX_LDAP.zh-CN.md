@@ -129,8 +129,11 @@ DN 白名单约束（§6）。方法未注册返回 -32601。
 | 方法 | 参照基线（已退役） | 请求（除 connectionId 外） | 返回 |
 |---|---|---|---|
 | `ldap/count` | —（A-LDAP 新增：树徽章精确计数） | `baseDn?`、`filter?` | `{count, truncated?}`（scope=one，上限 5000） |
-| `ldap/search` | Search(:356) | `baseDn?`（缺省 profile.base_dn）、`filter`（RFC 4515 校验）、`scope`（base/one/sub）、`attributes?[]`、`sizeLimit?`、`pageSize?`、`typesOnly?`、`derefAliases?`（never/searching/finding/always） | `{entries:[{dn,attributes:{attr:[v…]}}], count, truncated}`（pageSize 走 SearchWithPaging 聚合） |
-| `ldap/entry/get` | GetEntry(:426) | `dn`、`attributes?[]` | `{entry:{dn,attributes}}`；屏蔽属性过滤后返回 |
+| `ldap/search` | Search(:356) | `baseDn?`（缺省 profile.base_dn）、`filter`（RFC 4515 校验）、`scope`（base/one/sub）、`attributes?[]`、`sizeLimit?`、`pageSize?`、`typesOnly?`、`derefAliases?`（never/searching/finding/always） | `{entries:[{dn,attributes:{attr:[v…]}}], count, truncated}`（兼容聚合模式；pageSize 走 SearchWithPaging 聚合） |
+| `ldap/search/start` | 增量搜索会话 | 参数同 `ldap/search`；`pageSize` 为首批/续批条数（缺省 50） | `{searchId, entries, count, hasMore, truncated?, baseDn, filter}`；专属 LDAP 连接持有 RFC 2696 cookie，首批立即返回 |
+| `ldap/search/next` | 增量搜索会话 | `searchId` | `{searchId, entries, count, hasMore, truncated?, baseDn, filter}`；严格沿用原会话 cookie，不重扫前页 |
+| `ldap/search/cancel` | 增量搜索会话 | `searchId` | `{success:true}`；幂等释放 cookie/专属连接。会话 TTL 2 分钟、容量 16；过期或断连必须重新查询，不静默续扫 |
+| `ldap/entry/get` | GetEntry(:426) | `dn`、`attributes?[]`、`typesOnly?` | `{entry:{dn,attributes}}`；`typesOnly=true` 仅返回可见属性名（空值数组），供详情分段加载；屏蔽属性过滤后返回 |
 | `ldap/rootDse` | RootDSE(:452) | `attributes?[]`；前端导出默认显式请求 `["*", "+"]`，含操作属性 | `{attributes:{…}}`；`allowed_base_dns` 非空时禁用（沿袭） |
 | `ldap/schema` | GetSchemaMetadata(:472) | `refresh?`（默认走缓存） | `{attributeTypes:[…], objectClasses:[…]}`；缓存落 `cache/schema-<hash>.json` |
 | `ldap/entry/add` | AddEntry(:508) | `dn`、`attributes:{attr:[v…]}` | `{success:true}`；写白名单 + 值转义 |
