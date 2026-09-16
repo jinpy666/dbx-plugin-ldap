@@ -125,14 +125,13 @@ describe("App request feedback and recovery", () => {
   it("opens detail loading/error states immediately and retries the same DN and tab", async () => {
     const host = await mountWithHost();
     const pending = deferred<unknown>();
-    const rawObjectClasses = ["( 1.2.3 NAME 'custom' SUP person STRUCTURAL MUST employeeNumber )"];
-    host.invoke.mockImplementation(async (method) => method === "ldap/schema"
-      ? { attributeTypes: [], objectClasses: rawObjectClasses }
-      : pending.promise);
+    host.invoke.mockImplementation(async () => pending.promise);
     editor().vm.$emit("openEntry", "cn=alice,dc=first");
     await flushPromises();
     expect(editor().props()).toMatchObject({ open: true, loading: true, requestedDn: "cn=alice,dc=first", initialTab: "assoc" });
-    expect(editor().props("schema")).toMatchObject({ rawObjectClasses });
+    // Metadata is deliberately not allowed to get ahead of the first visible
+    // entry response.
+    expect(editor().props("schema")).toBeUndefined();
     pending.reject(new Error("connection refused"));
     await flushPromises();
     expect(editor().props("loadError")).toContain("Cannot reach");
@@ -160,6 +159,48 @@ describe("App request feedback and recovery", () => {
     await flushPromises();
     expect(editor().props()).toMatchObject({ open: false, loading: false });
     expect(editor().props("entry")).toBeUndefined();
+  });
+
+  it("renders core attributes before bounded batches and loads deferred fields only on demand", async () => {
+    const host = await mountWithHost();
+    const core = deferred<unknown>();
+    const described = deferred<unknown>();
+    const regular = deferred<unknown>();
+    const deferredFields = deferred<unknown>();
+    let entryCall = 0;
+    host.invoke.mockImplementation((method) => {
+      if (method === "ldap/schema") return Promise.resolve({ attributeTypes: [], objectClasses: [] });
+      if (method !== "ldap/entry/get") return Promise.resolve({ success: true });
+      entryCall += 1;
+      return [core.promise, described.promise, regular.promise, deferredFields.promise][entryCall - 1] ?? Promise.resolve({ entry: { dn: "cn=alice,dc=first", attributes: {} } });
+    });
+
+    resultsPane().vm.$emit("open", "cn=alice,dc=first");
+    await flushPromises();
+    const first = host.invoke.mock.calls.find(([method]) => method === "ldap/entry/get");
+    expect(first?.[1]).toMatchObject({ attributes: expect.arrayContaining(["objectClass", "cn", "modifyTimestamp"]) });
+
+    core.resolve({ entry: { dn: "cn=alice,dc=first", attributes: { cn: ["Alice"], objectClass: ["person"] } } });
+    await flushPromises();
+    expect(editor().props()).toMatchObject({ loading: false, entry: { dn: "cn=alice,dc=first", attributes: { cn: ["Alice"] } } });
+    const describeCall = host.invoke.mock.calls.filter(([method]) => method === "ldap/entry/get")[1];
+    expect(describeCall?.[1]).toMatchObject({ attributes: ["*"], typesOnly: true });
+
+    described.resolve({ entry: { dn: "cn=alice,dc=first", attributes: { cn: [], postalAddress: [], telephoneNumber: [], member: [], jpegPhoto: [] } } });
+    await flushPromises();
+    const regularCall = host.invoke.mock.calls.filter(([method]) => method === "ldap/entry/get")[2];
+    expect(regularCall?.[1]).toMatchObject({ attributes: ["postalAddress", "telephoneNumber"] });
+    regular.resolve({ entry: { dn: "cn=alice,dc=first", attributes: { postalAddress: ["Example Street"], telephoneNumber: ["1"] } } });
+    await flushPromises();
+    expect(editor().props()).toMatchObject({ loadingMore: false, deferredAttributeCount: 2 });
+
+    editor().vm.$emit("loadDeferred");
+    await flushPromises();
+    const demandCall = host.invoke.mock.calls.filter(([method]) => method === "ldap/entry/get")[3];
+    expect(demandCall?.[1]).toMatchObject({ attributes: ["member", "jpegPhoto"] });
+    deferredFields.resolve({ entry: { dn: "cn=alice,dc=first", attributes: { member: ["cn=team,dc=first"], jpegPhoto: ["AA=="] } } });
+    await flushPromises();
+    expect(editor().props()).toMatchObject({ loadingDeferred: false, deferredAttributeCount: 0 });
   });
 });
 

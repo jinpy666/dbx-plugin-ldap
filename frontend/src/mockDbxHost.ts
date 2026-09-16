@@ -402,7 +402,7 @@ const invoke: DbxPluginApi["invoke"] = async <T = unknown>(method: string, rawPa
   else if (method === "ldap/entry/get") {
     const entry = get(String(input.dn ?? ""));
     if (!entry) throw new Error(`entry not found: ${input.dn}`);
-    result = { entry: { dn: entry.dn, attributes: selectAttributes(entry.attributes, input.attributes) } };
+    result = { entry: { dn: entry.dn, attributes: selectAttributes(entry.attributes, input.attributes, input.typesOnly === true) } };
   } else if (method === "ldap/rootDse") {
     result = {
       attributes: selectAttributes({

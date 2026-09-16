@@ -153,8 +153,12 @@ export const ldapApi = {
     );
   },
 
-  entryGet(dn: string, attributes?: string[]) {
-    return callLdap<{ entry: LdapEntry }>("ldap/entry/get", { dn, ...(attributes ? { attributes } : {}) });
+  entryGet(dn: string, attributes?: string[], options?: { typesOnly?: boolean }) {
+    return callLdap<{ entry: LdapEntry }>("ldap/entry/get", {
+      dn,
+      ...(attributes ? { attributes } : {}),
+      ...(options?.typesOnly ? { typesOnly: true } : {}),
+    });
   },
 
   rootDse(attributes?: string[]) {

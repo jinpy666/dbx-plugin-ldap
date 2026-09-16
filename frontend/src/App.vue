@@ -34,6 +34,7 @@ import { prepareCopyEntry } from "./lib/copyEntry";
 import type { LdapSchema } from "./lib/newEntryTemplates";
 import { parseAuditEvent, pushAuditItem, type AuditFeedItem } from "./lib/auditFeed";
 import { setupTooltipLayer, teardownTooltipLayer } from "./lib/tooltip";
+import { chunkEntryAttributes, ENTRY_PRIORITY_ATTRIBUTES, mergeEntryAttributes, partitionEntryAttributes } from "./lib/stagedEntry";
 import { useModalA11y } from "./lib/modal";
 import { useUiIntent, type UiIntentOutcome, type UiIntentSummary } from "../../shared/frontend/uiIntent";
 
@@ -83,9 +84,33 @@ const editorEntry = ref<LdapEntry>();
 const editorParentDn = ref("");
 const editorRequestedDn = ref("");
 const editorLoading = ref(false);
+// `editorLoading` only covers the small first read.  The dialog renders that
+// result immediately; `editorLoadingMore` keeps writes disabled until the
+// regular attributes have caught up, so a partial edit can never manufacture
+// deletes for attributes that have not arrived yet.
+const editorLoadingMore = ref(false);
+const editorDeferredLoading = ref(false);
+const editorDeferredAttributes = ref<string[]>([]);
+const editorDeferredRequested = ref(false);
 const editorLoadError = ref("");
 const editorLoadErrorDetail = ref("");
 let entryRequestSeq = 0;
+const entryDetailCache = new Map<string, { entry: LdapEntry; fetchedAt: number }>();
+
+function entryCacheKey(connection: string, dn: string): string {
+  return `${connection}\u0000${dn.trim().toLowerCase()}`;
+}
+
+function invalidateEntryCache(dn: string, descendants = false) {
+  const connection = connectionId.value;
+  const normalized = dn.trim().toLowerCase();
+  for (const key of entryDetailCache.keys()) {
+    const [cachedConnection, cachedDn] = key.split("\u0000", 2);
+    if (cachedConnection === connection && (cachedDn === normalized || (descendants && cachedDn.endsWith(`,${normalized}`)))) {
+      entryDetailCache.delete(key);
+    }
+  }
+}
 // 关联双栏会话：左侧保留发起引用的详情，右侧以标签页独立加载被引用条目。
 // 每个引用标签都有自己的请求序号，加载/失败/重试不会覆盖主条目或其他标签。
 const referenceOpen = ref(false);
@@ -396,6 +421,7 @@ async function onBatchDelete(dns: string[]) {
   showNotice(t("result.batchResult", { ok: dns.length - failed.size, failed: failed.size }));
   const deleted = dns.filter((dn) => !failed.has(dn));
   if (deleted.length === 0) return;
+  for (const dn of deleted) invalidateEntryCache(dn, true);
   for (const parent of new Set(deleted.map((dn) => parentOf(dn)))) treeRef.value?.invalidate(parent);
   void refreshResultsAfterWrite((dn) => {
     const key = dn.toLowerCase();
@@ -434,6 +460,10 @@ async function onBatchMoveConfirm(targetParentDn: string) {
   showNotice(t("batchMove.result", { ok: dns.length - failed.size, failed: failed.size }));
   const moved = dns.filter((dn) => !failed.has(dn));
   if (moved.length === 0) return;
+  for (const dn of moved) {
+    invalidateEntryCache(dn, true);
+    invalidateEntryCache(`${rdnOf(dn)},${targetParentDn}`, true);
+  }
   const affectedParents = new Set<string>([targetParentDn, ...moved.map((dn) => parentOf(dn))]);
   for (const parent of affectedParents) treeRef.value?.invalidate(parent);
   void refreshResultsAfterWrite((dn) => {
@@ -585,27 +615,133 @@ function onRecentMenuKeydown(event: KeyboardEvent) {
 
 async function openEntry(dn: string, initialTab?: "ldif" | "assoc") {
   const request = ++entryRequestSeq;
+  const requestedConnection = connectionId.value;
   editorRequestedDn.value = dn;
   editorInitialTab.value = initialTab;
   editorLoadError.value = "";
   editorLoading.value = true;
+  editorLoadingMore.value = false;
+  editorDeferredLoading.value = false;
+  editorDeferredAttributes.value = [];
+  editorDeferredRequested.value = false;
+  editorEntry.value = undefined;
   editorOpen.value = true;
   editorAddPrefill.value = undefined;
-  // 关联视图泛化的 DN 属性名集合：编辑器打开时惰性拉取（失败静默降级）。
-  void ensureDnAttributes();
   ldapError.value = "";
+  // A connection-scoped cache makes reopening a detail instantaneous, while
+  // the following core read still refreshes it before any write is enabled.
+  const cached = entryDetailCache.get(entryCacheKey(requestedConnection, dn));
+  if (cached) {
+    editorEntry.value = cached.entry;
+    editorLoading.value = false;
+  }
   try {
-    const result = await ldapApi.entryGet(dn);
-    if (request !== entryRequestSeq) return;
+    // Render this response as soon as it arrives.  Never put schema or a full
+    // entry request in front of this user-visible round trip.
+    const result = await ldapApi.entryGet(dn, [...ENTRY_PRIORITY_ATTRIBUTES]);
+    if (request !== entryRequestSeq || requestedConnection !== connectionId.value) return;
     editorEntry.value = result.entry;
+    entryDetailCache.set(entryCacheKey(requestedConnection, dn), { entry: result.entry, fetchedAt: Date.now() });
     recordRecentEntry(dn);
     editorParentDn.value = "";
     editorOpen.value = true;
     uiIntent.reportSnapshot({ panel: "entry", anchor: dn });
+    editorLoading.value = false;
+    // Let Vue commit the core fields before issuing background work.  Besides
+    // making the first paint observable, this prevents a slow schema request
+    // from competing with the primary entry request.
+    await nextTick();
+    if (request !== entryRequestSeq || requestedConnection !== connectionId.value) return;
+    void loadRegularEntryAttributes(dn, request, requestedConnection);
   } catch (cause) {
-    if (request === entryRequestSeq) showError(cause, "entry");
+    if (request === entryRequestSeq && requestedConnection === connectionId.value) showError(cause, "entry");
   } finally {
-    if (request === entryRequestSeq) editorLoading.value = false;
+    if (request === entryRequestSeq && requestedConnection === connectionId.value) editorLoading.value = false;
+  }
+}
+
+function activeEntryRequest(request: number, requestedConnection: string): boolean {
+  return request === entryRequestSeq && requestedConnection === connectionId.value && editorOpen.value;
+}
+
+function mergeEditorEntry(entry: LdapEntry, requestedConnection: string, dn: string) {
+  const merged = mergeEntryAttributes(editorEntry.value, entry);
+  editorEntry.value = merged;
+  entryDetailCache.set(entryCacheKey(requestedConnection, dn), { entry: merged, fetchedAt: Date.now() });
+}
+
+function selectEntryAttributes(entry: LdapEntry, names: string[]): LdapEntry {
+  const wanted = new Set(names.map((name) => name.toLowerCase()));
+  return {
+    dn: entry.dn,
+    attributes: Object.fromEntries(Object.entries(entry.attributes).filter(([name]) => wanted.has(name.toLowerCase()))),
+  };
+}
+
+async function loadRegularEntryAttributes(dn: string, request: number, requestedConnection: string) {
+  if (!activeEntryRequest(request, requestedConnection)) return;
+  editorLoadingMore.value = true;
+  try {
+    // New sidecars return names with no values here.  Older sidecars ignore
+    // `typesOnly`; that still degrades safely because we use the returned
+    // values as the background full read, never as the first paint.
+    const described = await ldapApi.entryGet(dn, ["*"], { typesOnly: true });
+    if (!activeEntryRequest(request, requestedConnection)) return;
+    const names = Object.keys(described.entry.attributes);
+    const { regular, deferred } = partitionEntryAttributes(names);
+    editorDeferredAttributes.value = deferred;
+    const hasValues = Object.values(described.entry.attributes).some((values) => values.length > 0);
+    if (hasValues) {
+      mergeEditorEntry(selectEntryAttributes(described.entry, regular), requestedConnection, dn);
+      return;
+    }
+    for (const batch of chunkEntryAttributes(regular)) {
+      const result = await ldapApi.entryGet(dn, batch);
+      if (!activeEntryRequest(request, requestedConnection)) return;
+      mergeEditorEntry(result.entry, requestedConnection, dn);
+    }
+  } catch {
+    // Old/strict sidecars may reject the optional typesOnly flag.  Preserve a
+    // usable editor by falling back to one deferred full read and still avoid
+    // exposing association/binary fields until the user asks for them.
+    try {
+      const fallback = await ldapApi.entryGet(dn);
+      if (!activeEntryRequest(request, requestedConnection)) return;
+      const { regular, deferred } = partitionEntryAttributes(Object.keys(fallback.entry.attributes));
+      editorDeferredAttributes.value = deferred;
+      mergeEditorEntry(selectEntryAttributes(fallback.entry, regular), requestedConnection, dn);
+    } catch {
+      // Core fields remain readable and editing becomes available; LDAP modify
+      // is attribute-scoped, so absent fields cannot be deleted by this UI.
+    }
+  } finally {
+    if (activeEntryRequest(request, requestedConnection)) {
+      editorLoadingMore.value = false;
+      if (editorDeferredRequested.value && editorDeferredAttributes.value.length > 0) void loadDeferredEditorAttributes();
+      // Schema is useful for enhanced editors but is deliberately the lowest
+      // priority task after visible entry data has been settled.
+      void ensureDnAttributes();
+    }
+  }
+}
+
+async function loadDeferredEditorAttributes() {
+  const dn = editorRequestedDn.value;
+  const request = entryRequestSeq;
+  const requestedConnection = connectionId.value;
+  editorDeferredRequested.value = true;
+  const names = [...editorDeferredAttributes.value];
+  if (!dn || names.length === 0 || editorDeferredLoading.value || !activeEntryRequest(request, requestedConnection)) return;
+  editorDeferredLoading.value = true;
+  try {
+    for (const batch of chunkEntryAttributes(names)) {
+      const result = await ldapApi.entryGet(dn, batch);
+      if (!activeEntryRequest(request, requestedConnection)) return;
+      mergeEditorEntry(result.entry, requestedConnection, dn);
+    }
+    editorDeferredAttributes.value = [];
+  } finally {
+    if (activeEntryRequest(request, requestedConnection)) editorDeferredLoading.value = false;
   }
 }
 
@@ -752,6 +888,10 @@ function closeEditor() {
   closeReference();
   editorOpen.value = false;
   editorLoading.value = false;
+  editorLoadingMore.value = false;
+  editorDeferredLoading.value = false;
+  editorDeferredAttributes.value = [];
+  editorDeferredRequested.value = false;
   editorLoadError.value = "";
 }
 
@@ -790,6 +930,7 @@ function onImported(importedCount: number, failed: number) {
 }
 
 function onEditorSaved(dn: string, mode_: "add" | "edit") {
+  invalidateEntryCache(dn);
   closeEditor();
   showNotice(mode_ === "add" ? t("editor.added") : t("editor.saved"));
   // 保存后 reopen 语义：保存动作本身也应把条目记入最近打开。
@@ -799,6 +940,7 @@ function onEditorSaved(dn: string, mode_: "add" | "edit") {
 }
 
 function onReferenceSaved(dn: string, mode_: "add" | "edit") {
+  invalidateEntryCache(dn);
   const activeId = activeReferenceTabId.value;
   if (activeId) closeReferenceTab(activeId);
   showNotice(mode_ === "add" ? t("editor.added") : t("editor.saved"));
@@ -836,6 +978,7 @@ async function confirmDelete(options?: { recursive?: boolean }) {
     // 控件、不支持时回退自底向上逐层删除（上限 1000 条）。
     const recursive = options?.recursive === true;
     await ldapApi.entryDelete(deleteDn.value, recursive);
+    invalidateEntryCache(deleteDn.value, recursive);
     deleteOpen.value = false;
     showNotice(t("deleteDialog.deleted"));
     treeRef.value?.invalidate(parentOf(deleteDn.value));
@@ -858,6 +1001,8 @@ async function confirmRename(newRdn: string, newParentDn: string | undefined, de
   ldapError.value = "";
   try {
     await ldapApi.entryModifyDn(modifyDnSource.value, newRdn, newParentDn, deleteOldRdn);
+    invalidateEntryCache(modifyDnSource.value, true);
+    invalidateEntryCache(`${newRdn},${newParentDn || parentOf(modifyDnSource.value)}`, true);
     modifyDnOpen.value = false;
     showNotice(t("modifyDn.moved"));
     treeRef.value?.invalidate();
@@ -1029,12 +1174,13 @@ function syncConnectionContext() {
     auditItems.value = [];
     // 最近打开条目同样是上一个连接的浏览状态（DN 只在原目录里有意义）。
     recentEntries.value = [];
+    entryDetailCache.clear();
   }
   baseDn.value = contextBaseDn.value;
   void resolveAutoBaseDn();
-  // 服务器方言徽章（阶段5）：惰性加载 schema（TTL/inFlight 去重），失败静默
-  //（无徽章不阻塞工作台）。
-  wizardSchemaCache.ensureLoaded(connectionId.value).catch(() => {});
+  // Schema is intentionally not warmed here: a user-visible entry read must
+  // always win over metadata.  The wizard and entry detail loaders request it
+  // lazily after their own primary data is visible.
 }
 
 // 方言 → 显示名（vendor 缺失时兜底）。
@@ -1271,12 +1417,16 @@ onBeforeUnmount(() => {
               :schema="editorSchema"
               :requested-dn="editorRequestedDn"
               :loading="editorLoading"
+              :loading-more="editorLoadingMore"
+              :loading-deferred="editorDeferredLoading"
+              :deferred-attribute-count="editorDeferredAttributes.length"
               :load-error="editorLoadError"
               :load-error-detail="editorLoadErrorDetail"
               :initial-tab="editorInitialTab"
               presentation="relation"
               @close="closeEditor"
               @retry="openEntry(editorRequestedDn, editorInitialTab)"
+              @load-deferred="loadDeferredEditorAttributes"
               @saved="onEditorSaved"
               @error="showError"
               @notify="showNotice"
@@ -1339,11 +1489,15 @@ onBeforeUnmount(() => {
       :schema="editorSchema"
       :requested-dn="editorRequestedDn"
       :loading="editorLoading"
+      :loading-more="editorLoadingMore"
+      :loading-deferred="editorDeferredLoading"
+      :deferred-attribute-count="editorDeferredAttributes.length"
       :load-error="editorLoadError"
       :load-error-detail="editorLoadErrorDetail"
       :initial-tab="editorInitialTab"
       @close="closeEditor"
       @retry="openEntry(editorRequestedDn, editorInitialTab)"
+      @load-deferred="loadDeferredEditorAttributes"
       @saved="onEditorSaved"
       @error="showError"
       @notify="showNotice"
