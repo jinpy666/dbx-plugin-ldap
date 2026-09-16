@@ -49,6 +49,8 @@ const props = defineProps<{
   baseDn?: string;
   /** 打开时的初始页签；仅 view 态的非 form 值生效，默认不影响既有调用方。 */
   initialTab?: EditorTab;
+  /** 关联双栏会话中的嵌入展示；此时焦点管理由外层复合弹窗负责。 */
+  presentation?: "modal" | "relation";
   /** schema 推导的 DN 值属性名（透传给 AssociationPanel；缺省/空时 panel 用内置兜底表）。 */
   dnAttributes?: string[];
   schema?: LdapSchema;
@@ -64,6 +66,7 @@ const emit = defineEmits<{
   (e: "error", message: string): void;
   (e: "notify", message: string): void;
   (e: "openEntry", dn: string): void;
+  (e: "openRelatedEntry", dn: string): void;
   (e: "retry"): void;
 }>();
 
@@ -91,6 +94,7 @@ const parentErrorId = useId();
 let suppressLdifSync = false;
 
 const isAdd = computed(() => mode.value === "add");
+const isRelationPresentation = computed(() => props.presentation === "relation");
 const editable = computed(() => props.canWrite && !saving.value && !props.loading && !props.loadError);
 const ldifDraft = computed(() => {
   if (editorTab.value !== "ldif") return undefined;
@@ -561,7 +565,7 @@ function canRequestClose(): boolean {
 }
 
 useModalA11y(
-  () => props.open,
+  () => props.open && !isRelationPresentation.value,
   { close: () => emit("close"), allowClose: canRequestClose },
 );
 
@@ -571,11 +575,16 @@ function onBackdropClick() {
   if (decideBackdropClose(canRequestClose()).kind !== "close") return;
   emit("close");
 }
+
+function onAssociationOpen(dn: string) {
+  emit("openEntry", dn);
+  emit("openRelatedEntry", dn);
+}
 </script>
 
 <template>
-  <div v-if="open" class="modal-backdrop" @click.self="onBackdropClick">
-    <div class="modal editor-modal" role="dialog" aria-modal="true" :aria-label="title" :aria-busy="loading || undefined">
+  <div v-if="open" :class="isRelationPresentation ? 'entry-editor-relation-host' : 'modal-backdrop'" @click.self="onBackdropClick">
+    <div class="modal editor-modal" :class="{ 'editor-modal--relation': isRelationPresentation }" role="dialog" :aria-modal="isRelationPresentation ? undefined : 'true'" :aria-label="title" :aria-busy="loading || undefined">
       <header>
         <h2>{{ title }}</h2>
         <button class="icon-button" :title="t('close')" @click="emit('close')"><X /></button>
@@ -751,7 +760,7 @@ function onBackdropClick() {
         :base-dn="baseDn ?? ''"
         :dn-attributes="dnAttributes"
         :active="open && editorTab === 'assoc'"
-        @open-entry="(dn: string) => emit('openEntry', dn)"
+        @open-entry="onAssociationOpen"
         @error="(m: string) => emit('error', m)"
         @notify="(m: string) => emit('notify', m)"
       />

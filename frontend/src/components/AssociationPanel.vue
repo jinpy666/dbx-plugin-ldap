@@ -66,6 +66,7 @@ const ASSOC_ROW_HEIGHT = 44;
 const MEMBER_OF_SIZE_LIMIT = 1000;
 // 被引用反查上限（与所属区同值同提示语义）。
 const REFERENCED_BY_SIZE_LIMIT = 1000;
+const ASSOCIATION_PAGE_SIZE = 100;
 
 // -- 子页签与本地过滤状态 ------------------------------------------------------
 
@@ -270,6 +271,33 @@ const filteredReferencedByEntries = computed<AssocEntry[]>(() =>
   referencedByDns.value.filter((dn) => passesFilter(dn)).map((dn) => ({ dn })),
 );
 
+// Large member/reference attributes stay searchable without mounting every row.
+// VirtualList handles viewport rendering inside a page; these controls make the
+// page boundary explicit for very large LDAP multi-valued attributes.
+const associationPage = ref(1);
+const activeEntries = computed<AssocEntry[]>(() => {
+  switch (activeTab.value) {
+    case "members": return filteredMemberEntries.value;
+    case "references": return filteredReferenceEntries.value;
+    case "memberOf": return filteredMemberOfEntries.value;
+    case "referencedBy": return filteredReferencedByEntries.value;
+  }
+});
+const associationPageCount = computed(() => Math.max(1, Math.ceil(activeEntries.value.length / ASSOCIATION_PAGE_SIZE)));
+const pagedEntries = computed<AssocEntry[]>(() => {
+  const start = (associationPage.value - 1) * ASSOCIATION_PAGE_SIZE;
+  return activeEntries.value.slice(start, start + ASSOCIATION_PAGE_SIZE);
+});
+watch([activeTab, filterText, () => props.dn], () => {
+  associationPage.value = 1;
+});
+watch(associationPageCount, (count) => {
+  if (associationPage.value > count) associationPage.value = count;
+});
+function setAssociationPage(nextPage: number) {
+  associationPage.value = Math.min(Math.max(1, nextPage), associationPageCount.value);
+}
+
 // -- 页签徽标与列表复位键 ------------------------------------------------------
 
 // 页签元数据：成员 / DN 引用为同步计数（number，恒显示，含 0）；所属 / 被引用
@@ -295,7 +323,7 @@ const tabs = computed(() => [
 ]);
 
 // 列表滚动复位键：换 dn、切页签、改过滤词都回滚到顶部。
-const listResetKey = computed(() => `${props.dn}|${activeTab.value}|${filterText.value}`);
+const listResetKey = computed(() => `${props.dn}|${activeTab.value}|${filterText.value}|${associationPage.value}`);
 
 // 复制完整 DN：宿主桥缺失或写入失败时如实通知"复制失败"（与编辑器 copyText 同款）。
 async function copyDnValue(dn: string) {
@@ -338,7 +366,7 @@ async function copyDnValue(dn: string) {
     <section v-if="activeTab === 'members'" class="assoc-members" style="display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 4px">
       <div v-if="memberDns.length === 0" class="empty compact">{{ t("associations.emptyMembers") }}</div>
       <div v-else-if="filteredMemberEntries.length === 0" class="empty compact">{{ t("associations.noMatch") }}</div>
-      <VirtualList v-else :items="filteredMemberEntries" :row-height="ASSOC_ROW_HEIGHT" :reset-key="listResetKey" style="flex: 1; min-height: 120px">
+      <VirtualList v-else :items="pagedEntries" :row-height="ASSOC_ROW_HEIGHT" :reset-key="listResetKey" style="flex: 1; min-height: 120px">
         <template #default="{ item }">
           <button
             class="tree-row assoc-row"
@@ -373,7 +401,7 @@ async function copyDnValue(dn: string) {
     <section v-else-if="activeTab === 'references'" class="assoc-references" style="display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 4px">
       <div v-if="dnReferenceGroups.length === 0" class="empty compact">{{ t("associations.emptyReferences") }}</div>
       <div v-else-if="filteredReferenceEntries.length === 0" class="empty compact">{{ t("associations.noMatch") }}</div>
-      <VirtualList v-else :items="filteredReferenceEntries" :row-height="ASSOC_ROW_HEIGHT" :reset-key="listResetKey" style="flex: 1; min-height: 120px">
+      <VirtualList v-else :items="pagedEntries" :row-height="ASSOC_ROW_HEIGHT" :reset-key="listResetKey" style="flex: 1; min-height: 120px">
         <template #default="{ item }">
           <button
             class="tree-row assoc-row"
@@ -410,7 +438,7 @@ async function copyDnValue(dn: string) {
       <div v-else-if="memberOfDns.length === 0" class="empty compact">{{ t("associations.emptyMemberOf") }}</div>
       <div v-else-if="filteredMemberOfEntries.length === 0" class="empty compact">{{ t("associations.noMatch") }}</div>
       <template v-else>
-        <VirtualList :items="filteredMemberOfEntries" :row-height="ASSOC_ROW_HEIGHT" :reset-key="listResetKey" style="flex: 1; min-height: 120px">
+        <VirtualList :items="pagedEntries" :row-height="ASSOC_ROW_HEIGHT" :reset-key="listResetKey" style="flex: 1; min-height: 120px">
           <template #default="{ item }">
             <button
               class="tree-row assoc-row"
@@ -449,7 +477,7 @@ async function copyDnValue(dn: string) {
       <div v-else-if="referencedByDns.length === 0" class="empty compact">{{ t("associations.emptyReferencedBy") }}</div>
       <div v-else-if="filteredReferencedByEntries.length === 0" class="empty compact">{{ t("associations.noMatch") }}</div>
       <template v-else>
-        <VirtualList :items="filteredReferencedByEntries" :row-height="ASSOC_ROW_HEIGHT" :reset-key="listResetKey" style="flex: 1; min-height: 120px">
+        <VirtualList :items="pagedEntries" :row-height="ASSOC_ROW_HEIGHT" :reset-key="listResetKey" style="flex: 1; min-height: 120px">
           <template #default="{ item }">
             <button
               class="tree-row assoc-row"
@@ -477,5 +505,21 @@ async function copyDnValue(dn: string) {
         <p v-if="referencedByTruncated" class="hint">{{ t("associations.truncated", { limit: REFERENCED_BY_SIZE_LIMIT }) }}</p>
       </template>
     </section>
+
+    <div v-if="associationPageCount > 1" class="assoc-pagination" aria-live="polite">
+      <button
+        class="toolbar-button"
+        :disabled="associationPage <= 1"
+        :aria-label="t('editor.prev')"
+        @click="setAssociationPage(associationPage - 1)"
+      >‹</button>
+      <span class="muted">{{ associationPage }} / {{ associationPageCount }} · {{ t("associations.count", { count: activeEntries.length }) }}</span>
+      <button
+        class="toolbar-button"
+        :disabled="associationPage >= associationPageCount"
+        :aria-label="t('editor.next')"
+        @click="setAssociationPage(associationPage + 1)"
+      >›</button>
+    </div>
   </div>
 </template>

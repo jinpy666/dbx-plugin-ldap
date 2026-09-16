@@ -122,6 +122,33 @@ async function filter(keyword: string) {
   await flushPromises();
 }
 
+describe("DnTree context menu presentation", () => {
+  it("closes when selecting another filtered tree row", async () => {
+    const second = { dn: "cn=bob," + baseDn, attributes: { cn: ["bob"] } };
+    search.mockResolvedValueOnce({ entries: [hit, second], count: 2, truncated: false });
+    await filter("cn=");
+    const rows = wrapper.findAll(".tree-node");
+    await rows[0].trigger("contextmenu", { clientX: 12, clientY: 18 });
+    expect(document.querySelector(".context-menu")).not.toBeNull();
+    await rows[1].trigger("click");
+    expect(document.querySelector(".context-menu")).toBeNull();
+    expect(wrapper.emitted("select")?.at(-1)).toEqual([second.dn]);
+  });
+
+  it("renders an icon slot for every context action", async () => {
+    search.mockResolvedValueOnce({ entries: [hit], count: 1, truncated: false });
+    await filter("alice");
+    const row = wrapper.find(".tree-node");
+    await row.trigger("contextmenu", { clientX: 12, clientY: 18 });
+    await flushPromises();
+
+    const items = Array.from(document.querySelectorAll<HTMLElement>(".context-menu [role='menuitem']"));
+    expect(items).toHaveLength(9);
+    expect(items.every((item) => item.querySelector(".context-menu-item-icon"))).toBe(true);
+    expect(items.every((item) => item.querySelector(".context-menu-item-icon")?.getAttribute("aria-hidden") === "true")).toBe(true);
+  });
+});
+
 describe("DnTree recoverable states", () => {
   it("retries a failed remote filter without losing the keyword", async () => {
     search.mockRejectedValueOnce(new Error("connection refused"));

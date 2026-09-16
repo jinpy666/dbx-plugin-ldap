@@ -3,7 +3,7 @@
 // 连接生命周期由宿主驱动（connection/test|connect|disconnect），工作台只持有
 // connectionId；所有 ldap/* 调用经 lib/api.ts 注入 connectionId。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { Database, Download, FileUp, History, Info, Loader2, Network, RefreshCw, X } from "@lucide/vue";
+import { Database, Download, FileText, FileUp, History, Info, Loader2, Network, RefreshCw, X } from "@lucide/vue";
 import { DBX_POPOVER, resolveAppearance, type DbxPluginAppearanceInput } from "./lib/appearance";
 import { isDbxPluginTheme, onHostThemeChange, themeToAppearance } from "./lib/hostTheme";
 import { setWorkbenchLocale, t, workbenchLocale } from "./lib/i18n";
@@ -13,6 +13,7 @@ import { splitFirstDnRdn } from "./lib/dn";
 import { escapeLdapFilterValue } from "./lib/ldapFilter";
 import { friendlyLdapError } from "./lib/ldapErrors";
 import { writeClipboardText } from "./lib/clipboard";
+import { saveTextFile, type SaveTextOutcome } from "./lib/fileSave";
 import { serializeEntriesToCsv, serializeEntriesToJson, serializeEntriesToLdifText } from "./lib/ldapExporter";
 import { randomUUID } from "./lib/uuid";
 import DnTree from "./components/DnTree.vue";
@@ -33,6 +34,7 @@ import { prepareCopyEntry } from "./lib/copyEntry";
 import type { LdapSchema } from "./lib/newEntryTemplates";
 import { parseAuditEvent, pushAuditItem, type AuditFeedItem } from "./lib/auditFeed";
 import { setupTooltipLayer, teardownTooltipLayer } from "./lib/tooltip";
+import { useModalA11y } from "./lib/modal";
 import { useUiIntent, type UiIntentOutcome, type UiIntentSummary } from "../../shared/frontend/uiIntent";
 
 interface ConnectionSummary {
@@ -84,6 +86,28 @@ const editorLoading = ref(false);
 const editorLoadError = ref("");
 const editorLoadErrorDetail = ref("");
 let entryRequestSeq = 0;
+// 关联双栏会话：左侧保留发起引用的详情，右侧以标签页独立加载被引用条目。
+// 每个引用标签都有自己的请求序号，加载/失败/重试不会覆盖主条目或其他标签。
+const referenceOpen = ref(false);
+interface ReferenceTab {
+  id: string;
+  dn: string;
+  entry?: LdapEntry;
+  loading: boolean;
+  loadError: string;
+  loadErrorDetail: string;
+  requestSeq: number;
+}
+const referenceTabs = ref<ReferenceTab[]>([]);
+const activeReferenceTabId = ref("");
+let nextReferenceTabId = 0;
+const activeReferenceTab = computed(() => referenceTabs.value.find((tab) => tab.id === activeReferenceTabId.value));
+const referenceEntry = computed(() => activeReferenceTab.value?.entry);
+const referenceRequestedDn = computed(() => activeReferenceTab.value?.dn ?? "");
+const referenceLoading = computed(() => activeReferenceTab.value?.loading ?? false);
+const referenceLoadError = computed(() => activeReferenceTab.value?.loadError ?? "");
+const referenceLoadErrorDetail = computed(() => activeReferenceTab.value?.loadErrorDetail ?? "");
+let dialogOpenToken = 0;
 const deleteOpen = ref(false);
 const deleteDn = ref("");
 const deleteSubmitting = ref(false);
@@ -512,18 +536,27 @@ function recordRecentEntry(dn: string) {
 // 下拉复用全局 .context-menu（fixed + z-50）：打开时按按钮位置算一次坐标即可
 //（工具栏不滚动）；点击外部/Escape/再点按钮关闭，注册方式照抄 DnTree 右键菜单。
 const recentButtonEl = ref<HTMLButtonElement>();
+const recentMenuEl = ref<HTMLElement>();
+let recentMenuTrigger: HTMLElement | null = null;
 const recentMenu = ref<{ x: number; y: number }>();
 function toggleRecentMenu() {
   if (recentMenu.value) {
-    recentMenu.value = undefined;
+    closeRecentMenu();
+    recentMenuTrigger?.focus({ preventScroll: true });
     return;
   }
   const rect = recentButtonEl.value?.getBoundingClientRect();
   if (!rect) return;
+  recentMenuTrigger = recentButtonEl.value ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
   recentMenu.value = { x: rect.left, y: rect.bottom + 4 };
+  void nextTick(() => recentMenuEl.value?.querySelector<HTMLElement>("[role='menuitem']:not([disabled])")?.focus({ preventScroll: true }));
 }
-function closeRecentMenu() {
+function closeRecentMenu(restoreFocus = false) {
   recentMenu.value = undefined;
+  if (restoreFocus) recentMenuTrigger?.focus({ preventScroll: true });
+}
+function closeRecentMenuFromDocument() {
+  closeRecentMenu();
 }
 function openRecent(dn: string) {
   closeRecentMenu();
@@ -534,7 +567,20 @@ function recentLabel(dn: string): string {
   return splitFirstDnRdn(dn).rdn || dn;
 }
 function onRecentMenuKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") closeRecentMenu();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    closeRecentMenu(true);
+    return;
+  }
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  event.stopPropagation();
+  const items = Array.from(recentMenuEl.value?.querySelectorAll<HTMLElement>("[role='menuitem']:not([disabled])") ?? []);
+  const index = items.indexOf(document.activeElement as HTMLElement);
+  if (items.length === 0) return;
+  const next = event.key === "ArrowUp" ? (index <= 0 ? items.length - 1 : index - 1) : (index + 1) % items.length;
+  items[next]?.focus({ preventScroll: true });
 }
 
 async function openEntry(dn: string, initialTab?: "ldif" | "assoc") {
@@ -562,6 +608,112 @@ async function openEntry(dn: string, initialTab?: "ldif" | "assoc") {
     if (request === entryRequestSeq) editorLoading.value = false;
   }
 }
+
+function openEntryFromDialog(dn: string) {
+  const token = ++dialogOpenToken;
+  void Promise.resolve().then(() => {
+    // AssociationPanel emits the legacy openEntry event for compatibility and
+    // the relation-specific event immediately after it. The latter cancels
+    // this fallback so the source dialog remains the left/primary pane.
+    if (token === dialogOpenToken) void openEntry(dn, "assoc");
+  });
+}
+
+function closeReference() {
+  referenceOpen.value = false;
+  for (const tab of referenceTabs.value) tab.requestSeq++;
+  referenceTabs.value = [];
+  activeReferenceTabId.value = "";
+}
+
+async function openReferencedEntry(dn: string) {
+  dialogOpenToken++;
+  const existing = referenceTabs.value.find((tab) => tab.dn.toLowerCase() === dn.toLowerCase());
+  if (existing) {
+    activeReferenceTabId.value = existing.id;
+    referenceOpen.value = true;
+    return;
+  }
+  const tab: ReferenceTab = {
+    id: `reference-${++nextReferenceTabId}`,
+    dn,
+    loading: true,
+    loadError: "",
+    loadErrorDetail: "",
+    requestSeq: 0,
+  };
+  referenceTabs.value.push(tab);
+  activeReferenceTabId.value = tab.id;
+  referenceOpen.value = true;
+  const request = ++tab.requestSeq;
+  void ensureDnAttributes();
+  try {
+    const result = await ldapApi.entryGet(dn);
+    if (!referenceTabs.value.includes(tab) || request !== tab.requestSeq) return;
+    tab.entry = result.entry;
+    recordRecentEntry(dn);
+    uiIntent.reportSnapshot({ panel: "entry", anchor: dn });
+  } catch (cause) {
+    if (!referenceTabs.value.includes(tab) || request !== tab.requestSeq) return;
+    const message = cause instanceof Error ? cause.message : String(cause);
+    tab.loadError = friendlyLdapError(message);
+    tab.loadErrorDetail = tab.loadError === message ? "" : message;
+  } finally {
+    if (referenceTabs.value.includes(tab) && request === tab.requestSeq) tab.loading = false;
+  }
+}
+
+function closeReferenceTab(id: string) {
+  const index = referenceTabs.value.findIndex((tab) => tab.id === id);
+  if (index < 0) return;
+  referenceTabs.value[index].requestSeq++;
+  referenceTabs.value.splice(index, 1);
+  if (referenceTabs.value.length === 0) {
+    closeReference();
+    return;
+  }
+  if (activeReferenceTabId.value === id) {
+    activeReferenceTabId.value = referenceTabs.value[Math.max(0, index - 1)]?.id ?? referenceTabs.value[0].id;
+  }
+}
+
+function selectReferenceTab(id: string) {
+  if (referenceTabs.value.some((tab) => tab.id === id)) activeReferenceTabId.value = id;
+}
+
+function closeActiveReference() {
+  if (activeReferenceTabId.value) closeReferenceTab(activeReferenceTabId.value);
+  else closeReference();
+}
+
+function retryReference() {
+  const dn = referenceRequestedDn.value;
+  if (!dn) return;
+  const tab = activeReferenceTab.value;
+  if (!tab) return;
+  tab.entry = undefined;
+  tab.loadError = "";
+  tab.loadErrorDetail = "";
+  tab.loading = true;
+  const request = ++tab.requestSeq;
+  void ldapApi.entryGet(dn).then((result) => {
+    if (!referenceTabs.value.includes(tab) || request !== tab.requestSeq) return;
+    tab.entry = result.entry;
+    tab.loading = false;
+  }).catch((cause) => {
+    if (!referenceTabs.value.includes(tab) || request !== tab.requestSeq) return;
+    const message = cause instanceof Error ? cause.message : String(cause);
+    tab.loadError = friendlyLdapError(message);
+    tab.loadErrorDetail = tab.loadError === message ? "" : message;
+    tab.loading = false;
+  });
+}
+
+// 左右详情属于一个复合会话：Esc 只关闭右侧引用，Tab 在两侧面板间循环。
+useModalA11y(() => referenceOpen.value, {
+  close: closeActiveReference,
+  containerSelector: ".entry-relation-layout",
+});
 
 // 树右键「复制条目」（阶段3，ADS CopyEntriesRunnable 单条模式）：取源条目 →
 // prepareCopyEntry 剔除密码/系统属性 → 编辑器 add 态预填（RDN 属性名保留、
@@ -597,6 +749,7 @@ async function onCopyEntry(dn: string) {
 
 function closeEditor() {
   entryRequestSeq++;
+  closeReference();
   editorOpen.value = false;
   editorLoading.value = false;
   editorLoadError.value = "";
@@ -643,6 +796,14 @@ function onEditorSaved(dn: string, mode_: "add" | "edit") {
   recordRecentEntry(dn);
   treeRef.value?.invalidate(mode_ === "add" ? parentOf(dn) : dn);
   void openEntryRefresh(dn);
+}
+
+function onReferenceSaved(dn: string, mode_: "add" | "edit") {
+  const activeId = activeReferenceTabId.value;
+  if (activeId) closeReferenceTab(activeId);
+  showNotice(mode_ === "add" ? t("editor.added") : t("editor.saved"));
+  recordRecentEntry(dn);
+  treeRef.value?.invalidate(mode_ === "add" ? parentOf(dn) : dn);
 }
 
 async function openEntryRefresh(dn: string) {
@@ -720,11 +881,12 @@ async function exportSubtree(dn: string) {
   ldapError.value = "";
   try {
     const result = await ldapApi.search({ baseDn: dn, filter: "(objectClass=*)", scope: "sub", sizeLimit: EXPORT_SIZE_LIMIT, pageSize: EXPORT_PAGE_SIZE });
-    downloadText(`${rdnOf(dn) || "subtree"}.ldif`, "text/plain", serializeEntriesToLdifText(result.entries));
+    const outcome = await saveTextFile({ name: `${rdnOf(dn) || "subtree"}.ldif`, contentType: "text/plain", text: serializeEntriesToLdifText(result.entries) });
+    if (outcome.status === "cancelled") return;
     if (result.truncated === true) {
       showNotice(t("result.exportTruncated", { count: result.entries.length, limit: EXPORT_SIZE_LIMIT }));
     } else {
-      showNotice(t("result.exportDone", { name: "LDIF" }));
+      notifyExportSaved(outcome);
     }
   } catch (cause) {
     showError(cause);
@@ -734,24 +896,21 @@ async function exportSubtree(dn: string) {
 async function exportResults(format: "ldif" | "csv" | "json") {
   if (results.value.length === 0) return;
   try {
-    if (format === "ldif") downloadText("ldap-search.ldif", "text/plain", serializeEntriesToLdifText(results.value));
-    else if (format === "csv") downloadText("ldap-search.csv", "text/csv", serializeEntriesToCsv(results.value));
-    else downloadText("ldap-search.json", "application/json", serializeEntriesToJson(results.value));
-    showNotice(t("result.exportDone", { name: format.toUpperCase() }));
+    const text = format === "ldif" ? serializeEntriesToLdifText(results.value) : format === "csv" ? serializeEntriesToCsv(results.value) : serializeEntriesToJson(results.value);
+    const contentType = format === "ldif" ? "text/plain" : format === "csv" ? "text/csv" : "application/json";
+    const outcome = await saveTextFile({ name: `ldap-search.${format}`, contentType, text });
+    notifyExportSaved(outcome);
   } catch (cause) {
     showError(cause);
   }
 }
 
-function downloadText(name: string, contentType: string, text: string) {
-  // Host API 1.0 has no save-file bridge; Blob URL download is the agreed fallback.
-  const blob = new Blob([text], { type: `${contentType};charset=utf-8` });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = name;
-  anchor.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+// 保存成功后的通知：宿主/浏览器对话框保存显示用户最终确认的文件名；只有走
+// 旧版匿名下载兜底时才提示"进了浏览器默认下载目录"（否则用户无从找起）。
+function notifyExportSaved(outcome: SaveTextOutcome) {
+  if (outcome.status === "cancelled") return;
+  if (outcome.via === "legacy") showNotice(t("result.exportDownloaded", { name: outcome.name }));
+  else showNotice(t("result.exportDone", { name: outcome.name }));
 }
 
 function rdnOf(dn: string): string {
@@ -767,8 +926,8 @@ async function showRootDse() {
     const lines = Object.keys(attributes)
       .sort()
       .map((name) => `${name}: ${(attributes[name] ?? []).join(", ")}`);
-    downloadText("root-dse.txt", "text/plain", lines.join("\n"));
-    showNotice(t("rootDse.title"));
+    const outcome = await saveTextFile({ name: "root-dse.txt", contentType: "text/plain", text: lines.join("\n") });
+    notifyExportSaved(outcome);
   } catch (cause) {
     showError(cause);
   }
@@ -969,17 +1128,18 @@ onMounted(() => {
 // 最近条目下拉的关闭监听：延后到 setTimeout 0 再挂，避免注册瞬间的点击
 // 事件立刻触发关闭（照 DnTree 右键菜单的注册/清理模式）。
 window.setTimeout(() => {
-  document.addEventListener("click", closeRecentMenu);
+  document.addEventListener("click", closeRecentMenuFromDocument);
   document.addEventListener("keydown", onRecentMenuKeydown);
 }, 0);
 
 onBeforeUnmount(() => {
   searchRequestSeq++;
   entryRequestSeq++;
+  closeReference();
   window.clearTimeout(noticeTimer);
   uiIntent.stop();
   teardownTooltipLayer();
-  document.removeEventListener("click", closeRecentMenu);
+  document.removeEventListener("click", closeRecentMenuFromDocument);
   document.removeEventListener("keydown", onRecentMenuKeydown);
   for (const dispose of [...unsubscribeAppearance, ...unsubscribeLocale, ...unsubscribeContext, ...unsubscribeEvent]) dispose();
 });
@@ -1081,6 +1241,7 @@ onBeforeUnmount(() => {
           @retry="retrySearch"
           @open="openEntry"
           @export="exportResults"
+          @notify="showNotice"
           @batch-delete="onBatchDelete"
           @batch-move="onBatchMove"
         />
@@ -1090,7 +1251,83 @@ onBeforeUnmount(() => {
 
     <div v-if="notice" class="notice" role="status">{{ notice }}</div>
 
+    <template v-if="referenceOpen">
+      <div class="entry-relation-backdrop" @click.self="closeActiveReference">
+        <div class="entry-relation-layout" role="dialog" aria-modal="true" :aria-label="t('editor.relationTitle')">
+          <div class="entry-relation-pane">
+            <div class="entry-relation-label">
+              <strong>{{ t("editor.relationSource") }}</strong>
+              <span :title="editorRequestedDn">{{ editorRequestedDn }}</span>
+            </div>
+            <EntryEditorDialog
+              :open="editorOpen"
+              :entry="editorEntry"
+              :parent-dn="editorParentDn"
+              :add-prefill="editorAddPrefill"
+              :can-write="canWrite"
+              :base-dn="baseDn"
+              :dn-attributes="dnAttributes"
+              :schema="editorSchema"
+              :requested-dn="editorRequestedDn"
+              :loading="editorLoading"
+              :load-error="editorLoadError"
+              :load-error-detail="editorLoadErrorDetail"
+              :initial-tab="editorInitialTab"
+              presentation="relation"
+              @close="closeEditor"
+              @retry="openEntry(editorRequestedDn, editorInitialTab)"
+              @saved="onEditorSaved"
+              @error="showError"
+              @notify="showNotice"
+              @open-related-entry="openReferencedEntry"
+            />
+          </div>
+          <div class="entry-relation-connector" aria-hidden="true">→</div>
+          <div class="entry-relation-pane">
+            <div class="entry-relation-tabs" role="tablist" :aria-label="t('editor.relationTarget')">
+              <button
+                v-for="tab in referenceTabs"
+                :key="tab.id"
+                class="entry-relation-tab"
+                :class="{ 'is-active': tab.id === activeReferenceTabId }"
+                role="tab"
+                :aria-selected="tab.id === activeReferenceTabId"
+                :title="tab.dn"
+                @click="selectReferenceTab(tab.id)"
+              >
+                <span>{{ splitFirstDnRdn(tab.dn).rdn || tab.dn }}</span>
+                <X aria-hidden="true" @click.stop="closeReferenceTab(tab.id)" />
+              </button>
+            </div>
+            <div class="entry-relation-label">
+              <strong>{{ t("editor.relationTarget") }}</strong>
+              <span :title="referenceRequestedDn">{{ referenceRequestedDn }}</span>
+            </div>
+            <EntryEditorDialog
+              :open="referenceOpen"
+              :entry="referenceEntry"
+              :can-write="canWrite"
+              :base-dn="baseDn"
+              :dn-attributes="dnAttributes"
+              :schema="editorSchema"
+              :requested-dn="referenceRequestedDn"
+              :loading="referenceLoading"
+              :load-error="referenceLoadError"
+              :load-error-detail="referenceLoadErrorDetail"
+              presentation="relation"
+              @close="closeActiveReference"
+              @retry="retryReference"
+              @saved="onReferenceSaved"
+              @error="showError"
+              @notify="showNotice"
+              @open-related-entry="openReferencedEntry"
+            />
+          </div>
+        </div>
+      </div>
+    </template>
     <EntryEditorDialog
+      v-else
       :open="editorOpen"
       :entry="editorEntry"
       :parent-dn="editorParentDn"
@@ -1109,7 +1346,8 @@ onBeforeUnmount(() => {
       @saved="onEditorSaved"
       @error="showError"
       @notify="showNotice"
-      @open-entry="(dn: string) => openEntry(dn, 'assoc')"
+      @open-entry="openEntryFromDialog"
+      @open-related-entry="openReferencedEntry"
     />
     <DeleteEntryDialog
       :open="deleteOpen"
@@ -1158,15 +1396,25 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <div
         v-if="recentMenu"
-        class="context-menu"
+        ref="recentMenuEl"
+        class="context-menu context-menu--recent"
         role="menu"
+        tabindex="-1"
         :style="{ left: `${recentMenu.x}px`, top: `${recentMenu.y}px`, width: '360px', maxWidth: 'calc(100vw - 16px)' }"
         @click.stop
+        @keydown="onRecentMenuKeydown"
       >
-        <div style="padding: 4px 8px; font-size: 11px; color: var(--muted-foreground)">{{ t("recent.title") }}</div>
-        <button v-if="recentEntries.length === 0" disabled>{{ t("recent.empty") }}</button>
+        <div class="context-menu-heading">
+          <History class="context-menu-heading-icon" aria-hidden="true" />
+          <span>{{ t("recent.title") }}</span>
+        </div>
+        <button v-if="recentEntries.length === 0" disabled>
+          <FileText class="context-menu-item-icon" aria-hidden="true" />
+          <span>{{ t("recent.empty") }}</span>
+        </button>
         <button v-for="dn in recentEntries" :key="dn" role="menuitem" :title="dn" @click="openRecent(dn)">
-          <span style="overflow: hidden; min-width: 0; max-width: 100%; text-overflow: ellipsis; white-space: nowrap">{{ recentLabel(dn) }}</span>
+          <FileText class="context-menu-item-icon" aria-hidden="true" />
+          <span class="context-menu-item-label">{{ recentLabel(dn) }}</span>
         </button>
       </div>
     </Teleport>

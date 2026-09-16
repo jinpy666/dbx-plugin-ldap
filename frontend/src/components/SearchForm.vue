@@ -4,7 +4,7 @@
 // + scope/attributes/sizeLimit/pageSize/typesOnly/derefAliases
 // + 预设（持久化过滤器串，应用时重建构建器；sidecar 不存 conditions）。
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
-import { ChevronDown, ChevronUp, History, Play, Save, Terminal, Trash2 } from "@lucide/vue";
+import { ChevronDown, ChevronUp, History, Play, Save, Trash2 } from "@lucide/vue";
 import { getLdapConnectionId, ldapApi, type LdapSearchPreset, type LdapScope } from "../lib/api";
 import { validateLDAPFilter, buildNodeFilter, collectBuilderErrors, parseFilterStructure, toBuilderRoot, createBuilderClause, createBuilderGroup, type BuilderGroup } from "../lib/ldapFilter";
 import { parseLdapSearchCommand, type LdapSearchCommandFailure } from "../lib/ldapSearchCommand";
@@ -436,7 +436,6 @@ const COMMAND_FAILURE_KEYS = {
   filterFile: "search.commandErrorFilterFile",
 } as const satisfies Record<LdapSearchCommandFailure["reason"], string>;
 
-const commandOpen = ref(false);
 const commandDraft = ref("");
 const commandError = ref("");
 const commandWarnings = ref<string[]>([]);
@@ -632,7 +631,7 @@ const derefOptions = computed(() => [
 
 <template>
   <form class="search-form" @submit.prevent="run">
-    <div v-if="collapsed" class="search-form-compact">
+    <div class="search-form-compact">
       <label class="field">
         <input
           v-model="draft.baseDn"
@@ -660,15 +659,7 @@ const derefOptions = computed(() => [
         @input="onCompactFilterInput"
       />
       <span v-if="compactFilterError" class="form-error" role="alert">{{ compactFilterError }}</span>
-      <button
-        class="primary-button compact"
-        type="submit"
-        :disabled="disabled || running || !filterValid || !numericValid"
-        :title="!numericValid ? t('search.invalidNumber') : !filterValid ? t('search.filterInvalid') : activeFilter() || t('search.filterAll')"
-      >
-        <Play aria-hidden="true" />{{ running ? t("search.running") : t("search.run") }}
-      </button>
-      <!-- 历史入口（快捷条）：挂在 Run 旁，与「调条件 → 搜索」动作贴近；切换与展开态同一个下拉状态。 -->
+      <!-- 历史入口（快捷条）：置于筛选条件切换与搜索之间左侧；切换与展开态同一个下拉状态。 -->
       <div ref="historyRootCompact" class="search-history">
         <button
           type="button"
@@ -679,7 +670,7 @@ const derefOptions = computed(() => [
           :title="t('search.historyTitle')"
           @click="toggleHistory"
         >
-          <History aria-hidden="true" />
+          <History aria-hidden="true" />{{ t("search.historyTitle") }}
         </button>
         <!-- 面板绝对定位于本按钮下方；两种形态共享状态/处理器，模板按锚点各写一份（不引入浮动层）。 -->
         <div v-if="historyOpen" class="history-panel">
@@ -698,53 +689,57 @@ const derefOptions = computed(() => [
           </ul>
         </div>
       </div>
-      <button type="button" class="toolbar-button compact-toggle" :aria-expanded="!collapsed" :aria-label="t('search.advanced')" :title="t('search.advancedExpand')" @click="toggleCollapsed">
-        <ChevronDown aria-hidden="true" />
+      <button type="button" class="toolbar-button compact-toggle" :aria-expanded="!collapsed" :aria-label="t('search.advanced')" :title="t(collapsed ? 'search.advancedExpand' : 'search.advancedCollapse')" @click="toggleCollapsed">
+        <component :is="collapsed ? ChevronDown : ChevronUp" aria-hidden="true" />{{ t("search.advanced") }}
+      </button>
+      <button
+        class="primary-button compact"
+        type="submit"
+        :disabled="disabled || running || !filterValid || !numericValid"
+        :title="!numericValid ? t('search.invalidNumber') : !filterValid ? t('search.filterInvalid') : activeFilter() || t('search.filterAll')"
+      >
+        <Play aria-hidden="true" />{{ running ? t("search.running") : t("search.run") }}
       </button>
     </div>
 
-    <template v-else>
-      <label class="field">
-        <span>{{ t("search.baseDn") }}</span>
-        <input
-          v-model="draft.baseDn"
-          type="text"
-          class="mono"
-          :class="{ 'base-dn-flash': baseDnHighlighted }"
-          :title="baseDnHighlighted ? t('search.baseFollowed') : undefined"
-          :disabled="disabled"
-          spellcheck="false"
-        />
-      </label>
-      <label class="field">
-        <span>{{ t("search.scope") }}</span>
-        <select v-model="draft.scope" :disabled="disabled">
-          <option v-for="option in scopeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-        </select>
-      </label>
-      <div class="field" style="justify-content: flex-end">
-        <div class="run-row">
-          <button
-            class="primary-button compact"
-            type="submit"
-            :disabled="disabled || running || !filterValid || !numericValid"
-            :title="!numericValid ? t('search.invalidNumber') : !filterValid ? t('search.filterInvalid') : activeFilter() || t('search.filterAll')"
-          >
-            <Play aria-hidden="true" />{{ running ? t("search.running") : t("search.run") }}
-          </button>
-          <button type="button" class="toolbar-button compact-toggle" :aria-expanded="!collapsed" :aria-label="t('search.advanced')" :title="t('search.advancedCollapse')" @click="toggleCollapsed">
-            <ChevronUp aria-hidden="true" />
-          </button>
-        </div>
-        <span v-if="builderMode && !filterValid" class="form-error">{{ builderErrorMessage }}</span>
+    <div class="search-advanced" :class="{ 'is-collapsed': collapsed }" :aria-hidden="collapsed" :inert="collapsed || undefined">
+      <div class="search-advanced-inner">
+    <div class="command-import">
+      <span class="command-import-label">{{ t("search.commandImport") }}</span>
+      <input
+        v-model="commandDraft"
+        type="text"
+        class="mono command-input"
+        :placeholder="t('search.commandPlaceholder')"
+        :aria-label="t('search.commandImport')"
+        :disabled="disabled"
+        spellcheck="false"
+        @keydown.enter.prevent="applyCommand"
+      />
+      <button type="button" class="primary-button compact" :disabled="disabled || !commandDraft.trim()" @click="applyCommand">
+        {{ t("search.commandApply") }}
+      </button>
+      <!-- Compatibility input for older automation clients; the visible path above is the single-line importer. -->
+      <textarea
+        v-model="commandDraft"
+        class="legacy-command-textarea mono"
+        rows="1"
+        tabindex="-1"
+        aria-hidden="true"
+        :disabled="disabled"
+      />
+      <div class="command-actions command-actions-legacy">
+        <button type="button" :disabled="disabled || !commandDraft.trim()" @click="applyCommand">{{ t("search.commandApply") }}</button>
       </div>
-    </template>
+      <p v-if="commandError" class="form-error" role="alert">{{ commandError }}</p>
+      <p v-for="warning in commandWarnings" :key="warning" class="command-warn">{{ warning }}</p>
+      <p v-if="commandApplied" class="command-ok">{{ t("search.commandApplied") }}</p>
+    </div>
 
-    <div class="filter-block" :hidden="collapsed">
+        <div class="filter-block">
       <div class="filter-head">
         <span>{{ t("search.filter") }}</span>
-        <!-- 历史入口放 filter-head 右侧（与模式开关归组）：放预设行行首会成为
-             .search-presets 的首个按钮，打乱既有 spec 按索引断言的「预设保存/删除」次序。 -->
+        <!-- 模式切换留在高级区内部；历史入口固定在上方快捷条，避免切换时顶部布局跳动。 -->
         <span class="filter-head-tools">
           <span class="mode-switch">
             <button type="button" :class="{ 'is-active': builderMode }" :disabled="disabled" @click="builderMode || switchToBuilder()">
@@ -754,35 +749,6 @@ const derefOptions = computed(() => [
               {{ t("search.modeSource") }}
             </button>
           </span>
-          <div ref="historyRootExpanded" class="search-history">
-            <button
-              type="button"
-              class="toolbar-button history-toggle"
-              :disabled="disabled"
-              :aria-expanded="historyOpen"
-              :aria-label="t('search.historyTitle')"
-              :title="t('search.historyTitle')"
-              @click="toggleHistory"
-            >
-              <History aria-hidden="true" />
-            </button>
-            <!-- filter-head 常驻 DOM（hidden 收起）：折叠态只让快捷条面板存在，避免双面板同挂。 -->
-            <div v-if="!collapsed && historyOpen" class="history-panel">
-              <div class="history-head">
-                <span>{{ t("search.historyTitle") }}</span>
-                <button type="button" class="history-clear" :disabled="!searchHistory.length" @click="clearHistory">{{ t("search.historyClear") }}</button>
-              </div>
-              <p v-if="searchHistory.length === 0" class="history-empty">{{ t("search.historyEmpty") }}</p>
-              <ul v-else class="history-list">
-                <li v-for="(entry, index) in searchHistory" :key="index">
-                  <button type="button" class="history-item" :title="entry.filter" @click="applyHistory(entry)">
-                    <span class="mono history-filter">{{ entry.filter }}</span>
-                    <span class="history-meta">{{ entry.scope }} · {{ entry.baseDn || "—" }} · {{ entry.attributes || "—" }}</span>
-                  </button>
-                </li>
-              </ul>
-            </div>
-          </div>
         </span>
       </div>
 
@@ -811,7 +777,7 @@ const derefOptions = computed(() => [
       <p class="filter-hint">{{ t("search.filterEmptyHint") }}</p>
     </div>
 
-    <div class="search-extra" :hidden="collapsed">
+    <div class="search-extra">
       <label class="field">
         <span>{{ t("search.attributes") }}</span>
         <input v-model="draft.attributes" type="text" :disabled="disabled" spellcheck="false" />
@@ -840,31 +806,7 @@ const derefOptions = computed(() => [
         </select>
       </label>
     </div>
-    <div class="command-import" :hidden="collapsed">
-      <button type="button" class="toolbar-button" :disabled="disabled" :aria-expanded="commandOpen" :title="t('search.commandImport')" @click="commandOpen = !commandOpen">
-        <Terminal aria-hidden="true" /><span>{{ t("search.commandImport") }}</span>
-      </button>
-      <div v-if="commandOpen" class="command-body">
-        <textarea
-          v-model="commandDraft"
-          class="mono"
-          rows="3"
-          :placeholder="t('search.commandPlaceholder')"
-          :aria-label="t('search.commandImport')"
-          :disabled="disabled"
-          spellcheck="false"
-        />
-        <div class="command-actions">
-          <button type="button" class="primary-button compact" :disabled="disabled || !commandDraft.trim()" @click="applyCommand">
-            {{ t("search.commandApply") }}
-          </button>
-        </div>
-        <p v-if="commandError" class="form-error" role="alert">{{ commandError }}</p>
-        <p v-for="warning in commandWarnings" :key="warning" class="command-warn">{{ warning }}</p>
-        <p v-if="commandApplied" class="command-ok">{{ t("search.commandApplied") }}</p>
-      </div>
-    </div>
-    <div class="search-presets" :hidden="collapsed">
+    <div class="search-presets">
       <span class="muted">{{ t("search.presets") }}</span>
       <select v-model="selectedPresetId" :disabled="disabled || presetPending" @change="applyPreset">
         <option value="">{{ t("search.presetsEmpty") }}</option>
@@ -877,6 +819,8 @@ const derefOptions = computed(() => [
       <button type="button" class="toolbar-button" :disabled="disabled || presetPending || !selectedPresetId" :title="t('search.presetRemove')" :aria-label="t('search.presetRemove')" @click="removePreset">
         <Trash2 aria-hidden="true" />
       </button>
+    </div>
+      </div>
     </div>
   </form>
 </template>

@@ -53,6 +53,8 @@ export interface ModalA11yOptions {
   /** 打开时初始聚焦目标（弹层内 CSS 选择器，如删除确认框聚焦"取消"而非
    *  标题栏 ✕，UI 扫描 P2-11）；缺失或不可达时回退首个可交互控件。 */
   initialFocus?: string;
+  /** 自定义焦点陷阱容器；复合弹窗可将左右面板作为一个会话处理。 */
+  containerSelector?: string;
 }
 
 /**
@@ -66,7 +68,7 @@ export function useModalA11y(open: Ref<boolean> | (() => boolean), options: Moda
   let listening = false;
 
   function modalContainer(): HTMLElement | null {
-    return document.querySelector<HTMLElement>(".modal-backdrop .modal");
+    return document.querySelector<HTMLElement>(options.containerSelector ?? ".modal-backdrop .modal");
   }
 
   function onKeydown(event: KeyboardEvent) {

@@ -3,7 +3,7 @@
 // 交互语义对照 tiny-rdm LdapConsolePage 的树区块（fetchTreeChildren /
 // buildTreeKeywordFilter / searchTreeFilterRemote），组件按 DBX 插件形态重实现。
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { RefreshCw, Search, X } from "@lucide/vue";
+import { Clipboard, Copy, Download, Eye, Pencil, Plus, RefreshCw, Search, Trash2, Users, X } from "@lucide/vue";
 import { ldapApi, type LdapEntry } from "../lib/api";
 import { buildTreeKeywordFilter } from "../lib/ldapFilter";
 import { friendlyLdapError } from "../lib/ldapErrors";
@@ -220,6 +220,7 @@ async function loadRoot() {
 
 async function toggleNode(node: DnTreeNode) {
   if (props.disabled) return;
+  closeContextMenu();
   selectedDn.value = node.dn;
   emit("select", node.dn);
   // 加载中忽略重复点击（同一节点并发去重）；已加载节点直接折叠/展开。
@@ -251,6 +252,7 @@ async function toggleNode(node: DnTreeNode) {
 }
 
 function selectNode(node: DnTreeNode) {
+  closeContextMenu();
   selectedDn.value = node.dn;
   emit("select", node.dn);
 }
@@ -413,6 +415,19 @@ async function onTreeKeydown(event: KeyboardEvent) {
   container.querySelector<HTMLElement>(`.tree-node[data-tree-index="${target}"]`)?.focus({ preventScroll: true });
 }
 
+type ContextMenuItem = { action: string; label: string; icon: typeof Search; write?: boolean; danger?: boolean };
+const contextMenuItems: ContextMenuItem[] = [
+  { action: "search", label: "tree.searchHere", icon: Search },
+  { action: "view", label: "tree.viewEntry", icon: Eye },
+  { action: "members", label: "associations.members", icon: Users },
+  { action: "add", label: "tree.addEntry", icon: Plus, write: true },
+  { action: "copyEntry", label: "tree.copyEntry", icon: Copy, write: true },
+  { action: "rename", label: "tree.renameEntry", icon: Pencil, write: true },
+  { action: "delete", label: "tree.deleteEntry", icon: Trash2, write: true, danger: true },
+  { action: "export", label: "tree.exportSubtree", icon: Download },
+  { action: "copy", label: "copyDn", icon: Clipboard },
+] as const;
+
 function menuAction(action: string) {
   const dn = contextMenu.value?.dn;
   closeContextMenu();
@@ -572,16 +587,18 @@ onBeforeUnmount(onMountedCleanup);
         @click.stop
         @keydown="onMenuKeydown"
       >
-        <button role="menuitem" @click="menuAction('search')">{{ t("tree.searchHere") }}</button>
-        <button role="menuitem" @click="menuAction('view')">{{ t("tree.viewEntry") }}</button>
-        <button role="menuitem" @click="menuAction('members')">{{ t("associations.members") }}</button>
-        <button role="menuitem" :disabled="!canWrite" @click="menuAction('add')">{{ t("tree.addEntry") }}</button>
-        <button role="menuitem" :disabled="!canWrite" @click="menuAction('copyEntry')">{{ t("tree.copyEntry") }}</button>
-        <button role="menuitem" :disabled="!canWrite" @click="menuAction('rename')">{{ t("tree.renameEntry") }}</button>
-        <button role="menuitem" :disabled="!canWrite" class="danger" @click="menuAction('delete')">{{ t("tree.deleteEntry") }}</button>
-        <hr />
-        <button role="menuitem" @click="menuAction('export')">{{ t("tree.exportSubtree") }}</button>
-        <button role="menuitem" @click="menuAction('copy')">{{ t("copyDn") }}</button>
+        <template v-for="(item, index) in contextMenuItems" :key="item.action">
+          <hr v-if="index === 7" />
+          <button
+            role="menuitem"
+            :disabled="item.write && !canWrite"
+            :class="{ danger: item.danger }"
+            @click="menuAction(item.action)"
+          >
+            <component :is="item.icon" class="context-menu-item-icon" aria-hidden="true" />
+            <span>{{ t(item.label) }}</span>
+          </button>
+        </template>
       </div>
     </Teleport>
     <!-- 右缘拖宽把手：pointer capture 拖拽调宽，双击重置默认宽 -->

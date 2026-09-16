@@ -95,6 +95,19 @@ interface DbxPluginApi {
   readonly clipboard?: { readText(): Promise<string>; writeText(text: string): Promise<void> };
 }
 
+interface DbxSaveFileHandle {
+  readonly name?: string;
+  createWritable(): Promise<{
+    write(data: Uint8Array | ArrayBuffer): Promise<void>;
+    close(): Promise<void>;
+  }>;
+}
+
 interface Window {
   dbxPlugin: DbxPluginApi;
+  /** File System Access API：无宿主桥的浏览器/mock 环境也能选目录+文件名。 */
+  showSaveFilePicker?: (options?: {
+    suggestedName?: string;
+    types?: Array<{ description?: string; accept: Record<string, string[]> }>;
+  }) => Promise<DbxSaveFileHandle>;
 }

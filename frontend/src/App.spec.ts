@@ -46,7 +46,7 @@ async function mountWithHost(legacy = false, both = false) {
     DnTree: treeStub, SearchForm: searchStub, ResultTable: true, EntryEditorDialog: true,
     DeleteEntryDialog: true, ModifyDnDialog: true, NewEntryWizard: true,
     SchemaPanel: true, ConnectionsPanel: true, AuditFeedPanel: true,
-  } } });
+  } }, attachTo: document.body });
   await flushPromises();
   return { subscribe, legacySubscribe, offContext, offEvent, invoke,
     updateContext: () => {
@@ -75,6 +75,7 @@ function deferred<T>() {
 const searchModel = { baseDn: "dc=first", filter: "(uid=alice)", scope: "sub", attributes: "", sizeLimit: "500", pageSize: "500", typesOnly: false, derefAliases: "never" };
 const resultsPane = () => wrapper!.findComponent({ name: "ResultTable" });
 const editor = () => wrapper!.findComponent({ name: "EntryEditorDialog" });
+const recentButton = () => wrapper!.findAll("button[aria-label]").find((button) => button.attributes("aria-label")?.toLowerCase().includes("recent"))!;
 
 describe("App request feedback and recovery", () => {
   it("connects the pending state to form and results, then marks only a successful search as searched", async () => {
@@ -159,6 +160,29 @@ describe("App request feedback and recovery", () => {
     await flushPromises();
     expect(editor().props()).toMatchObject({ open: false, loading: false });
     expect(editor().props("entry")).toBeUndefined();
+  });
+});
+
+describe("App recent entries menu", () => {
+  it("focuses recent entries and cycles with arrow keys", async () => {
+    const host = await mountWithHost();
+    host.invoke.mockResolvedValue({ entry: { dn: "cn=alice,dc=first", attributes: {} } });
+    editor().vm.$emit("openEntry", "cn=alice,dc=first");
+    await flushPromises();
+    await recentButton().trigger("click");
+    await flushPromises();
+
+    const menu = document.querySelector<HTMLElement>(".context-menu");
+    expect(menu?.getAttribute("role")).toBe("menu");
+    const item = menu?.querySelector<HTMLElement>("[role='menuitem']");
+    expect(item).toBeTruthy();
+    expect(item?.querySelector(".context-menu-item-icon")).toBeTruthy();
+    expect(document.activeElement).toBe(item);
+    await menu?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    expect(document.activeElement).toBe(item);
+    await menu?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.querySelector(".context-menu")).toBeNull();
+    expect(document.activeElement).toBe(recentButton().element);
   });
 });
 

@@ -150,10 +150,11 @@ describe("SearchForm search history", () => {
     wrapper = await mountForm();
     expect(historyToggle(wrapper).exists()).toBe(true);
     await wrapper.find(".search-form-compact .compact-toggle").trigger("click");
-    expect(wrapper.find(".search-form-compact").exists()).toBe(false);
-    const expandedToggle = wrapper.find(".filter-head .history-toggle");
+    expect(wrapper.find(".search-form-compact").exists()).toBe(true);
+    expect(wrapper.find(".search-advanced").classes()).not.toContain("is-collapsed");
+    const expandedToggle = wrapper.find(".search-form-compact .history-toggle");
     expect(expandedToggle.exists()).toBe(true);
-    // 展开态触发按钮切换的是同一个面板状态。
+    // 展开态仍使用固定顶部触发按钮，切换的是同一个面板状态。
     await expandedToggle.trigger("click");
     expect(wrapper.find(".history-panel").exists()).toBe(true);
     await expandedToggle.trigger("click");

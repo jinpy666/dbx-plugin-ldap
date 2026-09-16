@@ -214,15 +214,37 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .search-form [hidden] { display: none !important; }
 .search-form-compact { display: flex; align-items: center; gap: 6px; grid-column: 1 / -1; }
 .search-form-compact > .field { flex: 1.2 1 170px; }
+.search-advanced {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  grid-column: 1 / -1;
+  min-height: 0;
+  overflow: hidden;
+  opacity: 1;
+  transition: grid-template-rows .22s ease, opacity .16s ease;
+}
+.search-advanced.is-collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+}
+.search-advanced-inner {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
+}
+.search-advanced-inner > * { flex: 0 0 auto; }
 .search-form-compact .compact-scope { flex: 0 0 auto; width: 104px; }
 .search-form-compact .compact-filter { flex: 2 1 220px; }
 .search-form-compact > .form-error { flex: 0 1 auto; max-width: 32%; }
-.search-form-compact .compact-toggle { flex: 0 0 auto; width: 26px; justify-content: center; }
+.search-form-compact .compact-toggle { flex: 0 0 auto; }
 /* 历史过滤器下拉（对账表 P1，对标 ADS 搜索历史）：两种形态的触发按钮挂各自
    锚点、共用一个面板状态；面板绝对定位于自身按钮下方，盖住后续行不挤占布局，
    质感沿用 .context-menu 的 popover 约定。 */
 .search-history { position: relative; display: inline-flex; flex: 0 0 auto; }
-.search-history .history-toggle { width: 26px; justify-content: center; }
+.search-history .history-toggle { flex: 0 0 auto; }
 .history-panel { position: absolute; top: calc(100% + 4px); right: 0; z-index: 40; display: flex; width: min(420px, 92vw); max-height: 280px; flex-direction: column; gap: 4px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; background: var(--popover); box-shadow: 0 12px 36px rgb(0 0 0 / 24%); color: var(--foreground); }
 .history-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; color: var(--muted-foreground); }
 .history-clear { border: 0; background: transparent; padding: 2px 4px; color: var(--primary); font-size: 10px; cursor: pointer; }
@@ -239,10 +261,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .search-presets { display: flex; align-items: center; gap: 5px; grid-column: 1 / -1; }
 .search-presets select { min-width: 160px; height: 24px; }
 .preset-input { width: 140px !important; }
-.command-import { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; grid-column: 1 / -1; }
-.command-body { display: flex; flex-direction: column; gap: 4px; width: 100%; }
-.command-body textarea { width: 100%; box-sizing: border-box; resize: vertical; font-size: 11px; }
+.command-import { display: grid; grid-template-columns: auto minmax(180px, 1fr) auto; gap: 5px; align-items: center; grid-column: 1 / -1; }
+.command-import-label { color: var(--muted-foreground); font-size: 10px; white-space: nowrap; }
+.command-import .command-input { width: 100%; box-sizing: border-box; }
+.command-import > .form-error, .command-import > .command-warn, .command-import > .command-ok { grid-column: 1 / -1; }
 .command-actions { display: flex; }
+.command-actions-legacy, .legacy-command-textarea { display: none !important; }
 .command-warn { margin: 0; color: color-mix(in srgb, var(--muted-foreground) 70%, #d97706); font-size: 10px; }
 .command-ok { margin: 0; color: var(--muted-foreground); font-size: 10px; }
 .link-button { align-self: center; padding: 2px 4px; color: var(--primary); font-size: 11px; cursor: pointer; }
@@ -266,7 +290,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .qb-preview { margin: 0; padding: 4px 6px; border-radius: 4px; background: color-mix(in srgb, var(--background) 80%, transparent); color: var(--muted-foreground); font-size: 11px; overflow-wrap: anywhere; }
 .filter-hint { margin: 0; color: var(--muted-foreground); font-size: 10px; }
 .primary-button.compact { min-height: 24px; padding: 2px 9px; gap: 4px; font-size: 11px; }
-.primary-button.compact svg { width: 12px; height: 12px; }
+.primary-button.compact svg { width: 14px; height: 14px; }
 .qb-group { display: flex; flex-direction: column; gap: 4px; }
 .qb-group--nested { border-left: 2px solid color-mix(in srgb, var(--primary) 45%, var(--border)); border-radius: 2px; padding: 6px 8px; background: color-mix(in srgb, var(--background) 55%, transparent); }
 .qb-group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -294,28 +318,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .qb-remove--group { align-self: start; margin-top: 4px; }
 .qb-empty { padding: 4px 2px; color: var(--muted-foreground); font-size: 11px; }
 
-/* Result table: column resize handles */
-.result-header button { position: relative; }
-.col-resize { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; touch-action: none; }
-.col-resize:hover { background: color-mix(in srgb, var(--primary) 35%, transparent); border-radius: 2px; }
 .tree-badge--loading { opacity: .7; }
-.result-table { outline: none; }
-.result-table:focus-visible { outline: 1px solid color-mix(in srgb, var(--primary) 55%, transparent); outline-offset: -1px; }
 
 .result-pane { display: flex; min-height: 0; flex: 1; flex-direction: column; }
 .result-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 10px; color: var(--muted-foreground); font-size: 11px; }
 .result-table { display: flex; min-height: 0; flex: 1; flex-direction: column; }
-.result-header, .result-row { display: grid; min-width: 100%; align-items: center; column-gap: 6px; padding: 0 8px; }
-.result-header { position: sticky; top: 0; z-index: 3; height: 26px; min-height: 26px; border-bottom: 1px solid var(--border); background: var(--background); box-shadow: 0 1px 2px color-mix(in srgb, var(--foreground) 8%, transparent); color: var(--muted-foreground); font-size: 11px; user-select: none; }
-.result-header button { display: flex; min-width: 0; height: 22px; align-items: center; gap: 4px; border: 0; border-radius: 3px; padding: 0 3px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
-.result-header button:hover { background: var(--accent); }
-.result-rows { min-height: 0; flex: 1; overflow: auto; }
-.result-row { width: 100%; min-height: 28px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent); background: transparent; color: var(--foreground); font-size: 12px; text-align: left; cursor: default; }
-.result-row:hover { background: color-mix(in srgb, var(--accent) 65%, transparent); }
-.result-row.selected, .result-row.selected:hover { background: var(--accent); color: var(--accent-foreground); }
-.result-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cell-dn { color: var(--foreground); font-family: var(--mono-font-family); font-size: 11px; }
-.cell-value { color: var(--muted-foreground); }
 .pager { display: flex; align-items: center; gap: 6px; }
 .pager button { border: 1px solid var(--border); border-radius: 4px; background: var(--background); min-height: 22px; padding: 0 8px; cursor: pointer; }
 .pager button:disabled { opacity: .4; }
@@ -323,12 +330,99 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .empty.compact { min-height: 42px; padding: 8px; }
 .truncated-badge { border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border)); border-radius: 999px; padding: 1px 8px; color: var(--primary); font-size: 10px; }
 
-/* Context menu */
-.context-menu { position: fixed; z-index: 50; display: flex; width: 200px; flex-direction: column; gap: 1px; border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; background: var(--popover); box-shadow: 0 12px 36px rgb(0 0 0 / 24%); color: var(--foreground); }
-.context-menu button { display: flex; width: 100%; height: 29px; align-items: center; gap: 8px; border-radius: 4px; padding: 0 8px; text-align: left; }
-.context-menu button:hover:not(:disabled) { background: var(--accent); }
+/* AG Grid 结果表（DbxAgGrid）：容器吃满结果区剩余高度，单元格工具类 */
+.result-grid { flex: 1 1 0; min-height: 0; }
+.mono-s { font-family: var(--mono-font-family); font-size: 11px; }
+.result-cell-value { color: var(--muted-foreground); }
+
+/* === ag-grid → DBX 令牌对齐（对标 dbx-plugin-kafka，Theming CSS 变量覆盖） ====
+   .dbx-grid 与运行时注入的 .ag-theme-quartz 同元素双类，特异性高于注入样式，
+   令牌全部走 DBX 变量 → 宿主 data-theme 切换时 light/dark 同时成立。 */
+.dbx-grid.ag-theme-quartz {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  font-size: 11px;
+  --ag-font-size: 11.5px;
+  --ag-font-family: var(--ui-font-family);
+  --ag-background-color: var(--background);
+  --ag-foreground-color: var(--foreground);
+  --ag-border-color: var(--border);
+  --ag-borders: solid 1px var(--border);
+  --ag-header-background-color: color-mix(in srgb, var(--background) 96%, var(--muted));
+  --ag-header-foreground-color: var(--muted-foreground);
+  --ag-header-column-resize-handle-color: var(--border);
+  --ag-odd-row-background-color: color-mix(in srgb, var(--muted) 30%, var(--background));
+  --ag-row-hover-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  --ag-selected-row-background-color: var(--accent);
+  --ag-row-border-color: color-mix(in srgb, var(--border) 45%, transparent);
+  --ag-row-border-style: solid;
+  --ag-control-panel-background-color: var(--popover);
+  --ag-subtree-background-color: var(--background);
+  --ag-dialog-border-color: var(--border);
+  --ag-input-border-color: var(--border);
+  --ag-input-focus-border-color: color-mix(in srgb, var(--primary) 70%, var(--border));
+  --ag-checkbox-accent-color: var(--primary);
+  --ag-selected-tab-underline-color: var(--primary);
+  --ag-header-cell-hover-background-color: transparent;
+  --ag-header-cell-moving-background-color: color-mix(in srgb, var(--accent) 80%, transparent);
+  --ag-scrollbar-size: 12px;
+}
+.dbx-grid .ag-body-viewport,
+.dbx-grid .ag-center-cols-viewport,
+.dbx-grid .ag-body-horizontal-scroll-viewport {
+  scrollbar-width: auto;
+  scrollbar-color: color-mix(in srgb, var(--muted-foreground) 55%, var(--background)) var(--background);
+}
+.dbx-grid .ag-body-viewport::-webkit-scrollbar,
+.dbx-grid .ag-center-cols-viewport::-webkit-scrollbar,
+.dbx-grid .ag-body-horizontal-scroll-viewport::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+.dbx-grid .ag-body-viewport::-webkit-scrollbar-thumb,
+.dbx-grid .ag-center-cols-viewport::-webkit-scrollbar-thumb,
+.dbx-grid .ag-body-horizontal-scroll-viewport::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background-clip: content-box;
+  background-color: color-mix(in srgb, var(--muted-foreground) 55%, var(--background));
+}
+/* 表头筛选入口按钮化（默认细小 funnel 图标不易发现）：icon 加描边按钮外观，
+   悬停强化；列有生效筛选时 ag-grid 会在表头单元格挂 .ag-filter-active，入口
+   转为主色提示“该列正在过滤”。 */
+.dbx-grid .ag-header-cell-filter-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 4px;
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+}
+.dbx-grid .ag-header-cell-filter-button:hover {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+.dbx-grid .ag-header-cell.ag-filter-active .ag-header-cell-filter-button {
+  border-color: color-mix(in srgb, var(--primary) 70%, var(--border));
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+
+/* Context menu: compact DBX popover with a stable icon/text alignment column. */
+.context-menu { position: fixed; z-index: 50; display: flex; width: 220px; flex-direction: column; gap: 2px; border: 1px solid var(--border); border-radius: 6px; padding: 5px; background: var(--popover); box-shadow: 0 12px 36px rgb(0 0 0 / 24%); color: var(--foreground); }
+.context-menu button { display: flex; width: 100%; height: 30px; align-items: center; gap: 8px; border: 0; border-radius: 4px; padding: 0 8px; color: inherit; text-align: left; }
+.context-menu button:hover:not(:disabled), .context-menu button:focus-visible { outline: 0; background: var(--accent); }
 .context-menu button:disabled { color: var(--muted-foreground); }
 .context-menu button.danger { color: var(--destructive); }
+.context-menu button.danger:hover:not(:disabled), .context-menu button.danger:focus-visible { background: color-mix(in srgb, var(--destructive) 14%, transparent); }
+.context-menu-item-icon, .context-menu-heading-icon { width: 14px; height: 14px; flex: 0 0 14px; stroke-width: 1.8; }
+.context-menu-item-icon { color: var(--muted-foreground); }
+.context-menu button.danger .context-menu-item-icon { color: currentColor; }
+.context-menu-item-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-menu-heading { display: flex; min-height: 24px; align-items: center; gap: 8px; padding: 2px 8px 5px; border-bottom: 1px solid var(--border); color: var(--muted-foreground); font-size: 10px; font-weight: 600; }
+.context-menu-heading-icon { color: var(--primary); }
 .context-menu hr { width: 100%; height: 1px; margin: 3px 0; border: 0; background: var(--border); }
 
 /* Modals */
@@ -347,6 +441,22 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .small-modal { width: min(460px, 100%); }
 .editor-modal { width: min(780px, calc(100vw - 40px)); height: min(680px, calc(100vh - 40px)); }
 .editor-modal > .empty { flex: 1; }
+.entry-relation-backdrop { position: fixed; z-index: 80; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--overlay); }
+.entry-relation-layout { display: flex; width: min(1500px, 100%); height: min(760px, calc(100vh - 32px)); min-width: 0; min-height: 0; align-items: stretch; gap: 10px; }
+.entry-relation-pane { display: flex; min-width: 0; min-height: 0; flex: 1 1 0; flex-direction: column; gap: 6px; }
+.entry-relation-label { display: flex; min-width: 0; flex: 0 0 auto; align-items: baseline; gap: 8px; color: var(--foreground); font-size: 11px; }
+.entry-relation-label strong { color: var(--primary); font-size: 12px; }
+.entry-relation-label span { min-width: 0; overflow: hidden; color: var(--muted-foreground); font-family: var(--mono-font-family); text-overflow: ellipsis; white-space: nowrap; }
+.entry-relation-tabs { display: flex; min-width: 0; flex: 0 0 auto; gap: 4px; overflow-x: auto; padding-bottom: 1px; }
+.entry-relation-tab { display: inline-flex; min-width: 0; max-width: 220px; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 5px 5px 0 0; padding: 4px 7px; background: var(--muted); color: var(--muted-foreground); font: inherit; font-size: 11px; cursor: pointer; }
+.entry-relation-tab > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entry-relation-tab svg { width: 13px; height: 13px; flex: 0 0 auto; }
+.entry-relation-tab.is-active { border-color: var(--primary); background: var(--background); color: var(--foreground); }
+.assoc-pagination { display: flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 8px; padding-top: 2px; }
+.assoc-pagination .toolbar-button { min-width: 28px; min-height: 24px; padding: 1px 6px; }
+.entry-relation-connector { display: grid; flex: 0 0 24px; align-self: center; place-items: center; color: var(--primary); font-size: 22px; font-weight: 600; }
+.entry-editor-relation-host { display: flex; min-width: 0; min-height: 0; flex: 1; }
+.editor-modal--relation { width: 100%; height: 100%; max-height: none; min-height: 0; padding: 14px; }
 .panel-modal { width: min(680px, calc(100vw - 40px)); height: min(600px, calc(100vh - 40px)); }
 .destructive-copy { display: flex; min-width: 0; align-items: flex-start; gap: 12px; }
 .destructive-copy > div { min-width: 0; }
@@ -437,9 +547,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .divider { width: 100%; height: 1px; flex-basis: 1px; cursor: row-resize; }
   .search-form { grid-template-columns: 1fr 1fr; }
   .search-extra { grid-template-columns: 1fr 1fr; }
+  .command-import { grid-template-columns: 1fr auto; }
+  .command-import-label { grid-column: 1 / -1; }
   /* 窄屏紧凑条允许换行，过滤器串独占一整行 */
   .search-form-compact { flex-wrap: wrap; }
   .search-form-compact .compact-filter { flex-basis: 100%; }
+}
+
+@media (max-width: 1100px) {
+  .entry-relation-layout { height: min(900px, calc(100vh - 32px)); flex-direction: column; overflow: auto; }
+  .entry-relation-pane { min-height: min(520px, calc(100vh - 90px)); flex: 1 0 auto; }
+  .entry-relation-connector { transform: rotate(90deg); }
 }
 
 /* 悬浮提示气泡（lib/tooltip.ts）：图标按钮 hover 的即时文字提示，禁用态

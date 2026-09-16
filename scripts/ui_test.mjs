@@ -76,6 +76,12 @@ const test = (name, fn) => tests.push({ name, fn });
 const expectEqual = (actual, expected, label) => {
   if (actual !== expected) throw new Error(`${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
 };
+// AG Grid 结果表（DbxAgGrid）行选择器：行渲染在 .ag-center-cols-container，
+// 虚拟滚动下 count() 是"当前渲染出的行"而非总行数（用例里结果集都很小，等价）。
+// 注意：waitForFunction 的函数体会被序列化进页面，不能引用本模块常量，选择器需内联。
+const RESULT_ROW = ".ag-row";
+const RESULT_DN_CELL = `${RESULT_ROW} .ag-cell[col-id="dn"]`;
+const RESULT_CHECKBOX = `${RESULT_ROW} .ag-checkbox-input`;
 
 // -- 走查流 --------------------------------------------------------------------
 
@@ -83,18 +89,20 @@ const expectEqual = (actual, expected, label) => {
 // 对 fill 不可交互），先验证折叠态再展开，是其余用例的前置。
 test("compact search bar: collapsed by default, quick filter runs directly", async (page) => {
   await page.locator(".search-form-compact").waitFor();
-  expectEqual(await page.locator(".filter-block").isVisible(), false, "advanced sections hidden while collapsed");
+  expectEqual(await page.locator(".search-advanced").evaluate((el) => el.classList.contains("is-collapsed")), true, "advanced area collapsed");
   await page.locator(".compact-filter").fill("(uid=user0003)");
   await page.locator(".search-form-compact button[type='submit']").click();
   // 行数断言同时验证快捷条输入真正落到过滤器（空过滤器会回退匹配全部、返回多行）。
-  await page.waitForFunction(() => document.querySelectorAll(".result-row").length === 1, undefined, { timeout: 5000 });
-  expectEqual(await page.locator(".result-row").first().getAttribute("title"), "uid=user0003,ou=people,dc=demo,dc=dbx", "compact filter applied");
+  await page.waitForFunction(() => document.querySelectorAll(".ag-row").length === 1, undefined, { timeout: 5000 });
+  expectEqual(await page.locator(`${RESULT_DN_CELL}`).first().innerText(), "uid=user0003,ou=people,dc=demo,dc=dbx", "compact filter applied");
   await captureReview(page, "ldap-round8-compact-bar");
 });
 
 test("expanding the compact bar reveals the advanced form and persists", async (page) => {
   await page.locator(".search-form-compact .compact-toggle").click();
   await page.locator(".filter-block").waitFor();
+  expectEqual(await page.locator(".search-form-compact").count(), 1, "compact bar remains fixed while expanded");
+  expectEqual(await page.locator(".search-advanced").evaluate((el) => !el.classList.contains("is-collapsed")), true, "advanced area expanded");
   expectEqual(await page.locator(".filter-block").isVisible(), true, "advanced sections visible after expand");
   // 展开保留快捷条切出的源码模式（源码是唯一权威表示）：输入值必须原样在场。
   expectEqual(await page.locator(".filter-source input").inputValue(), "(uid=user0003)", "compact typing landed in source mode");
@@ -119,11 +127,11 @@ test("builder preview: notEquals (≠)", async (page) => {
 
 test("search returns mock rows", async (page) => {
   await page.getByRole("button", { name: /搜索|Search/ }).click();
-  await page.locator(".result-row").first().waitFor({ timeout: 5000 });
+  await page.locator(RESULT_ROW).first().waitFor({ timeout: 5000 });
 });
 
 test("double-click row opens entry dialog above the form", async (page) => {
-  await page.locator(".result-row").first().dblclick();
+  await page.locator(RESULT_ROW).first().dblclick();
   await page.locator(".modal-backdrop .editor-modal").waitFor({ timeout: 3000 });
   const title = await page.locator(".modal h2").first().innerText();
   if (!title.trim()) throw new Error("dialog title is empty");
@@ -227,7 +235,7 @@ async function captureReview(page, name) {
 }
 
 test("presets follow save/remove responses and restore the updated filter", async (page) => {
-  await page.locator(".search-form > label.field input").first().fill("dc=demo,dc=dbx");
+  await page.locator(".search-form-compact > .field input").first().fill("dc=demo,dc=dbx");
   await page.locator(".filter-source input").fill("(uid=user0001)");
   await page.locator(".preset-input").fill("Round5 preset");
   await page.locator(".search-presets button").first().click();
@@ -250,7 +258,7 @@ test("presets follow save/remove responses and restore the updated filter", asyn
 });
 
 test("search shows pending/failure states and retries without losing the query", async (page) => {
-  await page.locator(".search-form > label.field input").first().fill("dc=demo,dc=dbx");
+  await page.locator(".search-form-compact > .field input").first().fill("dc=demo,dc=dbx");
   await page.locator(".search-form .mode-switch button").nth(1).click();
   await page.locator(".filter-source input").fill("(uid=user0001)");
   await page.evaluate(() => {
@@ -275,8 +283,8 @@ test("search shows pending/failure states and retries without losing the query",
     expectEqual(await page.locator(".filter-source input").inputValue(), "(uid=user0001)", "failed query retained");
     await captureReview(page, "ldap-round5-search-retry");
     await page.locator(".result-pane .request-error button").click();
-    await page.locator(".result-row").first().waitFor();
-    expectEqual(await page.locator(".result-row").count(), 1, "retry result count");
+    await page.locator(RESULT_ROW).first().waitFor();
+    expectEqual(await page.locator(RESULT_ROW).count(), 1, "retry result count");
   } finally {
     await page.evaluate(() => { window.dbxPlugin.invoke = window.__ldapRound5Invoke; });
   }
@@ -296,7 +304,7 @@ test("entry opens with loading feedback and retries a failed read", async (page)
     };
   });
   try {
-    await page.locator(".result-row").first().dblclick();
+    await page.locator(RESULT_ROW).first().dblclick();
     await page.locator(".editor-modal[aria-busy='true']").waitFor();
     expectEqual(await page.locator(".editor-modal [role='status']").innerText(), "正在加载条目…", "pending entry copy");
     await page.evaluate(() => window.__ldapRound5Fail());
@@ -387,25 +395,43 @@ test("rename dialog moves an entry through the real newSuperior field", async (p
 });
 
 test("RootDSE export includes explicitly requested operational metadata", async (page) => {
-  const pending = page.waitForEvent("download");
+  // 导出走"另存为"链路（宿主 fileTransfer → showSaveFilePicker → Blob 下载）。
+  // 浏览器走查没有宿主桥，桩掉 showSaveFilePicker 捕获建议名与写入内容，
+  // 顺带断言通知里出现的是用户最终保存的文件名（旧版匿名下载无此反馈）。
+  await page.evaluate(() => {
+    window.__savedExport = null;
+    window.showSaveFilePicker = async ({ suggestedName }) => {
+      const chunks = [];
+      return {
+        name: "root-dse-saved.txt",
+        createWritable: async () => ({
+          write: async (data) => chunks.push(data),
+          close: async () => {
+            const buffer = await new Blob(chunks).arrayBuffer();
+            window.__savedExport = { suggestedName, text: new TextDecoder().decode(buffer) };
+          },
+        }),
+      };
+    };
+  });
   await page.getByRole("button", { name: /Root\s*DSE/ }).click();
-  const download = await pending;
-  const stream = await download.createReadStream();
-  const chunks = [];
-  for await (const chunk of stream) chunks.push(chunk);
-  const contents = Buffer.concat(chunks).toString("utf8");
-  if (!contents.includes("namingContexts: dc=demo,dc=dbx") || !contents.includes("supportedLDAPVersion: 3")) {
+  await page.waitForFunction(() => Boolean(window.__savedExport), undefined, { timeout: 5000 });
+  const saved = await page.evaluate(() => window.__savedExport);
+  if (saved.suggestedName !== "root-dse.txt") {
+    throw new Error(`unexpected suggested export name: ${saved.suggestedName}`);
+  }
+  if (!saved.text.includes("namingContexts: dc=demo,dc=dbx") || !saved.text.includes("supportedLDAPVersion: 3")) {
     throw new Error("RootDSE operational metadata missing from export");
   }
-  await download.delete();
+  await page.waitForFunction(() => document.querySelector(".notice")?.textContent === "已导出 root-dse-saved.txt", undefined, { timeout: 3000 });
 });
 
 // 搜索历史放在写操作用例之间：批量用例的 finally 清理会触发审计通知并覆盖
 // .notice，历史通知断言必须在无审计事件的窗口内做。此前用例已多次成功搜索，
 // 历史至少一条；点首条 = 应用到表单但不自动运行。
 test("filter history applies a previous search without auto-running", async (page) => {
-  const rowsBefore = await page.locator(".result-row").count();
-  await page.getByRole("button", { name: "历史过滤器" }).click();
+  const rowsBefore = await page.locator(RESULT_ROW).count();
+  await page.getByRole("button", { name: "历史" }).click();
   // 只在历史面板内找条目:Run 按钮的 title 也是过滤器串(以"("开头),不能全局匹配。
   const item = page.locator(".history-panel .history-item").first();
   await item.waitFor();
@@ -414,7 +440,7 @@ test("filter history applies a previous search without auto-running", async (pag
   // .notice 有 3.5s TTL,上一条通知可能仍在屏——必须轮询文本而不是等元素出现。
   await page.waitForFunction(() => document.querySelector(".notice")?.textContent === "已应用历史过滤器", undefined, { timeout: 3000 });
   expectEqual(await page.locator(".qb-preview").first().innerText(), filter, "history filter lands in the builder preview");
-  expectEqual(await page.locator(".result-row").count(), rowsBefore, "applying history does not auto-run the search");
+  expectEqual(await page.locator(RESULT_ROW).count(), rowsBefore, "applying history does not auto-run the search");
 });
 
 test("source searches preserve escaped UTF-8 and order integer attributes numerically", async (page) => {
@@ -429,8 +455,8 @@ test("source searches preserve escaped UTF-8 and order integer attributes numeri
     }
   }, baseDn);
   try {
-    await page.locator(".search-form > label.field input").first().fill(baseDn);
-    await page.locator(".search-form > label.field select").first().selectOption("sub");
+    await page.locator(".search-form-compact > .field input").first().fill(baseDn);
+    await page.locator(".search-form-compact .compact-scope").first().selectOption("sub");
     await page.locator(".search-form .mode-switch button").nth(1).click();
     for (const [filter, numbers] of [
       [String.raw`(cn=\e7\a0\94\e7\a9\b6\2a\e5\91\98)`, [9]],
@@ -440,7 +466,7 @@ test("source searches preserve escaped UTF-8 and order integer attributes numeri
       await page.locator(".filter-source input").fill(filter);
       await page.locator(".search-form button[type='submit']").click();
       const expected = numbers.map((number) => `uid=n${number},${baseDn}`).sort();
-      await page.waitForFunction((dns) => JSON.stringify([...document.querySelectorAll(".result-row")].map((row) => row.title).sort()) === JSON.stringify(dns), expected);
+      await page.waitForFunction((dns) => JSON.stringify([...document.querySelectorAll('.ag-row .ag-cell[col-id="dn"]')].map((cell) => cell.textContent).sort()) === JSON.stringify(dns), expected);
     }
     await captureReview(page, "ldap-round7-filter-results");
   } finally {
@@ -455,7 +481,7 @@ test("source searches preserve escaped UTF-8 and order integer attributes numeri
 // 而本用例依赖仍有一行结果可双击。
 test("toolbar recent entries reopens an entry and the protocol badge renders", async (page) => {
   expectEqual(await page.locator(".toolbar .badge[title='连接协议与认证方式']").innerText(), "LDAP", "protocol badge derived from mock connection");
-  await page.locator(".result-row").first().dblclick();
+  await page.locator(RESULT_ROW).first().dblclick();
   await page.locator(".editor-modal").waitFor();
   await page.locator(".editor-modal").getByRole("button", { name: "取消", exact: true }).click();
   await page.getByRole("button", { name: "最近打开" }).click();
@@ -479,20 +505,25 @@ test("result batch select arms the bar and batch-deletes via confirm", async (pa
     }
   }, root);
   try {
-    await page.locator(".search-form > label.field input").first().fill(root);
+    await page.locator(".search-form-compact > .field input").first().fill(root);
     await page.locator(".search-form .mode-switch button").nth(1).click();
     await page.locator(".filter-source input").fill("(uid=batch-*)");
     await page.locator(".search-form button[type='submit']").click();
-    await page.waitForFunction(() => document.querySelectorAll(".result-row").length === 2);
-    await page.locator(".result-row .cell-check input").first().click();
+    await page.waitForFunction(() => document.querySelectorAll(".ag-row").length === 2);
+    const firstRow = page.locator(RESULT_ROW).filter({ hasText: "uid=batch-a," }).first();
+    const secondRow = page.locator(RESULT_ROW).filter({ hasText: "uid=batch-b," }).first();
+    await firstRow.locator(".ag-checkbox-input-wrapper").click();
+    await firstRow.locator(".ag-checkbox-input[aria-label*='checked']").waitFor();
+    await secondRow.locator(".ag-checkbox-input").focus();
+    await page.keyboard.press("Space");
+    await secondRow.locator(".ag-checkbox-input[aria-label*='checked']").waitFor();
     expectEqual(await page.locator(".editor-modal").count(), 0, "checkbox click does not open entry");
-    await page.locator(".result-row .cell-check input").nth(1).click();
     expectEqual(await page.locator(".batch-bar").isVisible(), true, "batch bar armed");
     expectEqual(await page.locator(".batch-count").innerText(), "已选 2 项", "batch count copy");
     await captureReview(page, "ldap-round8-batch-bar");
     page.once("dialog", (dialog) => dialog.accept());
     await page.locator(".batch-delete").click();
-    await page.waitForFunction(() => document.querySelectorAll(".result-row").length === 0);
+    await page.waitForFunction(() => document.querySelectorAll(".ag-row").length === 0);
   } finally {
     await page.evaluate((dn) => window.dbxPlugin.invoke("ldap/entry/delete", { dn, recursive: true }), root);
   }
@@ -511,13 +542,13 @@ test("batch move relocates selected entries keeping their RDNs", async (page) =>
     }
   }, [source, target]);
   try {
-    await page.locator(".search-form > label.field input").first().fill(source);
+    await page.locator(".search-form-compact > .field input").first().fill(source);
     await page.locator(".search-form .mode-switch button").nth(1).click();
     await page.locator(".filter-source input").fill("(uid=mv-*)");
     await page.locator(".search-form button[type='submit']").click();
-    await page.waitForFunction(() => document.querySelectorAll(".result-row").length === 2);
-    await page.locator(".result-row .cell-check input").first().click();
-    await page.locator(".result-row .cell-check input").nth(1).click();
+    await page.waitForFunction(() => document.querySelectorAll(".ag-row").length === 2);
+    await page.locator(`${RESULT_ROW}[row-index="0"] .ag-checkbox-input`).click();
+    await page.locator(`${RESULT_ROW}[row-index="1"] .ag-checkbox-input`).click();
     await page.locator(".batch-move").click();
     const dialog = page.locator(".small-modal");
     await dialog.waitFor();
@@ -543,11 +574,11 @@ test("MCP ui intent fills the form, runs the search and reports state", async (p
     window.__uiReports = reports;
     window.dbxPlugin.emitUiIntent({ intentId: "ui-e2e-1", action: "search", params: { baseDn: "dc=demo,dc=dbx", filter: "(uid=user0002)", scope: "sub" } });
   });
-  await page.locator(".result-row").first().waitFor({ timeout: 5000 }).catch(async () => {
+  await page.locator(RESULT_ROW).first().waitFor({ timeout: 5000 }).catch(async () => {
     const debug = await page.evaluate(() => ({
       reports: window.__uiReports,
       preview: document.querySelector(".qb-preview")?.textContent ?? null,
-      resultRows: document.querySelectorAll(".result-row").length,
+      resultRows: document.querySelectorAll(".ag-row").length,
       notice: document.querySelector(".notice, .toast, [role='status']")?.textContent ?? null,
       hasEmit: typeof window.dbxPlugin.emitUiIntent,
     }));

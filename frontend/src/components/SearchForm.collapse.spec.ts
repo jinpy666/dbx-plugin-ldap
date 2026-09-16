@@ -41,11 +41,10 @@ describe("SearchForm collapsed quick bar", () => {
     expect((compactFilter(wrapper).element as HTMLInputElement).value).toBe("");
     expect(compactBar(wrapper).find("button[type='submit']").exists()).toBe(true);
     expect(compactBar(wrapper).find(".compact-toggle").attributes("aria-expanded")).toBe("false");
-    // 高级区只是收起（hidden），DOM 仍在，展开后状态原样回来。
-    expect(wrapper.find(".filter-block").isVisible()).toBe(false);
-    expect(wrapper.find(".search-extra").isVisible()).toBe(false);
-    expect(wrapper.find(".command-import").isVisible()).toBe(false);
-    expect(wrapper.find(".search-presets").isVisible()).toBe(false);
+    // 高级区折叠时保留 DOM 与状态，由外层过渡容器收起。
+    expect(wrapper.find(".search-advanced").classes()).toContain("is-collapsed");
+    expect(wrapper.find(".search-advanced").attributes("aria-hidden")).toBe("true");
+    expect(wrapper.find(".search-advanced").exists()).toBe(true);
     expect(wrapper.find(".filter-block").exists()).toBe(true);
   });
 
@@ -55,27 +54,29 @@ describe("SearchForm collapsed quick bar", () => {
     await compactBar(wrapper).find("select").setValue("one");
     (wrapper.vm as unknown as Exposed).expandSearch();
     await wrapper.vm.$nextTick();
-    expect(compactBar(wrapper).exists()).toBe(false);
+    expect(compactBar(wrapper).exists()).toBe(true);
+    expect(wrapper.find(".search-advanced").classes()).not.toContain("is-collapsed");
     expect(wrapper.find(".qb-preview").isVisible()).toBe(true);
     expect(wrapper.find(".search-extra").isVisible()).toBe(true);
     expect(wrapper.find(".search-presets").isVisible()).toBe(true);
-    expect((wrapper.find(".field select").element as HTMLSelectElement).value).toBe("one");
-    // 展开态定位行的收起按钮可再次折叠（title/aria 状态同步翻转）。
-    const toggle = wrapper.find(".field .compact-toggle");
+    expect((wrapper.find(".compact-scope").element as HTMLSelectElement).value).toBe("one");
+    // 固定顶部行的收起按钮可再次折叠（title/aria 状态同步翻转）。
+    const toggle = wrapper.find(".search-form-compact .compact-toggle");
     expect(toggle.attributes("title")).toBe("收起搜索高级选项");
     await toggle.trigger("click");
     await wrapper.vm.$nextTick();
-    expect(wrapper.find(".filter-block").isVisible()).toBe(false);
+    expect(wrapper.find(".search-advanced").classes()).toContain("is-collapsed");
     expect(wrapper.find(".search-form-compact .compact-filter").exists()).toBe(true);
   });
 
   it("expands via the toggle button on the compact bar", async () => {
     const wrapper = await mountForm();
     const toggle = compactBar(wrapper).find(".compact-toggle");
-    expect(toggle.attributes("aria-label")).toBe("高级");
+    expect(toggle.attributes("aria-label")).toBe("高级筛选");
     await toggle.trigger("click");
     await wrapper.vm.$nextTick();
-    expect(compactBar(wrapper).exists()).toBe(false);
+    expect(compactBar(wrapper).exists()).toBe(true);
+    expect(wrapper.find(".search-advanced").classes()).not.toContain("is-collapsed");
     expect(wrapper.find(".qb-preview").isVisible()).toBe(true);
     expect(wrapper.find(".search-presets").isVisible()).toBe(true);
   });
@@ -98,13 +99,15 @@ describe("SearchForm collapsed quick bar", () => {
   it("restores the persisted collapsed preference across remounts", async () => {
     window.localStorage.setItem(COLLAPSED_KEY, "0");
     const expanded = await mountForm();
-    expect(expanded.find(".search-form-compact").exists()).toBe(false);
-    expect(expanded.find(".filter-block").isVisible()).toBe(true);
+    expect(expanded.find(".search-form-compact").exists()).toBe(true);
+    expect(expanded.find(".search-advanced").classes()).not.toContain("is-collapsed");
+    expect(expanded.find(".search-advanced").classes()).not.toContain("is-collapsed");
+    expect(expanded.find(".filter-block").exists()).toBe(true);
     expanded.unmount();
     window.localStorage.setItem(COLLAPSED_KEY, "1");
     const collapsed = await mountForm();
-    expect(collapsed.find(".search-form-compact").isVisible()).toBe(true);
-    expect(collapsed.find(".filter-block").isVisible()).toBe(false);
+    expect(collapsed.find(".search-form-compact").exists()).toBe(true);
+    expect(collapsed.find(".search-advanced").classes()).toContain("is-collapsed");
   });
 
   it("keeps runSubtreeAt working from the collapsed state", async () => {
