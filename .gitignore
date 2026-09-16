@@ -13,3 +13,4 @@ node_modules/
 *.log
 .dbx-repository-signing-key.env
 .idea/
+.zcode/
