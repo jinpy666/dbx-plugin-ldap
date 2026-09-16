@@ -7,7 +7,7 @@ import { Database, Download, FileText, FileUp, History, Info, Loader2, Network, 
 import { DBX_POPOVER, resolveAppearance, type DbxPluginAppearanceInput } from "./lib/appearance";
 import { isDbxPluginTheme, onHostThemeChange, themeToAppearance } from "./lib/hostTheme";
 import { setWorkbenchLocale, t, workbenchLocale } from "./lib/i18n";
-import { getLdapConnectionId, ldapApi, setLdapConnectionId, type LdapEntry } from "./lib/api";
+import { getLdapConnectionId, ldapApi, setLdapConnectionId, type LdapEntry, type LdapSearchRequest } from "./lib/api";
 import { inferBaseDnFromProfile, pickBaseDnFromRootDse } from "./lib/baseDn";
 import { splitFirstDnRdn } from "./lib/dn";
 import { escapeLdapFilterValue } from "./lib/ldapFilter";
@@ -35,6 +35,7 @@ import type { LdapSchema } from "./lib/newEntryTemplates";
 import { parseAuditEvent, pushAuditItem, type AuditFeedItem } from "./lib/auditFeed";
 import { setupTooltipLayer, teardownTooltipLayer } from "./lib/tooltip";
 import { chunkEntryAttributes, ENTRY_PRIORITY_ATTRIBUTES, mergeEntryAttributes, partitionEntryAttributes } from "./lib/stagedEntry";
+import { loadPreferredPageSize } from "./lib/ldapGrid";
 import { useModalA11y } from "./lib/modal";
 import { useUiIntent, type UiIntentOutcome, type UiIntentSummary } from "../../shared/frontend/uiIntent";
 
@@ -66,10 +67,18 @@ const searchModel = ref<SearchFormModel>();
 const results = ref<LdapEntry[]>([]);
 const resultCount = ref(0);
 const resultTruncated = ref(false);
+// `resultCount` is an exact total only when the LDAP search cursor is exhausted.
+// Until then it deliberately means "entries loaded", never an invented total.
+const resultsComplete = ref(true);
 const searching = ref(false);
+const loadingMore = ref(false);
+const loadMoreError = ref("");
+const loadMoreErrorDetail = ref("");
 const searchError = ref("");
 const searchErrorDetail = ref("");
 let searchRequestSeq = 0;
+let activeSearchSession: { id: string; connectionId: string } | undefined;
+let idlePrefetchHandle: number | undefined;
 // 空结果两态（UI 扫描 P2-3）：执行过搜索后的 0 条 ≠ "请先执行搜索"。
 const hasSearched = ref(false);
 // 恰好等于 sizeLimit 的"整页结果"信号（UI 扫描 P2-15）：契约 truncated 只在
@@ -472,42 +481,121 @@ async function onBatchMoveConfirm(targetParentDn: string) {
   });
 }
 
+function cancelIdlePrefetch() {
+  if (idlePrefetchHandle === undefined) return;
+  if (typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(idlePrefetchHandle);
+  else window.clearTimeout(idlePrefetchHandle);
+  idlePrefetchHandle = undefined;
+}
+
+function cancelActiveSearchSession() {
+  cancelIdlePrefetch();
+  const session = activeSearchSession;
+  activeSearchSession = undefined;
+  if (session) void ldapApi.searchCancel(session.id, session.connectionId).catch(() => {});
+}
+
+function scheduleIdlePrefetch(request: number, searchId: string) {
+  // One low-priority look-ahead page makes scrolling/paging feel immediate,
+  // without silently walking a potentially huge directory to completion.
+  cancelIdlePrefetch();
+  const callback = () => {
+    idlePrefetchHandle = undefined;
+    if (request === searchRequestSeq && activeSearchSession?.id === searchId) void loadNextSearchPage();
+  };
+  idlePrefetchHandle = typeof window.requestIdleCallback === "function"
+    ? window.requestIdleCallback(callback, { timeout: 1000 })
+    : window.setTimeout(callback, 750);
+}
+
+async function loadNextSearchPage() {
+  const session = activeSearchSession;
+  const request = searchRequestSeq;
+  if (!session || loadingMore.value || searching.value) return;
+  loadingMore.value = true;
+  loadMoreError.value = "";
+  loadMoreErrorDetail.value = "";
+  try {
+    const page = await ldapApi.searchNext(session.id, session.connectionId);
+    if (request !== searchRequestSeq || activeSearchSession?.id !== session.id) return;
+    const entries = Array.isArray(page.entries) ? page.entries : [];
+    // Keep every page in server cursor order. Do not re-query with a larger
+    // limit or de-duplicate locally: either would risk skipping real entries.
+    results.value = [...results.value, ...entries];
+    resultCount.value = results.value.length;
+    resultsComplete.value = page.hasMore !== true;
+    if (resultsComplete.value) activeSearchSession = undefined;
+  } catch (cause) {
+    if (request === searchRequestSeq && activeSearchSession?.id === session.id) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      loadMoreError.value = friendlyLdapError(message);
+      loadMoreErrorDetail.value = message;
+    }
+  } finally {
+    if (request === searchRequestSeq) loadingMore.value = false;
+  }
+}
+
+function requestNextSearchPage() {
+  // A user-requested continuation supersedes the one scheduled look-ahead;
+  // otherwise a quick click could consume two pages back-to-back.
+  cancelIdlePrefetch();
+  void loadNextSearchPage();
+}
+
+function searchRequest(model: SearchFormModel): LdapSearchRequest {
+  const attributes = model.attributes
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const requestedPageSize = positiveInt(model.pageSize) ?? loadPreferredPageSize("result");
+  return {
+    baseDn: model.baseDn.trim() || undefined,
+    filter: model.filter.trim() || "(objectClass=*)",
+    scope: model.scope,
+    ...(attributes.length > 0 ? { attributes } : {}),
+    sizeLimit: positiveInt(model.sizeLimit),
+    // Do not let the legacy default of 500 postpone the first visible grid
+    // page. A user-requested smaller page is still respected.
+    pageSize: Math.min(requestedPageSize, loadPreferredPageSize("result")),
+    typesOnly: model.typesOnly,
+    derefAliases: model.derefAliases,
+  };
+}
+
 async function runSearch(model: SearchFormModel) {
-  if (busy.value || searching.value) return;
+  if (busy.value) return;
   const request = ++searchRequestSeq;
+  const requestedConnectionId = connectionId.value;
+  cancelActiveSearchSession();
   searching.value = true;
+  loadingMore.value = false;
   searchModel.value = { ...model };
   searchError.value = "";
+  loadMoreError.value = "";
+  loadMoreErrorDetail.value = "";
   ldapError.value = "";
+  results.value = [];
+  resultCount.value = 0;
+  resultsComplete.value = false;
   try {
-    const attributes = model.attributes
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-    const sizeLimit = positiveInt(model.sizeLimit);
-    const result = await ldapApi.search({
-      baseDn: model.baseDn.trim() || undefined,
-      filter: model.filter.trim() || "(objectClass=*)",
-      scope: model.scope,
-      ...(attributes.length > 0 ? { attributes } : {}),
-      sizeLimit,
-      pageSize: positiveInt(model.pageSize),
-      typesOnly: model.typesOnly,
-      derefAliases: model.derefAliases,
-    });
-    if (request !== searchRequestSeq) return;
+    const requestParams = searchRequest(model);
+    const result = await ldapApi.searchStart(requestParams);
+    if (request !== searchRequestSeq) {
+      if (result.searchId) void ldapApi.searchCancel(result.searchId, requestedConnectionId).catch(() => {});
+      return;
+    }
     hasSearched.value = true;
     results.value = Array.isArray(result.entries) ? result.entries : [];
-    resultCount.value = Number.isFinite(result.count) ? result.count : results.value.length;
-    resultTruncated.value = result.truncated === true;
-    resultAtLimit.value = sizeLimit !== undefined && resultCount.value === sizeLimit;
-    lastSizeLimit.value = sizeLimit;
+    resultCount.value = results.value.length;
+    resultTruncated.value = false;
+    resultsComplete.value = result.hasMore !== true;
+    resultAtLimit.value = requestParams.sizeLimit !== undefined && resultCount.value === requestParams.sizeLimit;
+    lastSizeLimit.value = requestParams.sizeLimit;
+    activeSearchSession = !resultsComplete.value && result.searchId ? { id: result.searchId, connectionId: requestedConnectionId } : undefined;
     // 搜索成功才入历史（失败/竞态不记）：recordSearch 是 SearchForm 暴露的
     // 本地历史入队（去重 + localStorage），与 presets 的 sidecar 持久化互补。
-    // 可选调用：stub 实例（测试挂载）无 expose 方法时不致命。
     searchRef.value?.recordSearch?.(model);
-    // 快照型 report（设计 §1）：搜索完成后上报工作台状态，`ldap_ui_state`
-    // 不带 intentId 时取用。
     const anchorDn = results.value[0]?.dn;
     uiIntent.reportSnapshot({
       panel: "search",
@@ -517,8 +605,12 @@ async function runSearch(model: SearchFormModel) {
       truncated: resultTruncated.value,
       ...(anchorDn ? { anchor: anchorDn } : {}),
     });
+    if (activeSearchSession) scheduleIdlePrefetch(request, activeSearchSession.id);
   } catch (cause) {
-    if (request === searchRequestSeq) showError(cause, "search");
+    if (request === searchRequestSeq) {
+      resultsComplete.value = true;
+      showError(cause, "search");
+    }
   } finally {
     if (request === searchRequestSeq) searching.value = false;
   }
@@ -1039,7 +1131,9 @@ async function exportSubtree(dn: string) {
 }
 
 async function exportResults(format: "ldif" | "csv" | "json") {
-  if (results.value.length === 0) return;
+  // An incomplete cursor is only the prefix currently rendered in the grid.
+  // Exporting it as though it were the complete search would silently lose data.
+  if (results.value.length === 0 || !resultsComplete.value) return;
   try {
     const text = format === "ldif" ? serializeEntriesToLdifText(results.value) : format === "csv" ? serializeEntriesToCsv(results.value) : serializeEntriesToJson(results.value);
     const contentType = format === "ldif" ? "text/plain" : format === "csv" ? "text/csv" : "application/json";
@@ -1150,6 +1244,7 @@ function syncConnectionContext() {
   const switched = lastSyncedConnectionId !== "" && lastSyncedConnectionId !== current;
   lastSyncedConnectionId = current;
   if (switched) {
+    cancelActiveSearchSession();
     closeEditor();
     editorAddPrefill.value = undefined;
     searchRequestSeq++;
@@ -1166,6 +1261,10 @@ function syncConnectionContext() {
     results.value = [];
     resultCount.value = 0;
     resultTruncated.value = false;
+    resultsComplete.value = true;
+    loadingMore.value = false;
+    loadMoreError.value = "";
+    loadMoreErrorDetail.value = "";
     resultAtLimit.value = false;
     hasSearched.value = false;
     searchModel.value = undefined;
@@ -1280,6 +1379,7 @@ window.setTimeout(() => {
 
 onBeforeUnmount(() => {
   searchRequestSeq++;
+  cancelActiveSearchSession();
   entryRequestSeq++;
   closeReference();
   window.clearTimeout(noticeTimer);
@@ -1329,7 +1429,7 @@ onBeforeUnmount(() => {
         <button class="icon-button" :disabled="!ready" :title="t('refresh')" @click="refreshTree">
           <RefreshCw aria-hidden="true" />
         </button>
-        <button class="icon-button" :disabled="!ready || results.length === 0" :title="t('result.exportLdif')" @click="exportResults('ldif')">
+        <button class="icon-button" :disabled="!ready || results.length === 0 || !resultsComplete" :title="resultsComplete ? t('result.exportLdif') : t('result.exportIncomplete')" @click="exportResults('ldif')">
           <Download aria-hidden="true" />
         </button>
       </div>
@@ -1383,9 +1483,15 @@ onBeforeUnmount(() => {
           :searched="hasSearched"
           :disabled="searching"
           :loading="searching"
+          :complete="resultsComplete"
+          :loading-more="loadingMore"
+          :load-more-error="loadMoreError"
+          :load-more-error-detail="loadMoreErrorDetail"
           :error="searchError"
           :error-detail="searchErrorDetail"
           @retry="retrySearch"
+          @load-more="requestNextSearchPage"
+          @retry-more="requestNextSearchPage"
           @open="openEntry"
           @export="exportResults"
           @notify="showNotice"

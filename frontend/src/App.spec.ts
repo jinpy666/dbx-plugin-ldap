@@ -78,6 +78,56 @@ const editor = () => wrapper!.findComponent({ name: "EntryEditorDialog" });
 const recentButton = () => wrapper!.findAll("button[aria-label]").find((button) => button.attributes("aria-label")?.toLowerCase().includes("recent"))!;
 
 describe("App request feedback and recovery", () => {
+  it("renders the first search page immediately, then appends the next cursor page", async () => {
+    const host = await mountWithHost();
+    host.invoke.mockImplementation(async (method) => {
+      if (method === "ldap/search/start") return { searchId: "search-1", entries: [{ dn: "cn=first,dc=demo", attributes: {} }], hasMore: true };
+      if (method === "ldap/search/next") return { entries: [{ dn: "cn=second,dc=demo", attributes: {} }], hasMore: false };
+      return { statuses: [], success: true, attributeTypes: [], objectClasses: [] };
+    });
+    wrapper!.findComponent(searchStub).vm.$emit("run", searchModel);
+    await flushPromises();
+    expect(resultsPane().props()).toMatchObject({ entries: [{ dn: "cn=first,dc=demo" }], count: 1, complete: false, loading: false });
+    resultsPane().vm.$emit("loadMore");
+    await flushPromises();
+    expect(host.invoke).toHaveBeenCalledWith("ldap/search/next", { connectionId: "first", searchId: "search-1" }, undefined);
+    expect(resultsPane().props()).toMatchObject({ entries: [{ dn: "cn=first,dc=demo" }, { dn: "cn=second,dc=demo" }], count: 2, complete: true });
+  });
+
+  it("cancels a prior search session when a new query replaces it", async () => {
+    const host = await mountWithHost();
+    host.invoke.mockImplementation(async (method) => {
+      if (method === "ldap/search/start") return { searchId: "search-1", entries: [{ dn: "cn=first,dc=demo", attributes: {} }], hasMore: true };
+      return { statuses: [], success: true, attributeTypes: [], objectClasses: [] };
+    });
+    wrapper!.findComponent(searchStub).vm.$emit("run", searchModel);
+    await flushPromises();
+    wrapper!.findComponent(searchStub).vm.$emit("run", { ...searchModel, filter: "(uid=bob)" });
+    await flushPromises();
+    expect(host.invoke).toHaveBeenCalledWith("ldap/search/cancel", { connectionId: "first", searchId: "search-1" }, undefined);
+  });
+
+  it("prefetches one additional cursor page only after the browser becomes idle", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = await mountWithHost();
+      host.invoke.mockImplementation(async (method) => {
+        if (method === "ldap/search/start") return { searchId: "search-1", entries: [{ dn: "cn=first,dc=demo", attributes: {} }], hasMore: true };
+        if (method === "ldap/search/next") return { entries: [{ dn: "cn=second,dc=demo", attributes: {} }], hasMore: true };
+        return { statuses: [], success: true, attributeTypes: [], objectClasses: [] };
+      });
+      wrapper!.findComponent(searchStub).vm.$emit("run", searchModel);
+      await flushPromises();
+      expect(host.invoke.mock.calls.some(([method]) => method === "ldap/search/next")).toBe(false);
+      await vi.advanceTimersByTimeAsync(750);
+      await flushPromises();
+      expect(host.invoke.mock.calls.filter(([method]) => method === "ldap/search/next")).toHaveLength(1);
+      expect(resultsPane().props()).toMatchObject({ count: 2, complete: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("connects the pending state to form and results, then marks only a successful search as searched", async () => {
     const host = await mountWithHost();
     const pending = deferred<unknown>();
@@ -102,8 +152,8 @@ describe("App request feedback and recovery", () => {
     resultsPane().vm.$emit("retry");
     await flushPromises();
     // 搜索成功后 App 会追加一条 ldap/ui/state/report 快照（M1 intent 通道），
-    // 这里按方法过滤取最近一次 ldap/search。
-    const searchCalls = host.invoke.mock.calls.filter(([method]) => method === "ldap/search");
+    // 这里按方法过滤取最近一次 search session start。
+    const searchCalls = host.invoke.mock.calls.filter(([method]) => method === "ldap/search/start");
     expect(searchCalls.at(-1)?.[1]).toMatchObject({ connectionId: "first", filter: searchModel.filter, baseDn: searchModel.baseDn });
     expect(resultsPane().props()).toMatchObject({ error: "", searched: true, loading: false });
   });
@@ -234,8 +284,8 @@ describe("App current host bridge contract", () => {
     host.updateContext();
     await flushPromises();
     expect(getLdapConnectionId()).toBe("second");
-    await ldapApi.search({ filter: "(objectClass=*)", scope: "sub" });
-    expect(host.invoke).toHaveBeenLastCalledWith("ldap/search", { connectionId: "second", filter: "(objectClass=*)", scope: "sub" }, undefined);
+    await ldapApi.searchStart({ filter: "(objectClass=*)", scope: "sub" });
+    expect(host.invoke).toHaveBeenLastCalledWith("ldap/search/start", { connectionId: "second", filter: "(objectClass=*)", scope: "sub" }, undefined);
   });
 
   it("prefers onContext when both callbacks exist and disposes subscriptions", async () => {

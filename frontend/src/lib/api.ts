@@ -32,8 +32,11 @@ export interface LdapSearchResult {
   truncated: boolean;
 }
 
-/** A server-side paged search. `hasMore` is authoritative: callers must not
- * infer completion from the number of entries in a page. */
+/**
+ * A server-side LDAP paged-search session. `entries` is deliberately only the
+ * page just read; callers must keep using the returned searchId until
+ * `hasMore` is false instead of restarting the same query with a larger limit.
+ */
 export interface LdapSearchPage {
   entries: LdapEntry[];
   hasMore: boolean;
@@ -114,6 +117,16 @@ async function callLdap<T>(method: string, params: Record<string, unknown> = {},
   if (!api) throw new Error("DBX Host API unavailable");
   const invoke = (api.invoke ?? api.request).bind(api);
   return invoke<T>(method, { connectionId: requireConnectionId(), ...params }, options);
+}
+
+// Search sessions can outlive the currently selected connection briefly while
+// a host context change is being processed. Cancellation must be routed to the
+// connection which created the session, not whichever connection is current.
+async function callLdapForConnection<T>(connectionId: string, method: string, params: Record<string, unknown> = {}, options?: { timeoutMs?: number }): Promise<T> {
+  const api = window.dbxPlugin;
+  if (!api) throw new Error("DBX Host API unavailable");
+  const invoke = (api.invoke ?? api.request).bind(api);
+  return invoke<T>(method, { connectionId, ...params }, options);
 }
 
 // -- domain methods (§5.2 of IMPL_PLAN_DBX_LDAP) -----------------------------
