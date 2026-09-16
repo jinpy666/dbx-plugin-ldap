@@ -216,6 +216,9 @@ type LDAPGetEntryRequest struct {
 	ConnectionID string   `json:"connectionId"`
 	DN           string   `json:"dn"`
 	Attributes   []string `json:"attributes,omitempty"`
+	// TypesOnly returns the visible attribute names with no values.  It lets the
+	// workbench discover a large entry cheaply before requesting value batches.
+	TypesOnly    bool     `json:"typesOnly,omitempty"`
 }
 
 // LDAPCountRequest 对应 ldap/count：baseDN 下直接子条目数（scope=one），

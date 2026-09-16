@@ -220,7 +220,7 @@ func (s *Service) GetEntry(ctx context.Context, req LDAPGetEntryRequest) (LDAPEn
 		return LDAPEntry{}, err
 	}
 	attrs := sanitizeLDAPAttributes(profile, normalizeLDAPAttributes(req.Attributes))
-	entry, err := s.readEntry(ctx, req.ConnectionID, dn, attrs)
+	entry, err := s.readEntry(ctx, req.ConnectionID, dn, attrs, req.TypesOnly)
 	if err != nil {
 		return LDAPEntry{}, err
 	}
@@ -238,7 +238,7 @@ func (s *Service) RootDSE(ctx context.Context, req LDAPRootDSERequest) (LDAPEntr
 	if err := rootDSEAllowed(profile); err != nil {
 		return LDAPEntry{}, err
 	}
-	entry, err := s.readEntry(ctx, req.ConnectionID, "", sanitizeLDAPAttributes(profile, normalizeLDAPAttributes(req.Attributes)))
+	entry, err := s.readEntry(ctx, req.ConnectionID, "", sanitizeLDAPAttributes(profile, normalizeLDAPAttributes(req.Attributes)), false)
 	if err != nil {
 		return LDAPEntry{}, err
 	}
@@ -262,7 +262,7 @@ func (s *Service) SchemaMetadata(ctx context.Context, req LDAPSchemaMetadataRequ
 		return LDAPSchemaMetadata{}, err
 	}
 	spec := DefaultSchemaSearchSpec()
-	rootDSE, err := s.readEntry(ctx, req.ConnectionID, "", spec.RootDSEAttrs)
+	rootDSE, err := s.readEntry(ctx, req.ConnectionID, "", spec.RootDSEAttrs, false)
 	if err != nil {
 		return LDAPSchemaMetadata{}, err
 	}
@@ -273,7 +273,7 @@ func (s *Service) SchemaMetadata(ctx context.Context, req LDAPSchemaMetadataRequ
 	if err := ensureLDAPReadAllowed(profile, schemaDN); err != nil {
 		return LDAPSchemaMetadata{}, err
 	}
-	schemaEntry, err := s.readEntry(ctx, req.ConnectionID, schemaDN, spec.SubschemaAttrs)
+	schemaEntry, err := s.readEntry(ctx, req.ConnectionID, schemaDN, spec.SubschemaAttrs, false)
 	if err != nil {
 		return LDAPSchemaMetadata{}, err
 	}
@@ -679,7 +679,7 @@ func (s *Service) presetStore() PresetStore {
 
 // readEntry base scope 读单条（tiny-rdm getEntry :744 语义：scope=base、
 // sizeLimit=1、filter=(objectClass=*)、never deref；空结果报 entry not found）。
-func (s *Service) readEntry(ctx context.Context, connectionID, dn string, attributes []string) (LDAPEntry, error) {
+func (s *Service) readEntry(ctx context.Context, connectionID, dn string, attributes []string, typesOnly bool) (LDAPEntry, error) {
 	var entry LDAPEntry
 	err := s.WithConn(ctx, connectionID, func(conn *ldap.Conn) error {
 		result, err := conn.Search(ldap.NewSearchRequest(
@@ -688,7 +688,7 @@ func (s *Service) readEntry(ctx context.Context, connectionID, dn string, attrib
 			ldap.NeverDerefAliases,
 			1,
 			0,
-			false,
+			typesOnly,
 			"(objectClass=*)",
 			normalizeLDAPAttributes(attributes),
 			nil,
