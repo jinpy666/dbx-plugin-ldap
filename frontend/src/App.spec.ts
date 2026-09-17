@@ -81,6 +81,17 @@ const editor = () => wrapper!.findComponent({ name: "EntryEditorDialog" });
 const recentButton = () => wrapper!.findAll("button[aria-label]").find((button) => button.attributes("aria-label")?.toLowerCase().includes("recent"))!;
 
 describe("App request feedback and recovery", () => {
+  it("applies colors inline but leaves fonts to the host theme bridge", async () => {
+    await mountWithHost();
+    document.dispatchEvent(new CustomEvent("dbx-plugin-env", { detail: { theme: { appearance: "dark", tokens: { "--color-background": "rgb(1 2 3)" } } } }));
+    await flushPromises();
+    // 颜色仍由 applyAppearance 内联回写。
+    expect(document.documentElement.style.getPropertyValue("--background")).toBe("rgb(1 2 3)");
+    // 字体交给主题桥（--ui-font-family:var(--font-sans,…)）跟随宿主字体设置，
+    // 内联回写会压过桥接样式，把字体钉死在插件默认栈。
+    expect(document.documentElement.style.getPropertyValue("--ui-font-family")).toBe("");
+  });
+
   it("keeps the protocol badge beside the connection name", async () => {
     await mountWithHost(false, false, { port: 636, external_config: { tls_mode: "ldaps", auth_type: "simple" } });
     expect(wrapper!.find(".identity .identity-protocol").text()).toBe("LDAPS · Simple");
