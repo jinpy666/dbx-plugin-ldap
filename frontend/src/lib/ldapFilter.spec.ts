@@ -467,6 +467,22 @@ describe("parseFilterStructure (table-driven)", () => {
     expect(parseClauseItem("cn=*a*b*")).toBeNull();
     expect(parseClauseItem("cn=*a*")).not.toBeNull();
   });
+
+  it("tolerates whitespace between filter tokens (pretty-printed pastes)", () => {
+    // ldapsearch 文档/控制台常见的多行缩进过滤器：令牌间空白可解析，
+    // 值内空白原样保留。
+    const pretty = "(&(objectCategory=person)\n  (objectClass=user)\n  (!(cn=x*)))";
+    const parsed = stripIds(parseFilterStructure(pretty));
+    expect(parsed).not.toBeNull();
+    expect((parsed as { children: unknown[] }).children).toHaveLength(3);
+    // 单条过滤器的括号内空白（操作符前）同样容忍。
+    expect(parseFilterStructure("( !(cn=x) )")).not.toBeNull();
+    // 结尾换行不破坏解析。
+    expect(parseFilterStructure("(cn=a)\n")).not.toBeNull();
+    // 值内空白仍原样保留（不折入令牌跳过逻辑）。
+    const spaced = stripIds(parseFilterStructure("(cn=hello world)"));
+    expect((spaced as { value?: string }).value).toBe("hello world");
+  });
 });
 
 describe("source-mode roundtrip (build → parse → build)", () => {

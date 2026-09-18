@@ -12,9 +12,13 @@
  * schemes are unsalted. Values still travel through entry/modify unchanged —
  * the sidecar stays untouched.
  *
- * `hashPassword` is async because Web Crypto `subtle.digest` is the only
- * portable digest primitive available in the browser workbench.
+ * `hashPassword` is async because hashing prefers Web Crypto `subtle.digest`
+ * and falls back to the pure-JS digests in lib/sha when the workbench runs in
+ * a non-secure context (DBX is often opened over LAN HTTP, where `crypto.subtle`
+ * is missing or calls throw SecurityError "The operation is insecure.").
  */
+
+import { digestSha, type ShaAlgorithm } from "./sha";
 
 export type PasswordScheme =
     | "{SSHA}"
@@ -26,8 +30,8 @@ export type PasswordScheme =
     | "{CLEARTEXT}";
 
 interface SchemeMeta {
-    /** Web Crypto algorithm name understood by `crypto.subtle.digest`. */
-    algorithm: "SHA-1" | "SHA-256" | "SHA-512";
+    /** Digest algorithm (Web Crypto name; doubles as the lib/sha fallback selector). */
+    algorithm: ShaAlgorithm;
     /** Salted schemes append `SALT_BYTES` random bytes to the digest. */
     salted: boolean;
 }
@@ -92,7 +96,7 @@ export const hashPassword = async (plain: string, scheme: PasswordScheme): Promi
     // stored blob tail); unsalted schemes digest the plaintext only.
     const salt = meta.salted ? crypto.getRandomValues(new Uint8Array(SALT_BYTES)) : null;
     const input = salt ? new Uint8Array([...data, ...salt]) : data;
-    const digest = new Uint8Array(await crypto.subtle.digest(meta.algorithm, input));
+    const digest = await digestSha(meta.algorithm, input);
     const payload = salt ? bytesToBase64(new Uint8Array([...digest, ...salt])) : bytesToBase64(digest);
     return `${scheme}${payload}`;
 };
@@ -152,10 +156,10 @@ export const verifyPasswordHash = async (plain: string, stored: string): Promise
     if (meta.salted) {
         if (payload.length <= SALT_BYTES) return false;
         const split = payload.length - SALT_BYTES;
-        const digest = new Uint8Array(await crypto.subtle.digest(meta.algorithm, new Uint8Array([...new TextEncoder().encode(String(plain ?? "")), ...payload.slice(split)])));
+        const digest = await digestSha(meta.algorithm, new Uint8Array([...new TextEncoder().encode(String(plain ?? "")), ...payload.slice(split)]));
         const expected = payload.slice(0, split);
         return digest.length === expected.length && digest.every((byte, index) => byte === expected[index]);
     }
-    const digest = new Uint8Array(await crypto.subtle.digest(meta.algorithm, new TextEncoder().encode(String(plain ?? ""))));
+    const digest = await digestSha(meta.algorithm, new TextEncoder().encode(String(plain ?? "")));
     return digest.length === payload.length && digest.every((byte, index) => byte === payload[index]);
 };

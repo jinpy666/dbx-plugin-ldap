@@ -22,6 +22,25 @@ describe("SearchForm (filter builder)", () => {
     expect(previewText(wrapper)).toBe("(objectClass=*)");
   });
 
+  it("reset restores the whole form to defaults from a blanked-out state", async () => {
+    const wrapper = await mountForm();
+    // 先把表单改乱：源码模式清空过滤器（空白态）+ 改坏属性/数值框。
+    await wrapper.findAll(".mode-switch button")[1].trigger("click");
+    await wrapper.find(".filter-source input").setValue("");
+    await wrapper.findAll(".search-extra input")[0].setValue("cn");
+    await wrapper.findAll(".mode-switch button")[0].trigger("click"); // 空源码可切回构建器
+    // 快捷条图标重置：还原匹配全部 + 构建器模式 + 默认属性/数值。
+    await wrapper.find(".compact-reset").trigger("click");
+    expect(previewText(wrapper)).toBe("(objectClass=*)");
+    expect(wrapper.find(".filter-builder").exists()).toBe(true);
+    expect((wrapper.find(".search-extra input").element as HTMLInputElement).value).toBe("");
+    expect(wrapper.emitted("notify")?.at(-1)).toEqual([workbenchMessage("zh-CN", "search.resetDone")]);
+    // 高级区文字按钮同动作。
+    await wrapper.find(".qb-attr").setValue("uid");
+    await wrapper.findAll(".filter-head-tools .toolbar-button").at(-1)!.trigger("click");
+    expect(previewText(wrapper)).toBe("(objectClass=*)");
+  });
+
   it("generates the live RFC 4515 preview from builder conditions", async () => {
     const wrapper = await mountForm();
     await wrapper.find(".qb-attr").setValue("uid");

@@ -76,25 +76,22 @@ export function bytesToBase64(bytes: Uint8Array): string {
 }
 
 /**
- * Classic offset + hex + ASCII three-column dump (hexdump -C style):
- * "00000000  89 50 4e 47 0d 0a 1a 0a  00 00 00 0d 49 48 44 52  |.PNG........IHDR|".
+ * Classic offset + hex two-column dump: "00000000  89 50 4e 47 0d 0a 1a 0a
+ * 00 00 00 0d 49 48 44 52". ASCII 侧栏省略——二进制字节的 ASCII 投影只会
+ * 产生乱码，无阅读价值（GUID/SID 等有语义的值由编辑器直接给出解码文本）。
  * Accepts base64 directly for convenience. Empty input renders as "".
  */
 export function toHexView(bytes: string | Uint8Array, bytesPerLine = 16): string {
   const data = typeof bytes === "string" ? base64ToBytes(bytes) : bytes;
   const lines: string[] = [];
-  const groupWidth = 8 * 3 - 1;
   for (let offset = 0; offset < data.length; offset += bytesPerLine) {
     const row = data.subarray(offset, offset + bytesPerLine);
     const hexParts = Array.from(row, (byte) => byte.toString(16).padStart(2, "0"));
     const groups: string[] = [];
     for (let i = 0; i < hexParts.length; i += 8) {
-      groups.push(hexParts.slice(i, i + 8).join(" ").padEnd(groupWidth, " "));
+      groups.push(hexParts.slice(i, i + 8).join(" "));
     }
-    const ascii = Array.from(row, (byte) => (byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : "."))
-      .join("")
-      .padEnd(bytesPerLine, " ");
-    lines.push(`${offset.toString(16).padStart(8, "0")}  ${groups.join("  ")} |${ascii}|`);
+    lines.push(`${offset.toString(16).padStart(8, "0")}  ${groups.join("  ")}`);
   }
   return lines.join("\n");
 }

@@ -3,9 +3,11 @@
 // RDN 属性值清空待填）、RDN 未填时保存被阻断、填齐后 entryAdd 载荷正确、
 // LDIF 页签与表单同步。
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { nextTick } from "vue";
 import { mount } from "@vue/test-utils";
 import EntryEditorDialog from "./EntryEditorDialog.vue";
 import { ldapApi, type LdapEntry } from "../lib/api";
+import { t } from "../lib/i18n";
 
 vi.mock("../lib/api", async () => {
   const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
@@ -41,8 +43,11 @@ interface PrefillFixture {
 
 const tracked: Awaited<ReturnType<typeof mountDialog>>[] = [];
 
-function mountDialog(props: { canWrite?: boolean; open?: boolean; parentDn?: string; addPrefill?: PrefillFixture } = {}) {
+function mountDialog(props: { canWrite?: boolean; open?: boolean; parentDn?: string; addPrefill?: PrefillFixture } = {}, attach = false) {
   return mount(EntryEditorDialog, {
+    // 焦点断言需 attach 真实文档树（happy-dom 对 detached 元素 focus() 无效，
+    // 用法同 tabs spec）
+    attachTo: attach ? document.body : undefined,
     props: { canWrite: true, open: true, parentDn: "ou=people,dc=demo,dc=dbx", ...props },
   });
 }
@@ -51,8 +56,8 @@ afterEach(() => {
   for (const wrapper of tracked.splice(0)) wrapper.unmount();
 });
 
-const track = (props?: Parameters<typeof mountDialog>[0]) => {
-  const wrapper = mountDialog(props);
+const track = (props?: Parameters<typeof mountDialog>[0], attach?: boolean) => {
+  const wrapper = mountDialog(props, attach);
   tracked.push(wrapper);
   return wrapper;
 };
@@ -81,6 +86,17 @@ describe("EntryEditorDialog copy-entry prefill", () => {
     expect(saveButton(wrapper).attributes("disabled")).toBeDefined();
   });
 
+  // 走查回归：复制态 RDN「属性=」是值待填而非格式错误，提示应引导补值，
+  // 且 DN 行字段纵向布局（标签在上、输入在下）不错位。
+  it("guides filling the RDN value instead of flagging an invalid format for the prefill state", async () => {
+    const wrapper = track({ addPrefill: copyPrefill });
+    expect(wrapper.find(".add-dn-row").exists()).toBe(true);
+    expect(wrapper.text()).toContain(t("editor.rdnValueEmpty"));
+    expect(wrapper.text()).not.toContain(t("editor.rdnInvalid"));
+    await rdnInput(wrapper).setValue("cn=Alice2");
+    expect(wrapper.text()).not.toContain(t("editor.rdnValueEmpty"));
+  });
+
   it("submits the copied attributes under the target parent after filling the RDN", async () => {
     const wrapper = track({ addPrefill: copyPrefill });
     await rdnInput(wrapper).setValue("cn=Alice2");
@@ -95,6 +111,45 @@ describe("EntryEditorDialog copy-entry prefill", () => {
     expect(attributes.mail).toEqual(["alice@demo.dbx"]);
     // 保存成功后发出 saved(add) 事件供父层刷新树
     expect(wrapper.emitted("saved")![0]).toEqual(["cn=Alice2,ou=people,dc=demo,dc=dbx", "add"]);
+  });
+
+  // RDN 字段 → RDN 属性行同步：复制态只填一处即可，空值不再被发给服务器。
+  it("syncs the RDN field value into the blanked RDN attribute row", async () => {
+    const wrapper = track({ addPrefill: copyPrefill });
+    await rdnInput(wrapper).setValue("cn=Alice2");
+    expect(rowFor(wrapper, "cn").find("textarea").element.value).toBe("Alice2");
+  });
+
+  it("saves a coherent entry with only the RDN field filled (no attribute row edit)", async () => {
+    const wrapper = track({ addPrefill: copyPrefill });
+    await rdnInput(wrapper).setValue("cn=Alice2");
+    await saveButton(wrapper).trigger("click");
+    expect(entryAddMock).toHaveBeenCalledTimes(1);
+    const [dn, attributes] = entryAddMock.mock.calls[0];
+    expect(dn).toBe("cn=Alice2,ou=people,dc=demo,dc=dbx");
+    expect(attributes.cn).toEqual(["Alice2"]);
+    expect(attributes.sn).toEqual(["Alice"]);
+  });
+
+  it("keeps hand-edited RDN attribute rows when the RDN field changes again", async () => {
+    const wrapper = track({ addPrefill: copyPrefill });
+    await rdnInput(wrapper).setValue("cn=Alice2");
+    await rowFor(wrapper, "cn").find("textarea").setValue("HandEdited");
+    await rdnInput(wrapper).setValue("cn=Alice3");
+    expect(rowFor(wrapper, "cn").find("textarea").element.value).toBe("HandEdited");
+  });
+
+  it("fills only blank rows for multi-component RDNs, keeping other prefilled values", async () => {
+    const wrapper = track({ addPrefill: copyPrefill });
+    await rdnInput(wrapper).setValue("cn=Ana+sn=Lee");
+    expect(rowFor(wrapper, "cn").find("textarea").element.value).toBe("Ana");
+    expect(rowFor(wrapper, "sn").find("textarea").element.value).toBe("Alice");
+  });
+
+  it("focuses the RDN input when the add dialog opens", async () => {
+    const wrapper = track({ addPrefill: copyPrefill }, true);
+    await nextTick();
+    expect(document.activeElement).toBe(rdnInput(wrapper).element);
   });
 
   it("keeps multi-valued prefill attributes verbatim via sourceValues", async () => {

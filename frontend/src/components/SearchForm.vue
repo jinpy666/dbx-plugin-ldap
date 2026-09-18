@@ -3,26 +3,22 @@
 // 源码模式（RFC 4515 串直接编辑，双向：串→结构尽力解析，失败保持源码模式）
 // + scope/attributes/sizeLimit/pageSize/typesOnly/derefAliases
 // + 预设（持久化过滤器串，应用时重建构建器；sidecar 不存 conditions）。
-import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
-import { ChevronDown, ChevronUp, Clock3, History, Play, Save, Trash2 } from "@lucide/vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
+import { ChevronDown, ChevronUp, Clock3, Copy, FolderInput, History, Pencil, Play, RotateCcw, Save, Trash2 } from "@lucide/vue";
 import { getLdapConnectionId, ldapApi, type LdapSearchPreset, type LdapScope } from "../lib/api";
 import { validateLDAPFilter, buildNodeFilter, collectBuilderErrors, parseFilterStructure, toBuilderRoot, createBuilderClause, createBuilderGroup, type BuilderGroup } from "../lib/ldapFilter";
 import { parseLdapSearchCommand, type LdapSearchCommandFailure } from "../lib/ldapSearchCommand";
 import { parsePsAdCommand } from "../lib/psCommandImport";
-import { deriveSchemaMetadata, useLdapSchemaCache } from "../lib/schemaCache";
+import { useLdapSchemaCache } from "../lib/schemaCache";
 import { t, workbenchLocale } from "../lib/i18n";
 import FilterGroup from "./FilterGroup.vue";
 
-export interface SearchFormModel {
-  baseDn: string;
-  filter: string;
-  scope: LdapScope;
-  attributes: string;
-  sizeLimit: string;
-  pageSize: string;
-  typesOnly: boolean;
-  derefAliases: "never" | "searching" | "finding" | "always";
-}
+// 表单模型类型唯一权威定义在 lib/useSearchSession.ts（审计 J-10）：此处只做
+// 类型导入并原样 re-export，保持既有 `import SearchForm, { type SearchFormModel }`
+// 消费方兼容，消除两份会漂移的双定义。
+import type { SearchFormModel } from "../lib/useSearchSession";
+
+export type { SearchFormModel };
 
 const props = defineProps<{
   baseDn: string;
@@ -36,16 +32,21 @@ const emit = defineEmits<{
   (e: "error", message: string): void;
 }>();
 
-const draft = ref<SearchFormModel>({
-  baseDn: props.baseDn,
-  filter: "(objectClass=*)",
-  scope: "sub",
-  attributes: "",
-  sizeLimit: "500",
-  pageSize: "500",
-  typesOnly: false,
-  derefAliases: "never",
-});
+/** 表单默认值：匹配全部 + 连接 Base + 子树范围 + 全属性（重置共用同一份）。 */
+function defaultSearchModel(baseDn = props.baseDn): SearchFormModel {
+  return {
+    baseDn,
+    filter: "(objectClass=*)",
+    scope: "sub",
+    attributes: "",
+    sizeLimit: "500",
+    pageSize: "500",
+    typesOnly: false,
+    derefAliases: "never",
+  };
+}
+
+const draft = ref<SearchFormModel>(defaultSearchModel());
 
 // -- filter builder / source modes --------------------------------------------
 
@@ -65,9 +66,9 @@ const COMMON_ATTRIBUTES = [
   "sAMAccountName", "userPrincipalName", "objectGUID", "createTimestamp", "modifyTimestamp",
 ];
 
-const { attributeNames, ensureLoaded } = useLdapSchemaCache({
-  loader: () => ldapApi.schema().then((result) => deriveSchemaMetadata(result.attributeTypes, result.objectClasses)),
-});
+// 属性 datalist 数据源：共享缓存视图（J-8：与 App/SchemaPanel 同源，同连接
+// 同 TTL 窗口只拉一次 ldap/schema）。
+const { attributeNames, ensureLoaded } = useLdapSchemaCache();
 
 const attributeOptions = computed(() => {
   const seen = new Set<string>();
@@ -134,6 +135,20 @@ function presentFilter(filter: string) {
   }
 }
 
+/** 重置（快捷条图标 / 高级区「重置」共用）：整表还原默认搜索——过滤器回
+ * 匹配全部（构建器单条存在子句）、Base 回连接默认、范围/数值框/属性回默认，
+ * 命令导入行与错误提示一并清空。这是「改乱/清空后一键还原」的兜底入口。 */
+function resetSearch() {
+  if (props.disabled) return;
+  draft.value = defaultSearchModel();
+  commandDraft.value = "";
+  commandError.value = "";
+  commandWarnings.value = [];
+  commandApplied.value = false;
+  presentFilter("(objectClass=*)");
+  emit("notify", t("search.resetDone"));
+}
+
 // -- 折叠快捷条（对标 Apache Directory Studio 的快捷搜索形态）------------------
 // 默认折叠：完整面板常驻太占空间。高级区用 hidden 属性收起而非卸载，
 // 构建器/源码输入态与焦点都保留，展开即时还原，切换不改任何表单值。
@@ -187,8 +202,18 @@ interface SearchHistoryEntry {
   timestamp: number;
 }
 
-const SEARCH_HISTORY_KEY = "dbx.ldap.ui.searchHistory";
+// 历史键按连接派生（审计 J-3）：全局键会让切换连接后应用历史时把上一台
+// 目录的 baseDn/条件灌进当前表单。getLdapConnectionId 是非响应式模块 getter，
+// 键必须在保存/读取时刻现取（不可固化为顶层常量）；连接未知（宿主上下文
+// 未就绪）时统一落 "default" 段。旧全局键一次性忽略：不读取也不迁移，
+// 其内容随各连接新键的写入自然淘汰。
+const SEARCH_HISTORY_KEY_PREFIX = "dbx.ldap.ui.searchHistory";
 const SEARCH_HISTORY_MAX = 10;
+
+function searchHistoryKey(): string {
+  const connectionId = getLdapConnectionId().trim();
+  return `${SEARCH_HISTORY_KEY_PREFIX}.${connectionId || "default"}`;
+}
 
 // 存储内容可能被旧版本或人为写坏：读取时只接受形状完整的条目。
 function isHistoryEntry(value: unknown): value is SearchHistoryEntry {
@@ -205,7 +230,8 @@ function isHistoryEntry(value: unknown): value is SearchHistoryEntry {
 
 function readStoredHistory(): SearchHistoryEntry[] {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY) ?? "[]");
+    // 每次读取现取按连接派生的键：切连接后读到的就是新连接自己的历史。
+    const parsed: unknown = JSON.parse(localStorage.getItem(searchHistoryKey()) ?? "[]");
     return Array.isArray(parsed)
       ? parsed.filter(isHistoryEntry).map((entry) => ({ ...entry, timestamp: entry.timestamp ?? 0 })).slice(0, SEARCH_HISTORY_MAX)
       : [];
@@ -216,7 +242,7 @@ function readStoredHistory(): SearchHistoryEntry[] {
 
 function persistHistory() {
   try {
-    localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(searchHistory.value));
+    localStorage.setItem(searchHistoryKey(), JSON.stringify(searchHistory.value));
   } catch {
     /* 存储不可用（隐私模式等）：仅内存态 */
   }
@@ -230,7 +256,8 @@ function sameHistoryEntry(a: SearchHistoryEntry, b: SearchHistoryEntry): boolean
 
 /** 宿主（App）在搜索成功后调用入队并持久化：与队首逐字段相同不重复记，
  * 更早的相同条目前移（对标 ADS 语义），上限 10 条。filter 存实际生效串
- * （toModel 已兜底 (objectClass=*)，照存）。 */
+ * （toModel 已兜底 (objectClass=*)，照存）。写回前按当前连接现读：组件
+ * 不随连接切换重建（App 无 :key），仅信内存态会把新连接存储覆盖回旧列表。 */
 function recordSearch(model: SearchFormModel) {
   const entry: SearchHistoryEntry = {
     filter: model.filter,
@@ -239,8 +266,9 @@ function recordSearch(model: SearchFormModel) {
     attributes: model.attributes,
     timestamp: Date.now(),
   };
-  if (searchHistory.value[0] && sameHistoryEntry(searchHistory.value[0], entry)) return;
-  searchHistory.value = [entry, ...searchHistory.value.filter((existing) => !sameHistoryEntry(existing, entry))].slice(0, SEARCH_HISTORY_MAX);
+  const current = readStoredHistory();
+  if (current[0] && sameHistoryEntry(current[0], entry)) return;
+  searchHistory.value = [entry, ...current.filter((existing) => !sameHistoryEntry(existing, entry))].slice(0, SEARCH_HISTORY_MAX);
   persistHistory();
 }
 
@@ -254,6 +282,9 @@ const historyRootExpanded = ref<HTMLElement | null>(null);
 
 function toggleHistory() {
   if (props.disabled) return;
+  // 打开面板时按当前连接现读刷新内存态（组件不随连接切换重建，
+  // setup 时的初值在切连接后会陈旧）；关闭不刷。
+  if (!historyOpen.value) searchHistory.value = readStoredHistory();
   historyOpen.value = !historyOpen.value;
 }
 
@@ -392,6 +423,9 @@ function parseAttributes(): string[] | undefined {
   return list.length > 0 ? list : undefined;
 }
 
+// 与 lib/useSearchSession.ts 的 positiveInt 语义一致（正整数解析）；
+// lib 未导出该函数且不在本组件可改范围内，故本文件保留此副本，
+// 两处如需演进须同步。
 function positiveNumber(value: string): number | undefined {
   const parsed = Number.parseInt(value.trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
@@ -577,6 +611,8 @@ async function savePreset() {
   // 重名处理：未选中预设时输入已存在的名字 → 原地更新该预设（沿用其 id），
   // 不产生同名双条目；选中状态下保存仍按所选 id 覆盖（含改名）。
   const existingByName = selectedPresetId.value ? undefined : presets.value.find((entry) => entry.name === name);
+  // F11：覆盖保存沿用所选预设的分组——表单本身不编辑分组，分组由动作按钮管理。
+  const selected = presets.value.find((entry) => entry.id === selectedPresetId.value);
   const preset: LdapSearchPreset = {
     id: selectedPresetId.value || existingByName?.id || "",
     name,
@@ -585,7 +621,14 @@ async function savePreset() {
     scope: draft.value.scope,
     attributes: parseAttributes(),
     sizeLimit: positiveNumber(draft.value.sizeLimit),
+    ...(selected?.group ? { group: selected.group } : {}),
   };
+  if (await persistPreset(preset)) emit("notify", t("search.presetSaved"));
+}
+
+// 动作/表单共用的保存路径：服务端返回的 preset（含服务端生成的 id）替换
+// 旧条目并选中；失败走 error 横幅（预设是便利功能，不让弹层打断主流程）。
+async function persistPreset(preset: LdapSearchPreset): Promise<boolean> {
   presetPending.value = true;
   try {
     const result = await ldapApi.presetsSave(preset);
@@ -593,20 +636,138 @@ async function savePreset() {
     presets.value = [...presets.value.filter((entry) => entry.id !== saved.id), saved];
     selectedPresetId.value = saved.id;
     presetNameDraft.value = saved.name;
-    emit("notify", t("search.presetSaved"));
+    return true;
   } catch (cause) {
     emit("error", cause instanceof Error ? cause.message : String(cause));
+    return false;
   } finally {
     presetPending.value = false;
   }
 }
 
+// -- 预设动作（F11）：分组渲染 / 重命名 / 创建副本 / 设置分组 -------------------
+
+// 下拉按 group 分组：具名组按首次出现顺序在前，未分组固定垫底；
+// 分组名做小标题（optgroup label）。空串/纯空白 group 一律视为未分组。
+const groupedPresets = computed(() => {
+  const named: Array<{ key: string; label: string; items: LdapSearchPreset[] }> = [];
+  const byKey = new Map<string, (typeof named)[number]>();
+  let ungrouped: (typeof named)[number] | null = null;
+  for (const preset of presets.value) {
+    const key = preset.group?.trim() ?? "";
+    if (!key) {
+      ungrouped ??= { key: "", label: t("presetActions.ungrouped"), items: [] };
+      ungrouped.items.push(preset);
+      continue;
+    }
+    let group = byKey.get(key);
+    if (!group) {
+      group = { key, label: key, items: [] };
+      byKey.set(key, group);
+      named.push(group);
+    }
+    group.items.push(preset);
+  }
+  return ungrouped ? [...named, ungrouped] : named;
+});
+
+const selectedPreset = computed(() => presets.value.find((entry) => entry.id === selectedPresetId.value) ?? null);
+
+/** 产出带/不带 group 的预设副本：清空分组时彻底删除键（缺省 = 未分组契约，
+ * 不能留 group: undefined 的悬空键——JSON 序列化虽会丢弃，但内存对象/测试
+ * 断言都按"键不存在"语义走）。 */
+function presetWithGroup(preset: LdapSearchPreset, group: string): LdapSearchPreset {
+  const next = { ...preset };
+  if (group) next.group = group;
+  else delete next.group;
+  return next;
+}
+
+// 行内小输入框编辑器：null = 关闭；rename 预填名称、group 预填当前分组
+// （未分组预填空）。Enter 提交、Esc 取消；键盘完全可完成（原生按钮/输入框）。
+const presetEditor = ref<"rename" | "group" | null>(null);
+const presetEditorDraft = ref("");
+const presetEditorInput = ref<HTMLInputElement | null>(null);
+
+// rename 空值不可提交（无有效名）；group 空值 = 清空分组回到未分组，合法。
+const presetEditorInvalid = computed(() => presetEditor.value === "rename" && presetEditorDraft.value.trim() === "");
+
+function openPresetEditor(kind: "rename" | "group") {
+  const preset = selectedPreset.value;
+  if (!preset || props.disabled) return;
+  presetEditor.value = kind;
+  presetEditorDraft.value = kind === "rename" ? preset.name : preset.group ?? "";
+  void nextTick(() => presetEditorInput.value?.focus());
+}
+
+function cancelPresetEditor() {
+  presetEditor.value = null;
+  presetEditorDraft.value = "";
+}
+
+async function commitPresetEditor() {
+  const preset = selectedPreset.value;
+  const kind = presetEditor.value;
+  if (!preset || !kind || props.disabled || presetPending.value || presetEditorInvalid.value) return;
+  const value = presetEditorDraft.value.trim();
+  if (kind === "rename" && value === preset.name) {
+    // 名称未变：视为取消，不发无效保存。
+    cancelPresetEditor();
+    return;
+  }
+  const next: LdapSearchPreset = kind === "rename" ? { ...preset, name: value } : presetWithGroup(preset, value);
+  cancelPresetEditor();
+  if (await persistPreset(next)) emit("notify", t("search.presetSaved"));
+}
+
+// 副本名查重：以原名为基底，在现有预设名集合内递增后缀（" (2)"、" (3)"…）
+// 直到唯一。否则连续创建副本会叠出多条同名（如 "People (2)" ×2），
+// 下拉里既无法区分也无从定位。
+function uniqueDuplicateName(baseName: string): string {
+  const taken = new Set(presets.value.map((entry) => entry.name));
+  let suffix = 2;
+  while (taken.has(`${baseName} (${suffix})`)) suffix += 1;
+  return `${baseName} (${suffix})`;
+}
+
+async function duplicateSelectedPreset() {
+  const preset = selectedPreset.value;
+  if (!preset || props.disabled || presetPending.value) return;
+  // id 传空让 sidecar 重新生成（与新保存同一契约）；副本名查重递增保证唯一，
+  // 分组沿用原预设。persistPreset 路径与成功文案不变。
+  if (await persistPreset({ ...preset, id: "", name: uniqueDuplicateName(preset.name) })) emit("notify", t("search.presetSaved"));
+}
+
+// 预设删除行内两步确认（审计 J-5）：宿主 webview 可能拦截 window.confirm
+// 原生确认框（同 clearHistory 既有顾虑，原实现与之自相矛盾）。首次点击进入
+// 确认态（按钮文案切到既有 t("confirm")，title 展示带预设名的不可撤销提示），
+// 3 秒无操作自动回落；确认态再次点击才执行删除。切换/取消选中预设即解除。
+const presetRemoveArmed = ref(false);
+let presetRemoveArmTimer = 0;
+
+function disarmPresetRemove() {
+  window.clearTimeout(presetRemoveArmTimer);
+  presetRemoveArmTimer = 0;
+  presetRemoveArmed.value = false;
+}
+
+function requestRemovePreset() {
+  if (props.disabled || presetPending.value || !selectedPresetId.value) return;
+  if (!presetRemoveArmed.value) {
+    presetRemoveArmed.value = true;
+    window.clearTimeout(presetRemoveArmTimer);
+    presetRemoveArmTimer = window.setTimeout(disarmPresetRemove, 3000);
+    return;
+  }
+  disarmPresetRemove();
+  void removePreset();
+}
+
 async function removePreset() {
   if (props.disabled || presetPending.value || !selectedPresetId.value) return;
   const id = selectedPresetId.value;
-  // 预设是持久化数据（UI 扫描 P2-21）：删除前确认，误删不可恢复。
-  const name = presets.value.find((preset) => preset.id === selectedPresetId.value)?.name ?? "";
-  if (!window.confirm(t("search.presetRemoveConfirm", { name }))) return;
+  // 预设是持久化数据（UI 扫描 P2-21）：确认已由 requestRemovePreset 的
+  // 两步交互完成，误删不可恢复。
   presetPending.value = true;
   try {
     await ldapApi.presetsRemove(id);
@@ -620,18 +781,35 @@ async function removePreset() {
   }
 }
 
+watch(selectedPresetId, () => disarmPresetRemove());
+onBeforeUnmount(disarmPresetRemove);
+
+// schema 属性下拉加载（现取模式）：getLdapConnectionId 是非响应式模块 getter，
+// 不能固化为挂载时的一次性读取——挂载早于宿主上下文注入时读到空串
+// （ensureLoaded 契约对空串直接跳过，无副作用但也无重试），且组件不随连接
+// 切换重建（App 无 :key），切换后旧连接的属性列表会一直残留。与
+// searchHistoryKey() 同一约定：调用时刻现取连接 id；失败静默（下拉仍有
+// COMMON_ATTRIBUTES 兜底）。重试挂在 baseDn 变化上——App 每次连接同步都会
+// 重置树根，与本组件 presets 的按连接重载信号一致；共享缓存（J-8）有 TTL
+// 与 inFlight 去重，重复调用零成本。
+function loadSchemaAttributes() {
+  void ensureLoaded(getLdapConnectionId()).catch(() => undefined);
+}
+
 watch(
   () => props.baseDn,
   (next) => {
     draft.value.baseDn = next;
     void loadPresets();
+    // 连接上下文（重）就绪：随 presets 一起按当前连接现取刷新属性下拉。
+    loadSchemaAttributes();
   },
 );
 
 onMounted(() => {
   void loadPresets();
-  // schema 属性下拉：失败静默（下拉仍有 COMMON_ATTRIBUTES 兜底）。
-  void ensureLoaded(getLdapConnectionId()).catch(() => undefined);
+  // 挂载时现取初载；上下文未就绪时读空串静默跳过，随 baseDn 变化重试。
+  loadSchemaAttributes();
 });
 
 const scopeOptions = computed(() => [
@@ -679,6 +857,17 @@ const derefOptions = computed(() => [
         @input="onCompactFilterInput"
       />
       <span v-if="collapsed && compactFilterError" class="form-error" role="alert">{{ compactFilterError }}</span>
+      <!-- 重置（快捷条）：条件改乱/清空后一键还原默认搜索（图标省空间，说明在 title）。 -->
+      <button
+        type="button"
+        class="toolbar-button compact-reset"
+        :disabled="disabled"
+        :aria-label="t('search.reset')"
+        :title="t('search.reset')"
+        @click="resetSearch"
+      >
+        <RotateCcw aria-hidden="true" />
+      </button>
       <!-- 历史入口（快捷条）：置于筛选条件切换与搜索之间左侧；切换与展开态同一个下拉状态。 -->
       <div ref="historyRootCompact" class="search-history">
         <button
@@ -782,6 +971,10 @@ const derefOptions = computed(() => [
               {{ t("search.modeSource") }}
             </button>
           </span>
+          <!-- 重置（高级区）：还原整表默认（过滤器/Base/范围/数值框），与快捷条图标同一动作。 -->
+          <button type="button" class="toolbar-button" :disabled="disabled" :title="t('search.reset')" @click="resetSearch">
+            <RotateCcw aria-hidden="true" />{{ t("search.reset") }}
+          </button>
         </span>
       </div>
 
@@ -844,19 +1037,77 @@ const derefOptions = computed(() => [
     </div>
     <div class="search-presets">
       <span class="muted">{{ t("search.presets") }}</span>
+      <!-- F11：按 group 分组渲染（具名组在前，未分组垫底做小标题）。 -->
       <select v-model="selectedPresetId" :disabled="disabled || presetPending" @change="applyPreset">
         <option value="">{{ t("search.presetsEmpty") }}</option>
-        <option v-for="preset in presets" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
+        <optgroup v-for="group in groupedPresets" :key="group.key || '__ungrouped__'" :label="group.label">
+          <option v-for="preset in group.items" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
+        </optgroup>
       </select>
       <input v-model="presetNameDraft" type="text" class="preset-input" :placeholder="t('search.presetName')" :disabled="disabled || presetPending" />
       <button type="button" class="toolbar-button" :disabled="disabled || presetPending || !presetNameDraft.trim() || !filterValid || !numericValid" :title="t('search.presetSave')" @click="savePreset">
         <Save aria-hidden="true" /><span>{{ t("search.presetSave") }}</span>
       </button>
-      <button type="button" class="toolbar-button" :disabled="disabled || presetPending || !selectedPresetId" :title="t('search.presetRemove')" :aria-label="t('search.presetRemove')" @click="removePreset">
-        <Trash2 aria-hidden="true" />
+      <!-- F11 每条目动作：重命名 / 创建副本 / 设置分组（需先选中一条预设）。
+           三个原生按钮 Tab 可达，动作打开行内小输入框（Enter 提交 / Esc 取消）。 -->
+      <button type="button" class="toolbar-button preset-rename" :disabled="disabled || presetPending || !selectedPresetId" :title="t('presetActions.rename')" :aria-label="t('presetActions.rename')" @click="openPresetEditor('rename')">
+        <Pencil aria-hidden="true" />
       </button>
+      <button type="button" class="toolbar-button preset-duplicate" :disabled="disabled || presetPending || !selectedPresetId" :title="t('presetActions.duplicate')" :aria-label="t('presetActions.duplicate')" @click="duplicateSelectedPreset">
+        <Copy aria-hidden="true" />
+      </button>
+      <button type="button" class="toolbar-button preset-group" :disabled="disabled || presetPending || !selectedPresetId" :title="t('presetActions.group')" :aria-label="t('presetActions.group')" @click="openPresetEditor('group')">
+        <FolderInput aria-hidden="true" />
+      </button>
+      <!-- 删除走行内两步确认：确认态文案用既有 confirm 键，title 展示带名的不可撤销提示。 -->
+      <button
+        type="button"
+        class="toolbar-button preset-remove"
+        :class="{ 'is-armed': presetRemoveArmed }"
+        :disabled="disabled || presetPending || !selectedPresetId"
+        :title="presetRemoveArmed && selectedPreset ? t('search.presetRemoveConfirm', { name: selectedPreset.name }) : t('search.presetRemove')"
+        :aria-label="t('search.presetRemove')"
+        @click="requestRemovePreset"
+      >
+        <Trash2 aria-hidden="true" /><span v-if="presetRemoveArmed">{{ t("confirm") }}</span>
+      </button>
+    </div>
+    <!-- 行内编辑行（重命名/设置分组共用）：group 清空提交 = 回到未分组。 -->
+    <div v-if="presetEditor" class="preset-editor">
+      <input
+        ref="presetEditorInput"
+        v-model="presetEditorDraft"
+        type="text"
+        class="mono preset-input"
+        :placeholder="presetEditor === 'group' ? t('presetActions.groupPlaceholder') : t('search.presetName')"
+        :aria-label="presetEditor === 'rename' ? t('presetActions.rename') : t('presetActions.group')"
+        :aria-invalid="presetEditorInvalid"
+        :disabled="disabled || presetPending"
+        spellcheck="false"
+        @keydown.enter.prevent="commitPresetEditor"
+        @keydown.esc.prevent="cancelPresetEditor"
+      />
+      <button type="button" class="toolbar-button" :disabled="disabled || presetPending || presetEditorInvalid" :title="presetEditor === 'rename' ? t('presetActions.rename') : t('presetActions.group')" @click="commitPresetEditor">
+        <Save aria-hidden="true" /><span>{{ presetEditor === "rename" ? t("presetActions.rename") : t("presetActions.group") }}</span>
+      </button>
+      <button type="button" class="toolbar-button" :disabled="presetPending" :title="t('cancel')" @click="cancelPresetEditor">{{ t("cancel") }}</button>
     </div>
       </div>
     </div>
   </form>
 </template>
+
+<style scoped>
+/* F11 预设动作的行内编辑行：占满高级区整行（父容器为 grid），
+   输入框比预设名输入稍宽，便于编辑较长名称/分组名。 */
+.preset-editor {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  grid-column: 1 / -1;
+}
+.preset-editor .preset-input {
+  width: 220px !important;
+  flex: 0 1 220px;
+}
+</style>

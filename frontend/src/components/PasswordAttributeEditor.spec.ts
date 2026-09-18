@@ -4,27 +4,56 @@
 // parseable RFC 2307 value + one-shot plainGenerated, disabled gating and
 // existing-value recognition. i18n keys are placeholders (merged later), and
 // t() passes unknown keys through verbatim, so assertions match the raw keys.
-import { afterEach, describe, expect, it, vi } from "vitest";
+// F3 追加：RFC 3062 扩展操作模式——切换显隐（dn/可写门禁）、开启后两个可选
+// 字段、entryPasswdModify 参数契约（identity 缺省不传、oldPassword 透传）与
+// 成功/失败反馈。ldapApi 在文件内 mock，不触达宿主桥。
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
+import { ldapApi } from "../lib/api";
+
+vi.mock("../lib/api", () => ({
+  ldapApi: { entryPasswdModify: vi.fn() },
+}));
+
+// 兜底落地后本地哈希几乎不会失败(非安全上下文已由纯 JS 兜底覆盖),
+// 失败路径只能通过模块 mock 注入拒绝来驱动(扩展路径同款做法)。
+vi.mock("../lib/passwordHash", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/passwordHash")>();
+  return { ...actual, hashPassword: vi.fn(actual.hashPassword) };
+});
+
 import PasswordAttributeEditor from "./PasswordAttributeEditor.vue";
-import { parsePasswordHash } from "../lib/passwordHash";
+import { hashPassword, parsePasswordHash } from "../lib/passwordHash";
+
+const passwdModifyMock = vi.mocked(ldapApi.entryPasswdModify);
+const hashMock = vi.mocked(hashPassword);
 
 const SCHEME_SELECT = ".password-editor select";
 const PLAIN_INPUT = ".password-editor input";
 const TOGGLE_BUTTON = ".password-editor .icon-button";
 const GENERATE_BUTTON = ".password-editor button:not(.icon-button):not(.primary-button)";
 const APPLY_BUTTON = ".password-editor .primary-button";
+// RFC 3062 扩展操作（F3）：切换复选框与可选字段组。
+const EXTENDED_TOGGLE = ".password-editor input[type='checkbox']";
+const EXTENDED_FIELDS = ".password-extended-fields";
+const IDENTITY_INPUT = ".password-extended-fields input[type='text']";
+const OLD_INPUT = ".password-extended-fields input[type='password']";
 
-const mountEditor = (props: { modelValue?: string; disabled?: boolean } = {}) =>
+const mountEditor = (props: { modelValue?: string; disabled?: boolean; dn?: string } = {}) =>
   mount(PasswordAttributeEditor, { props: { modelValue: "", ...props } });
 
 const tracked: Awaited<ReturnType<typeof mountEditor>>[] = [];
+
+beforeEach(() => {
+  passwdModifyMock.mockReset();
+  hashMock.mockClear();
+});
 
 afterEach(() => {
   for (const wrapper of tracked.splice(0)) wrapper.unmount();
 });
 
-const track = (props?: { modelValue?: string; disabled?: boolean }) => {
+const track = (props?: { modelValue?: string; disabled?: boolean; dn?: string }) => {
   const wrapper = mountEditor(props);
   tracked.push(wrapper);
   return wrapper;
@@ -88,6 +117,20 @@ describe("PasswordAttributeEditor", () => {
     expect((wrapper.find(PLAIN_INPUT).element as HTMLInputElement).value).toBe("");
   });
 
+  it("reports a failed local hash through the error channel and keeps the input", async () => {
+    hashMock.mockRejectedValueOnce(new Error("The operation is insecure."));
+    const wrapper = track();
+    await wrapper.find(PLAIN_INPUT).setValue("password");
+    await wrapper.find(APPLY_BUTTON).trigger("click");
+    await flushPromises();
+    // 哈希失败走 error 通道(i18n:ldap.passwordEditor.hashFailed),不再裸抛。
+    expect(wrapper.emitted("error")?.at(-1)).toEqual(["本地密码哈希失败"]);
+    expect(wrapper.emitted("update:modelValue")).toBeUndefined();
+    expect(wrapper.emitted("plainGenerated")).toBeUndefined();
+    // 与扩展路径一致:失败不丢输入,便于修正后重试。
+    expect((wrapper.find(PLAIN_INPUT).element as HTMLInputElement).value).toBe("password");
+  });
+
   it("emits plainGenerated only when the password came from the random generator", async () => {
     const wrapper = track();
     await wrapper.find(GENERATE_BUTTON).trigger("click");
@@ -147,5 +190,114 @@ describe("PasswordAttributeEditor", () => {
     await wrapper.find(APPLY_BUTTON).trigger("click");
     expect(wrapper.emitted("update:modelValue")).toBeUndefined();
     expect(wrapper.emitted("plainGenerated")).toBeUndefined();
+  });
+});
+
+// -- RFC 3062 扩展操作（F3）--------------------------------------------------
+
+describe("PasswordAttributeEditor extended operation (RFC 3062)", () => {
+  const DN = "uid=bob,dc=demo,dc=dbx";
+
+  const toggleExtended = async (wrapper: Awaited<ReturnType<typeof mountEditor>>) => {
+    await wrapper.find(EXTENDED_TOGGLE).setValue(true);
+    await flushPromises();
+  };
+
+  it("shows the extended toggle only when a dn is wired and the editor is writable", () => {
+    // 未接线 DN（缺省）或只读态：切换不显示（扩展是写路径）。
+    expect(track().find(EXTENDED_TOGGLE).exists()).toBe(false);
+    expect(track({ dn: DN, disabled: true }).find(EXTENDED_TOGGLE).exists()).toBe(false);
+    const writable = track({ dn: DN });
+    expect(writable.find(EXTENDED_TOGGLE).exists()).toBe(true);
+    // 默认关闭：可选字段组不出现，沿用默认哈希路径（scheme 下拉在场）。
+    expect((writable.find(EXTENDED_TOGGLE).element as HTMLInputElement).checked).toBe(false);
+    expect(writable.find(EXTENDED_FIELDS).exists()).toBe(false);
+    expect(writable.find(SCHEME_SELECT).exists()).toBe(true);
+  });
+
+  it("reveals the identity and old-password fields when the mode is switched on", async () => {
+    const wrapper = track({ dn: DN });
+    await toggleExtended(wrapper);
+    const fields = wrapper.find(EXTENDED_FIELDS);
+    expect(fields.exists()).toBe(true);
+    // 目标身份：text 输入，占位展示当前条目 DN（留空即默认用 DN）。
+    const identity = fields.find(IDENTITY_INPUT);
+    expect(identity.exists()).toBe(true);
+    expect(identity.attributes("placeholder")).toBe(DN);
+    // 旧密码：password 型输入。
+    expect((fields.find(OLD_INPUT).element as HTMLInputElement).type).toBe("password");
+    // 切回默认模式：字段组隐藏、scheme 下拉恢复。
+    await wrapper.find(EXTENDED_TOGGLE).setValue(false);
+    expect(wrapper.find(EXTENDED_FIELDS).exists()).toBe(false);
+    expect(wrapper.find(SCHEME_SELECT).exists()).toBe(true);
+  });
+
+  it("submits entryPasswdModify with only newPassword when identity/old are empty", async () => {
+    passwdModifyMock.mockResolvedValue({ success: true });
+    const wrapper = track({ dn: DN });
+    await toggleExtended(wrapper);
+    await wrapper.find(PLAIN_INPUT).setValue("new-secret");
+    await wrapper.find(APPLY_BUTTON).trigger("click");
+    await flushPromises();
+    expect(passwdModifyMock).toHaveBeenCalledTimes(1);
+    expect(passwdModifyMock).toHaveBeenCalledWith(DN, { newPassword: "new-secret" });
+    // 「缺省不传」按参数形状断言：空 identity/oldPassword 不出现在对象里。
+    const options = passwdModifyMock.mock.calls[0]![1];
+    expect(Object.keys(options)).toEqual(["newPassword"]);
+    // 成功反馈 + 「已应用」流程：清空输入，且不动表单存储值。
+    expect(wrapper.emitted("notify")?.at(-1)).toEqual(["已通过扩展操作更新密码"]);
+    expect((wrapper.find(PLAIN_INPUT).element as HTMLInputElement).value).toBe("");
+    expect(wrapper.emitted("update:modelValue")).toBeUndefined();
+  });
+
+  it("passes identity and oldPassword through when provided", async () => {
+    passwdModifyMock.mockResolvedValue({ success: true });
+    const wrapper = track({ dn: DN });
+    await toggleExtended(wrapper);
+    await wrapper.find(PLAIN_INPUT).setValue("new-secret");
+    await wrapper.find(IDENTITY_INPUT).setValue("uid=admin,dc=demo,dc=dbx");
+    await wrapper.find(OLD_INPUT).setValue("old-secret");
+    await wrapper.find(APPLY_BUTTON).trigger("click");
+    await flushPromises();
+    expect(passwdModifyMock).toHaveBeenCalledWith(DN, {
+      identity: "uid=admin,dc=demo,dc=dbx",
+      oldPassword: "old-secret",
+      newPassword: "new-secret",
+    });
+  });
+
+  it("maps a rejected extended op through friendlyLdapError and keeps the inputs", async () => {
+    passwdModifyMock.mockRejectedValue(new Error("result code 53 unwilling to perform"));
+    const wrapper = track({ dn: DN });
+    await toggleExtended(wrapper);
+    await wrapper.find(PLAIN_INPUT).setValue("new-secret");
+    await wrapper.find(APPLY_BUTTON).trigger("click");
+    await flushPromises();
+    // 已知结果码 53 → err.unwilling 的本地化文案（friendlyLdapError 映射）。
+    const errors = wrapper.emitted("error");
+    expect(errors).toHaveLength(1);
+    expect(errors![0][0]).not.toContain("result code 53");
+    // 失败不丢输入，便于修正后重试。
+    expect((wrapper.find(PLAIN_INPUT).element as HTMLInputElement).value).toBe("new-secret");
+    expect(wrapper.emitted("notify")).toBeUndefined();
+  });
+
+  it("reports extendedFailed when the call resolves without success", async () => {
+    passwdModifyMock.mockResolvedValue({ success: false });
+    const wrapper = track({ dn: DN });
+    await toggleExtended(wrapper);
+    await wrapper.find(PLAIN_INPUT).setValue("new-secret");
+    await wrapper.find(APPLY_BUTTON).trigger("click");
+    await flushPromises();
+    expect(wrapper.emitted("error")?.at(-1)).toEqual(["扩展操作修改密码失败"]);
+    expect(wrapper.emitted("notify")).toBeUndefined();
+  });
+
+  it("keeps the default hashed path untouched when the toggle stays off", async () => {
+    const wrapper = track({ dn: DN });
+    await wrapper.find(PLAIN_INPUT).setValue("password");
+    await applyAndWait(wrapper);
+    expect(passwdModifyMock).not.toHaveBeenCalled();
+    expect(wrapper.emitted("update:modelValue")).toHaveLength(1);
   });
 });

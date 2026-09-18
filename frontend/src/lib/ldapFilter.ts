@@ -472,19 +472,33 @@ interface ParseCursor {
     position: number;
 }
 
+/** 令牌间空白跳过（RFC 4515 本身不允许，但 ldapsearch 文档/控制台粘贴的
+ *  pretty-printed 过滤器普遍带换行缩进；值内空白不在本函数管辖范围，
+ *  由子句体原样保留）。 */
+const skipFilterWhitespace = (cursor: ParseCursor): void => {
+    while (cursor.position < cursor.text.length) {
+        const ch = cursor.text[cursor.position];
+        if (ch === " " || ch === "\t" || ch === "\r" || ch === "\n") cursor.position += 1;
+        else break;
+    }
+};
+
 const parseFilterItem = (cursor: ParseCursor): BuilderNode | null => {
     const text = cursor.text;
     if (text[cursor.position] !== "(") return null;
     cursor.position += 1;
+    skipFilterWhitespace(cursor);
     const operator = text[cursor.position];
 
     if (operator === "&" || operator === "|") {
         cursor.position += 1;
         const children: BuilderNode[] = [];
+        skipFilterWhitespace(cursor);
         while (text[cursor.position] === "(") {
             const child = parseFilterItem(cursor);
             if (!child) return null;
             children.push(child);
+            skipFilterWhitespace(cursor);
         }
         if (children.length === 0) return null;
         if (text[cursor.position] !== ")") return null;
@@ -495,8 +509,10 @@ const parseFilterItem = (cursor: ParseCursor): BuilderNode | null => {
 
     if (operator === "!") {
         cursor.position += 1;
+        skipFilterWhitespace(cursor);
         const child = parseFilterItem(cursor);
         if (!child) return null;
+        skipFilterWhitespace(cursor);
         if (cursor.text[cursor.position] !== ")") return null;
         cursor.position += 1;
         // Negated equality folds into the first-class ≠ operator so the UI
@@ -526,7 +542,9 @@ export const parseFilterStructure = (filter: string): BuilderNode | null => {
     if (!text) return null;
     const cursor: ParseCursor = { text, position: 0 };
     const node = parseFilterItem(cursor);
-    if (!node || cursor.position !== text.length) return null;
+    if (!node) return null;
+    skipFilterWhitespace(cursor);
+    if (cursor.position !== text.length) return null;
     return node;
 };
 

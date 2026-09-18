@@ -3,11 +3,12 @@
 // 交互语义对照 tiny-rdm LdapConsolePage 的树区块（fetchTreeChildren /
 // buildTreeKeywordFilter / searchTreeFilterRemote），组件按 DBX 插件形态重实现。
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { Clipboard, Copy, Download, Eye, Pencil, Plus, RefreshCw, Search, Trash2, Users, X } from "@lucide/vue";
+import { Clipboard, Copy, Download, Eye, GitCompare, Pencil, Plus, RefreshCw, Search, Star, Trash2, Users, X } from "@lucide/vue";
 import { getLdapConnectionId, ldapApi, type LdapEntry, type LdapSearchPage, type LdapSearchSessionResult } from "../lib/api";
 import { buildTreeKeywordFilter } from "../lib/ldapFilter";
 import { friendlyLdapError } from "../lib/ldapErrors";
 import { splitFirstDnRdn } from "../lib/dn";
+import { dnPathChain } from "../lib/bookmarks";
 import { nextFocusIndex } from "../lib/modal";
 import { t } from "../lib/i18n";
 import { canExpandDnTreeNode, compareDnByLabel, compareDnForTree, flattenDnTree, nextTreeFocusIndex, objectClassValues, TREE_FETCH_PAGE, type DnTreeNode } from "../lib/dnTree";
@@ -34,6 +35,8 @@ const emit = defineEmits<{
   (e: "remove", dn: string): void;
   (e: "export", dn: string): void;
   (e: "copyDn", dn: string): void;
+  (e: "addBookmark", dn: string): void;
+  (e: "compare", dn: string): void;
 }>();
 const rootNode = ref<DnTreeNode>();
 const treeError = ref("");
@@ -159,13 +162,12 @@ function nodeSessionKey(node: Pick<DnTreeNode, "dn">): string {
   return node.dn.toLowerCase();
 }
 
-function nodeIsCurrent(node: DnTreeNode, generation: number, connectionId: string): boolean {
-  if (generation !== treeGeneration || connectionId !== currentConnectionId()) return false;
-  const key = nodeSessionKey(node);
-  // Vue wraps data assigned to a ref in a proxy, so object identity is not
-  // stable across the component boundary. DNs are unique within this tree.
-  const visit = (candidate?: DnTreeNode): boolean => nodeSessionKey(candidate ?? { dn: "" }) === key || !!candidate?.children.some(visit);
-  return visit(rootNode.value);
+function nodeIsCurrent(generation: number, connectionId: string): boolean {
+  // 节点级 O(1) 校验（审计 K-6）：整树替换只有 loadRoot 一条路径，且它第一步
+  // 就 resetTreeSessions 自增 treeGeneration（两者同步无 await 间隔）；invalidate
+  // 不摘除节点本身。因此"代数与连接均未变 ⇒ 发起请求的节点仍在当前树内"，
+  // 原先的全树 DFS 属于冗余 O(N) 遍历，去掉后行为等价。
+  return generation === treeGeneration && connectionId === currentConnectionId();
 }
 
 function cancelSearch(searchId: string, connectionId: string) {
@@ -189,11 +191,13 @@ function resetTreeSessions() {
   releaseNodeSessions(rootNode.value);
 }
 
-function appendChildren(node: DnTreeNode, entries: LdapSearchPage["entries"]) {
+function appendChildren(node: DnTreeNode, entries: LdapSearchPage["entries"]): DnTreeNode[] {
   // LDAP paged-results is a continuation, not an offset.  Keep existing node
   // objects so descendants that the user has expanded remain expanded, then
   // add only genuinely new DNs.  Re-sorting affects display order only.
+  // 返回本次真正新建的节点（revealDn 的临时 dn 索引据此增量增补）。
   const existing = new Set(node.children.map((child) => child.dn.toLowerCase()));
+  const before = node.children.length;
   for (const entry of entries) {
     const dn = entry.dn.trim();
     const key = dn.toLowerCase();
@@ -201,11 +205,16 @@ function appendChildren(node: DnTreeNode, entries: LdapSearchPage["entries"]) {
     existing.add(key);
     node.children.push(makeNode(dn, objectClassValues(entry.attributes)));
   }
+  // 新增节点必须从响应式数组读回再外传：makeNode 产物是 raw 对象，直接返回
+  // 会让 revealDn 的临时 dn 索引持有 raw 引用，后续对它写 expanded 等属性
+  // 绕过 proxy，不触发视图更新（截断续载定位会"命中但树不展开"）。
+  const added = node.children.slice(before);
   node.children.sort((left, right) => compareDnForTree(left.dn, right.dn));
+  return added;
 }
 
-function applyPage(node: DnTreeNode, session: ChildSearchSession, page: LdapSearchPage) {
-  appendChildren(node, page.entries);
+function applyPage(node: DnTreeNode, session: ChildSearchSession, page: LdapSearchPage): DnTreeNode[] {
+  const added = appendChildren(node, page.entries);
   session.hasMore = page.hasMore;
   // Only the server cursor can establish completeness.  Never infer it from
   // a short page, otherwise a server-side page policy could silently hide DNs.
@@ -216,6 +225,7 @@ function applyPage(node: DnTreeNode, session: ChildSearchSession, page: LdapSear
     node.childCount = node.children.length;
   }
   node.loaded = true;
+  return added;
 }
 
 function childSearchRequest(dn: string) {
@@ -233,7 +243,7 @@ function childSearchRequest(dn: string) {
 async function startChildren(node: DnTreeNode, generation: number): Promise<boolean> {
   const connectionId = currentConnectionId();
   const page = await ldapApi.searchStart(childSearchRequest(node.dn));
-  if (!nodeIsCurrent(node, generation, connectionId)) {
+  if (!nodeIsCurrent(generation, connectionId)) {
     cancelSearch(page.searchId, connectionId);
     return false;
   }
@@ -291,7 +301,7 @@ async function toggleNode(node: DnTreeNode) {
       treeErrorRaw.value = treeError.value === raw ? "" : raw;
       return;
     } finally {
-      if (nodeIsCurrent(node, generation, currentConnectionId())) node.loading = false;
+      if (nodeIsCurrent(generation, currentConnectionId())) node.loading = false;
     }
   }
   node.expanded = !node.expanded;
@@ -309,11 +319,11 @@ function viewNode(node: DnTreeNode) {
 
 // Continue the original LDAP cursor.  Re-running a one-level search with a
 // larger sizeLimit can duplicate work and skip/duplicate DNs while a directory
-// changes; this never uses an offset or re-query.
+// changes; this never uses an offset or re-query.  单页续载核心抽为下方
+// continueOnePage（与 revealDn 静默定位共用），此处只保留用户可见的反馈层。
 async function loadMore(node: DnTreeNode) {
   if (props.disabled || node.loading) return;
-  const session = childSessions.get(nodeSessionKey(node));
-  if (!session || !session.hasMore) {
+  if (!childSessions.get(nodeSessionKey(node))?.hasMore) {
     // Do not quietly mark a partial node as complete if the server session was
     // lost.  The visible `+` badge remains and the user can refresh explicitly.
     treeError.value = "The child search session expired; refresh this branch to continue.";
@@ -323,9 +333,7 @@ async function loadMore(node: DnTreeNode) {
   const generation = treeGeneration;
   node.loading = true;
   try {
-    const page = await ldapApi.searchNext(session.searchId, session.connectionId || undefined);
-    if (!nodeIsCurrent(node, generation, session.connectionId) || childSessions.get(nodeSessionKey(node)) !== session) return;
-    applyPage(node, session, page);
+    if (!(await continueOnePage(node, generation))) return;
     treeError.value = "";
     treeErrorRaw.value = "";
   } catch (cause) {
@@ -333,7 +341,103 @@ async function loadMore(node: DnTreeNode) {
     treeError.value = friendlyLdapError(raw);
     treeErrorRaw.value = treeError.value === raw ? "" : raw;
   } finally {
-    if (nodeIsCurrent(node, generation, session.connectionId)) node.loading = false;
+    if (nodeIsCurrent(generation, currentConnectionId())) node.loading = false;
+  }
+}
+
+// -- 树内定位（F8 revealDn）---------------------------------------------------
+// 从 baseDn 沿 DN 路径逐级展开（复用懒展开 startChildren 与截断续载游标），
+// 每级 children 加载完成后再进下一级；最后滚动到目标行并置为现有选中态。
+// 任何一级找不到/加载失败返回 false，不抛错。
+
+// 每级截断续载的页数上限（500/页 → 单级最多探 1 万条）：防服务器游标异常
+// 一直 hasMore 导致死循环。
+const REVEAL_MAX_PAGES = 20;
+
+function findChildByDn(node: DnTreeNode, dn: string): DnTreeNode | undefined {
+  const key = dn.toLowerCase();
+  return node.children.find((child) => child.dn.toLowerCase() === key);
+}
+
+/**
+ * 单页续载共享核心（loadMore 与 revealDn 同一"续载一页"语义）：读取节点现有
+ * 游标的下一页并落树。成功返回本页新增节点（revealDn 用于增量索引，可能为
+ * 空数组）；游标丢失/耗尽/连接换代返回 undefined。不抛错也不动错误横幅——
+ * 横幅与 loading 属 UI 反馈，由调用方按场景补充（loadMore 给用户横幅，
+ * revealDn 静默失败），searchNext 的异常原样上抛交调用方处置。
+ */
+async function continueOnePage(node: DnTreeNode, generation: number): Promise<DnTreeNode[] | undefined> {
+  const session = childSessions.get(nodeSessionKey(node));
+  if (!session || !session.hasMore) return undefined;
+  const page = await ldapApi.searchNext(session.searchId, session.connectionId || undefined);
+  if (!nodeIsCurrent(generation, session.connectionId) || childSessions.get(nodeSessionKey(node)) !== session) return undefined;
+  return applyPage(node, session, page);
+}
+
+/** 确保节点 children 已加载（照 toggleNode 的懒展开路径，但不动选中态/错误横幅）。 */
+async function ensureChildrenLoaded(node: DnTreeNode, generation: number): Promise<boolean> {
+  if (node.loaded) return true;
+  node.loading = true;
+  try {
+    return await startChildren(node, generation);
+  } catch {
+    return false;
+  } finally {
+    if (nodeIsCurrent(generation, currentConnectionId())) node.loading = false;
+  }
+}
+
+/**
+ * 定位并高亮目标 DN：逐级展开祖先链（目标不在首 500 条时用截断续载游标
+ * 继续取），成功后滚动到目标行并高亮（仅置现有选中态，不发 select——是否
+ * 连带读取条目详情由调用方决定）。
+ */
+async function revealDn(dn: string): Promise<boolean> {
+  if (props.disabled) return false;
+  const chain = dnPathChain(dn, props.baseDn);
+  if (chain.length === 0) return false;
+  // 过滤视图会整体替换树本体：定位前先还原树视图。
+  if (hasFilter.value) clearFilter();
+  if (!rootNode.value) await loadRoot();
+  if (!rootNode.value) return false;
+  const generation = treeGeneration;
+  try {
+    let current = rootNode.value;
+    for (let level = 1; level < chain.length; level++) {
+      // 目标可能不在已载页内：命中截断时用现有游标续载，每级最多 20 页。
+      let node = findChildByDn(current, chain[level]);
+      // 续载专用临时索引（dn 小写 → 节点）：目标需跨页续载时避免每页对已载
+      // 子级做全量线性扫（500/页 × 20 页的万级续载累计 O(n²)）。索引只在
+      // 进入续载循环时建一次，其后每页只增量增补新增节点并 O(1) 命中；
+      // 离开本层循环即弃（下一层展开时按需重建），不影响 findChildByDn 的
+      // 其他线性调用点。
+      let index: Map<string, DnTreeNode> | undefined;
+      for (let pages = 0; !node; pages++) {
+        if (pages >= REVEAL_MAX_PAGES) return false;
+        index ??= new Map(current.children.map((child) => [child.dn.toLowerCase(), child] as const));
+        const added = await continueOnePage(current, generation);
+        if (!added) return false;
+        for (const child of added) index.set(child.dn.toLowerCase(), child);
+        node = index.get(chain[level].toLowerCase());
+      }
+      current = node;
+      // 进下一级前先保证该级 children 已加载并展开可见。
+      if (level < chain.length - 1) {
+        if (!(await ensureChildrenLoaded(current, generation))) return false;
+        current.expanded = true;
+      }
+    }
+    // 滚动到目标行并高亮（treeRows 为当前可见行的扁平投影）。
+    const index = treeRows.value.findIndex((row) => row.node.dn.toLowerCase() === current.dn.toLowerCase());
+    selectedDn.value = current.dn;
+    if (index >= 0) {
+      // scrollToIndex 用可选调用：VirtualList 换成无该方法的测试桩时不至于误伤。
+      visibleList.value?.scrollToIndex?.(index);
+      await nextTick();
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -471,18 +575,26 @@ async function onTreeKeydown(event: KeyboardEvent) {
   container.querySelector<HTMLElement>(`.tree-node[data-tree-index="${target}"]`)?.focus({ preventScroll: true });
 }
 
-type ContextMenuItem = { action: string; label: string; icon: typeof Search; write?: boolean; danger?: boolean };
+/* 右键菜单（对标 ADS 分组）：查看/导航 → 条目编辑 → 数据（刷新/导出）→
+   剪贴板/收藏；sep 渲染为分隔线。 */
+type ContextMenuItem = { action: string; label: string; icon: typeof Search; write?: boolean; danger?: boolean; sep?: boolean };
 const contextMenuItems: ContextMenuItem[] = [
-  { action: "search", label: "tree.searchHere", icon: Search },
   { action: "view", label: "tree.viewEntry", icon: Eye },
+  { action: "search", label: "tree.searchHere", icon: Search },
   { action: "members", label: "associations.members", icon: Users },
+  { action: "compare", label: "compare.title", icon: GitCompare },
+  { action: "sep1", label: "", icon: Search, sep: true },
   { action: "add", label: "tree.addEntry", icon: Plus, write: true },
   { action: "copyEntry", label: "tree.copyEntry", icon: Copy, write: true },
   { action: "rename", label: "tree.renameEntry", icon: Pencil, write: true },
   { action: "delete", label: "tree.deleteEntry", icon: Trash2, write: true, danger: true },
+  { action: "sep2", label: "", icon: Search, sep: true },
+  { action: "reloadNode", label: "tree.reloadNode", icon: RefreshCw },
   { action: "export", label: "tree.exportSubtree", icon: Download },
+  { action: "sep3", label: "", icon: Search, sep: true },
   { action: "copy", label: "copyDn", icon: Clipboard },
-] as const;
+  { action: "bookmark", label: "bookmark.add", icon: Star },
+];
 
 function menuAction(action: string) {
   const dn = contextMenu.value?.dn;
@@ -497,6 +609,42 @@ function menuAction(action: string) {
   else if (action === "delete") emit("remove", dn);
   else if (action === "export") emit("export", dn);
   else if (action === "copy") emit("copyDn", dn);
+  else if (action === "bookmark") emit("addBookmark", dn);
+  else if (action === "compare") emit("compare", dn);
+  else if (action === "reloadNode") void reloadNodeChildren(dn);
+}
+
+/** 右键「刷新此节点」：丢子级缓存并按原展开态立即重载（折叠节点只丢缓存，
+ *  下次展开时走既有懒加载）。失败保持折叠未加载态，再次展开即重试
+ *  （同 toggleNode 口径）。 */
+async function reloadNodeChildren(dn: string) {
+  const find = (node?: DnTreeNode): DnTreeNode | undefined => {
+    if (!node) return undefined;
+    if (node.dn === dn) return node;
+    for (const child of node.children) {
+      const found = find(child);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  const node = find(rootNode.value);
+  if (!node || node.loading) return;
+  const wasExpanded = node.expanded;
+  releaseNodeSessions(node);
+  node.loaded = false;
+  node.expanded = false;
+  node.truncated = false;
+  node.children = [];
+  if (!wasExpanded || props.disabled) return;
+  const generation = treeGeneration;
+  node.loading = true;
+  try {
+    if (await startChildren(node, generation)) node.expanded = true;
+  } catch {
+    // 保持折叠未加载态：错误态与懒展开失败共用，重试路径一致。
+  } finally {
+    if (generation === treeGeneration) node.loading = false;
+  }
 }
 
 watch(
@@ -519,6 +667,8 @@ watch(
 
 defineExpose({
   refresh,
+  /** 树内定位（F8）：逐级展开到目标 DN 并高亮；失败返回 false，不抛错。 */
+  revealDn,
   /** After writes, drop the cached children of `dn` (or reload everything). */
   invalidate(dn?: string) {
     if (!dn) {
@@ -541,14 +691,20 @@ defineExpose({
   },
 });
 
+// 文档级点击关闭监听延后一个 tick 注册，避免注册瞬间的点击立即触发关闭；
+// timer 必须保存并在卸载时清除（审计 K-8），否则挂载同 tick 卸载时监听器
+// 会随回调"复活"泄漏。
+let menuListenerTimer = 0;
+
 function onMountedCleanup() {
   window.clearTimeout(filterTimer);
+  window.clearTimeout(menuListenerTimer);
   filterSequence += 1;
   resetTreeSessions();
   document.removeEventListener("click", closeContextMenu);
 }
 
-window.setTimeout(() => document.addEventListener("click", closeContextMenu), 0);
+menuListenerTimer = window.setTimeout(() => document.addEventListener("click", closeContextMenu), 0);
 onBeforeUnmount(onMountedCleanup);
 </script>
 
@@ -649,9 +805,10 @@ onBeforeUnmount(onMountedCleanup);
         @click.stop
         @keydown="onMenuKeydown"
       >
-        <template v-for="(item, index) in contextMenuItems" :key="item.action">
-          <hr v-if="index === 7" />
+        <template v-for="(item, index) in contextMenuItems" :key="item.action || `sep${index}`">
+          <hr v-if="item.sep" />
           <button
+            v-else
             role="menuitem"
             :disabled="item.write && !canWrite"
             :class="{ danger: item.danger }"

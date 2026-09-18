@@ -21,13 +21,20 @@ import {
   type TemplateId,
 } from "../lib/newEntryTemplates";
 
-const props = defineProps<{
-  open: boolean;
-  /** 树上下文缺省父 DN（步骤 ③ 可改）。 */
-  parentDn?: string;
-  /** schemaCache 的聚合结果切片；缺省/为空时向导回退模板内置 must/may 表。 */
-  schema?: LdapSchema;
-}>();
+const props = withDefaults(
+  defineProps<{
+    open: boolean;
+    /** 树上下文缺省父 DN（步骤 ③ 可改）。 */
+    parentDn?: string;
+    /** schemaCache 的聚合结果切片；缺省/为空时向导回退模板内置 must/may 表。 */
+    schema?: LdapSchema;
+    /** 连接可写门禁：false 时提交禁用并提示（与 ImportEntryDialog 同语义）。 */
+    canWrite?: boolean;
+  }>(),
+  {
+    canWrite: true,
+  },
+);
 
 const emit = defineEmits<{
   (e: "submit", payload: NewEntryPayload): void;
@@ -165,6 +172,7 @@ const missingMust = computed(() =>
 
 const canSubmit = computed(
   () =>
+    props.canWrite &&
     objectClasses.value.length > 0 &&
     dnPreview.value !== "" &&
     !rdnInvalid.value &&
@@ -349,6 +357,7 @@ function onBackdropClick() {
       </div>
 
       <footer>
+        <span v-if="!canWrite" class="muted" style="margin-right: auto">{{ t("editor.readonlyHint") }}</span>
         <button type="button" @click="emit('cancel')">{{ t("cancel") }}</button>
         <button v-if="step > 1" type="button" @click="step -= 1">{{ t("ldap.wizard.prev") }}</button>
         <button v-if="step < 4" type="button" class="primary-button" @click="step += 1">{{ t("ldap.wizard.next") }}</button>
@@ -359,3 +368,192 @@ function onBackdropClick() {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 组件此前没有任何样式（类名样式从未落过样式表）：步骤条/模板卡/字段布局
+   全部裸文本流（走查截图实锤）。本块按既有设计令牌补齐向导专属布局；
+   .field 是向导内的通用字段（标签在上、输入在下），不外溢到其他组件。 */
+
+/* 步骤条：data-step 作编号圆点，激活步高亮 */
+.wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.wizard-steps span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.wizard-steps span::before {
+  content: attr(data-step);
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  flex: 0 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: inherit;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+.wizard-steps span.is-active {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.wizard-steps span.is-active::before {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  color: var(--primary);
+}
+
+.wizard-step {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+.wizard-step p {
+  margin: 0;
+}
+
+/* 通用字段：标签在上、输入在下；输入框补齐基础形态 */
+.wizard-step .field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.wizard-step .field > span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.wizard-step input {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+}
+.wizard-step input:disabled {
+  opacity: .6;
+}
+
+/* ① 模板卡网格：卡片式可选模板，方言卡带角标 */
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+  gap: 8px;
+}
+.template-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--background);
+  color: var(--foreground);
+  text-align: left;
+  cursor: pointer;
+}
+.template-card:hover {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
+}
+.template-card strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.template-card small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.template-card:not([data-dialect="universal"])::after {
+  content: attr(data-dialect);
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+  border-radius: 999px;
+  padding: 0 6px;
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--primary);
+  font-size: 9px;
+  line-height: 14px;
+  text-transform: uppercase;
+}
+
+/* ② objectClass chips + 添加行（形态对齐编辑器 .oc-chip） */
+.class-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.class-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 4px 2px 10px;
+  background: var(--background);
+  font-size: 12px;
+}
+.chip-remove {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+}
+.chip-remove svg {
+  width: 12px;
+  height: 12px;
+}
+.class-adder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.class-adder input {
+  flex: 0 1 240px;
+}
+
+/* ③ RDN 行：覆写编辑器 .attr-row 的两列网格语义——此处是两个独立字段并排 */
+.wizard-step .attr-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.wizard-step .attr-row .field {
+  flex: 1 1 0;
+}
+
+/* ④ 必填/可选属性 */
+.wizard-attrs h3 {
+  margin: 0;
+  font-size: 12px;
+}
+.must-field {
+  max-width: 480px;
+}
+.optional-toggle {
+  align-self: flex-start;
+}
+.optional-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+</style>

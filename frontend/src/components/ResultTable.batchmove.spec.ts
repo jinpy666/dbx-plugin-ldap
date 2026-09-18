@@ -2,7 +2,7 @@
 // ResultTable 批量移动入口测试（AG Grid 版）：批量条「移动所选」按钮 emit batchMove，
 // payload 与 batchDelete 同序同原始大小写；disabled 时不发；emit 后清空选择；
 // 并简单复验既有批量删除主断言（详细断言归 ResultTable.batch.spec.ts）。
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { mount } from "@vue/test-utils";
 import { defineComponent, h, type PropType } from "vue";
 import ResultTable from "./ResultTable.vue";
@@ -101,12 +101,14 @@ describe("ResultTable batch move", () => {
     wrapper.unmount();
   });
 
-  it("keeps existing batchDelete behavior intact (no regression)", async () => {
+  it("keeps existing batchDelete behavior intact (two-step confirm, no regression)", async () => {
     const wrapper = mountTable();
-    // happy-dom 未内置 confirm，按仓库先例 stub 全局（见 ResultTable.batch.spec.ts）。
-    vi.stubGlobal("confirm", () => true);
     await checks(wrapper)[0].trigger("click");
     await checks(wrapper)[1].trigger("click");
+    // 首次点击进入确认态（不再走 window.confirm），不发删除。
+    await wrapper.find(".batch-delete").trigger("click");
+    expect(wrapper.emitted("batchDelete")).toBeUndefined();
+    // 确认态再点：emit 原始大小写 DN（按条目顺序），随后清空选择。
     await wrapper.find(".batch-delete").trigger("click");
     expect(wrapper.emitted("batchDelete")).toHaveLength(1);
     expect(wrapper.emitted("batchDelete")![0][0]).toEqual([

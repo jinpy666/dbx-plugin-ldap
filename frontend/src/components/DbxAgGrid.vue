@@ -7,8 +7,14 @@
 // 列宽列序持久化（columnStateKey）。
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  AllCommunityModule,
+  ClientSideRowModelApiModule,
+  ClientSideRowModelModule,
+  ColumnApiModule,
+  LocaleModule,
   ModuleRegistry,
+  PaginationModule,
+  RowSelectionModule,
+  TextFilterModule,
   createGrid,
   type ColDef,
   type ColumnState,
@@ -29,7 +35,27 @@ import {
   savePreferredPageSize,
 } from "../lib/ldapGrid";
 
-ModuleRegistry.registerModules([AllCommunityModule]);
+// 按实际功能显式注册模块（替代全量 AllCommunityModule，审计 K-7，省约 1.5MB）：
+// - ClientSideRowModel：rowData 客户端行模型 + 排序/过滤执行（dependsOn 自动带入 SortModule）
+// - ClientSideRowModelApi：setGridOption("rowData") 等行模型 API
+// - TextFilter：defaultColDef 的 agTextColumnFilter（dependsOn 自动带入 ColumnFilterModule
+//   过滤骨架与表头筛选菜单；本项目无数值列筛选，不注册 NumberFilter）
+// - Pagination：分页 + 页大小选择器 + paginationGet* API
+// - RowSelection：复选多选/表头全选 + getSelectedRows/deselectAll
+// - ColumnApi：列宽拖拽/列序移动/columnState 持久化 + getAllDisplayedColumns
+// - Locale：localeText 中文化
+// 渲染/滚动/事件/焦点本体由 createGrid 自动注册的 CommunityCoreModule 提供；
+// 导出/编辑器/行分组等未用功能不再进包。缺注册的功能运行时才报错——清单已
+// 逐一对照官方 GRID_OPTIONS_MODULES 校验映射与 GridApi 的 @agModule 标注。
+ModuleRegistry.registerModules([
+  ClientSideRowModelModule,
+  ClientSideRowModelApiModule,
+  TextFilterModule,
+  PaginationModule,
+  RowSelectionModule,
+  ColumnApiModule,
+  LocaleModule,
+]);
 
 const props = withDefaults(
   defineProps<{

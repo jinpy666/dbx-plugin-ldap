@@ -1,25 +1,39 @@
 // 导出落盘：三级回退，目标都是"用户自己选目录和文件名"，解决 Blob 匿名
 // 下载"下载完找不到文件"的问题。
-// 1. 宿主桥 fileTransfer.beginSave（optional 1.1 特性）：宿主原生另存为
-//    对话框（与 SSH 插件下载链路同一写法），分块 write → finish，失败 cancel。
-// 2. showSaveFilePicker（File System Access API）：mock / 浏览器等无宿主桥
-//    的 Chromium 环境仍能选路径+文件名。
-// 3. Blob <a download>：旧桥兜底，行为同旧 downloadText，但通过返回的 via
-//    让调用方明确提示"进了浏览器默认下载目录"。
-// 用户主动取消对话框（AbortError / cancel 语义错误）返回 cancelled，调用方
-// 静默收场，不弹错误也不偷偷换通道落盘。
+// 1. 宿主桥 dbxPlugin.saveFile（host.saveFile）：宿主原生另存为对话框 +
+//    宿主侧落盘（沙箱 iframe 无法触发下载，WKWebView 会取消 blob 导航），
+//    用户取消时 resolve null。DBX desktop ≥0.2.111 起提供。
+// 2. showSaveFilePicker（File System Access API）：mock / 浏览器等无宿主
+//    保存桥的 Chromium 环境仍能选路径+文件名。
+// 3. Blob <a download>：最后兜底，但通过返回的 via 让调用方明确提示
+//    "进了浏览器默认下载目录"。
+// 宿主返回 null 或选择器 AbortError 视为用户主动取消：返回 cancelled，
+// 调用方静默收场，不弹错误也不偷偷换通道落盘。
 
-export type SaveTextVia = "host" | "browser" | "legacy";
+export type SaveVia = "host" | "browser" | "legacy";
 
-export type SaveTextOutcome =
-    | { status: "saved"; name: string; via: SaveTextVia }
-    | { status: "cancelled"; name: string; via: SaveTextVia };
+export type SaveFileOutcome = {
+    status: "saved" | "cancelled";
+    name: string;
+    via: SaveVia;
+};
+
+/** 兼容旧名：文本导出的返回类型与二进制导出一致。 */
+export type SaveTextOutcome = SaveFileOutcome;
 
 export interface SaveTextOptions {
     name: string;
     contentType: string;
     text: string;
 }
+
+export interface SaveBinaryOptions {
+    name: string;
+    contentType: string;
+    bytes: Uint8Array;
+}
+
+type HostSaveFile = (options: { fileName?: string; contentType?: string }, data: Uint8Array) => Promise<{ path: string } | null>;
 
 const textEncoder = new TextEncoder();
 
@@ -29,31 +43,31 @@ const isCancelCause = (cause: unknown): boolean => {
     return /cancel|abort/i.test(message);
 };
 
-async function saveViaHost(name: string, contentType: string, bytes: Uint8Array): Promise<SaveTextOutcome | undefined> {
-    const fileTransfer = window.dbxPlugin?.fileTransfer;
-    if (!fileTransfer) return undefined;
-    let handleId = "";
+function hostSaveFile(): HostSaveFile | undefined {
+    const candidate = (window.dbxPlugin as unknown as { saveFile?: HostSaveFile } | undefined)?.saveFile;
+    return typeof candidate === "function" ? candidate : undefined;
+}
+
+/** 宿主确认的落盘名：对话框里用户可能改名，取返回路径末段回显。 */
+function basenameOf(path: string | undefined, fallback: string): string {
+    const base = typeof path === "string" && path ? path.split(/[\\/]/).pop() || "" : "";
+    return base || fallback;
+}
+
+async function saveViaHost(name: string, contentType: string, bytes: Uint8Array): Promise<SaveFileOutcome | undefined> {
+    const saveFile = hostSaveFile();
+    if (!saveFile) return undefined;
     try {
-        const target = await fileTransfer.beginSave({ name, contentType, size: bytes.byteLength });
-        handleId = target.handleId;
-        const chunkBytes = Number(target.chunkBytes) > 0 ? Number(target.chunkBytes) : bytes.byteLength;
-        let offset = 0;
-        while (offset < bytes.byteLength) {
-            const end = Math.min(offset + chunkBytes, bytes.byteLength);
-            const write = await fileTransfer.write(handleId, offset, bytes.subarray(offset, end));
-            offset = typeof write?.nextOffset === "number" ? write.nextOffset : end;
-        }
-        await fileTransfer.finish(handleId);
-        return { status: "saved", name, via: "host" };
-    } catch (cause) {
-        if (handleId) await fileTransfer.cancel(handleId).catch(() => undefined);
-        if (isCancelCause(cause)) return { status: "cancelled", name, via: "host" };
+        const result = await saveFile({ fileName: name, contentType }, bytes);
+        if (result === null) return { status: "cancelled", name, via: "host" };
+        return { status: "saved", name: basenameOf(result?.path, name), via: "host" };
+    } catch {
         // 桥损坏等真实故障 → 交给下一级通道，保证导出仍然发生。
         return undefined;
     }
 }
 
-async function saveViaFileSystemAccess(name: string, bytes: Uint8Array): Promise<SaveTextOutcome | undefined> {
+async function saveViaFileSystemAccess(name: string, bytes: Uint8Array): Promise<SaveFileOutcome | undefined> {
     const picker = window.showSaveFilePicker;
     if (typeof picker !== "function") return undefined;
     let handle: DbxSaveFileHandle;
@@ -75,8 +89,9 @@ async function saveViaFileSystemAccess(name: string, bytes: Uint8Array): Promise
     }
 }
 
-function saveViaLegacyDownload(name: string, contentType: string, text: string): SaveTextOutcome {
-    const blob = new Blob([text], { type: `${contentType};charset=utf-8` });
+function saveViaLegacyDownload(name: string, blobType: string, bytes: Uint8Array): SaveFileOutcome {
+    // new Uint8Array(bytes) 复制进独立 ArrayBuffer：BlobPart 不接受 ArrayBufferLike 视图。
+    const blob = new Blob([new Uint8Array(bytes)], { type: blobType });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -86,16 +101,13 @@ function saveViaLegacyDownload(name: string, contentType: string, text: string):
     return { status: "saved", name, via: "legacy" };
 }
 
-export async function saveTextFile(options: SaveTextOptions): Promise<SaveTextOutcome> {
-    const { name, contentType, text } = options;
-    const bytes = textEncoder.encode(text);
-
+async function saveBytes(name: string, contentType: string, bytes: Uint8Array): Promise<SaveFileOutcome> {
     // `showSaveFilePicker()` must be invoked while the export button's user
     // gesture is still active. Do not first await the optional host bridge in
     // browser-only mode: that extra turn makes Chromium reject the picker
     // with NotAllowedError and silently sends the file to the default
     // download folder instead.
-    if (!window.dbxPlugin?.fileTransfer && typeof window.showSaveFilePicker === "function") {
+    if (!hostSaveFile() && typeof window.showSaveFilePicker === "function") {
         const viaPicker = await saveViaFileSystemAccess(name, bytes);
         if (viaPicker) return viaPicker;
     }
@@ -104,5 +116,13 @@ export async function saveTextFile(options: SaveTextOptions): Promise<SaveTextOu
     if (viaHost) return viaHost;
     const viaPicker = await saveViaFileSystemAccess(name, bytes);
     if (viaPicker) return viaPicker;
-    return saveViaLegacyDownload(name, contentType, text);
+    return saveViaLegacyDownload(name, contentType, bytes);
+}
+
+export function saveTextFile(options: SaveTextOptions): Promise<SaveFileOutcome> {
+    return saveBytes(options.name, `${options.contentType};charset=utf-8`, textEncoder.encode(options.text));
+}
+
+export function saveBinaryFile(options: SaveBinaryOptions): Promise<SaveFileOutcome> {
+    return saveBytes(options.name, options.contentType || "application/octet-stream", options.bytes);
 }

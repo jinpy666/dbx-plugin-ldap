@@ -62,7 +62,18 @@ describe("mock search/read contract", () => {
       expect(result).toMatchObject({ count, truncated, baseDn: people, filter: "(objectClass=*)" });
       expect(result.entries).toHaveLength(count);
     }
-    await expect(invoke("ldap/search", { ...query, pageSize: 0, sizeLimit: 5 })).rejects.toThrow("Size Limit Exceeded");
+  });
+
+  it("truncates non-paged size-limited searches with entries plus an honest flag instead of Size Limit Exceeded", async () => {
+    const query = { baseDn: people, scope: "one", attributes: ["1.1"] };
+    // 命中上限：照给前 limit 条 + truncated:true（对齐真实聚合语义，不抛 code-4）。
+    const capped = await invoke<LdapSearchResult>("ldap/search", { ...query, sizeLimit: 5 });
+    expect(capped).toMatchObject({ count: 5, truncated: true });
+    expect(capped.entries).toHaveLength(5);
+    // 恰好等于上限：一条未截 → 标志位诚实，不误报截断。
+    await expect(invoke("ldap/search", { ...query, sizeLimit: 1000 })).resolves.toMatchObject({ count: 1000, truncated: false });
+    // limit=0 语义保持：不设上限，全量返回且不置标志。
+    await expect(invoke("ldap/search", { ...query, sizeLimit: 0 })).resolves.toMatchObject({ count: 1000, truncated: false });
   });
 
   it("excludes the search base from scope=one and handles an escaped comma in a direct child", async () => {

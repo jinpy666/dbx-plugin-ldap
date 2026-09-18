@@ -226,9 +226,35 @@ describe("DnTree context menu presentation", () => {
     await flushPromises();
 
     const items = Array.from(document.querySelectorAll<HTMLElement>(".context-menu [role='menuitem']"));
-    expect(items).toHaveLength(9);
+    expect(items).toHaveLength(12);
     expect(items.every((item) => item.querySelector(".context-menu-item-icon"))).toBe(true);
     expect(items.every((item) => item.querySelector(".context-menu-item-icon")?.getAttribute("aria-hidden") === "true")).toBe(true);
+  });
+
+  it("emits addBookmark with the raw-case DN from the bookmark menu item", async () => {
+    search.mockResolvedValueOnce({ entries: [hit], count: 1, truncated: false });
+    await filter("alice");
+    await wrapper.find(".tree-node").trigger("contextmenu", { clientX: 12, clientY: 18 });
+    await flushPromises();
+
+    const items = Array.from(document.querySelectorAll<HTMLElement>(".context-menu [role='menuitem']"));
+    // compare 菜单项加入后 bookmark 不再是最后一项，按文案定位。
+    const bookmarkItem = items.find((item) => item.textContent?.includes("收藏此条目"))!;
+    expect(bookmarkItem.textContent).toContain("收藏此条目");
+    bookmarkItem.click();
+    await flushPromises();
+    expect(document.querySelector(".context-menu")).toBeNull();
+    expect(wrapper.emitted("addBookmark")?.at(-1)).toEqual([hit.dn]);
+  });
+
+  it("unmount 后挂载期延时的文档级点击监听不再复活", () => {
+    wrapper.unmount();
+    const addSpy = vi.spyOn(document, "addEventListener");
+    // 跑完挂载期注册的 setTimeout(0)：卸载路径必须已清除该定时器，
+    // 否则监听器会在组件销毁后被补挂到 document 上泄漏。
+    vi.runAllTimers();
+    expect(addSpy).not.toHaveBeenCalledWith("click", expect.anything());
+    addSpy.mockRestore();
   });
 });
 
@@ -301,5 +327,91 @@ describe("DnTree recoverable states", () => {
     wrapper.unmount();
     await vi.advanceTimersByTimeAsync(300);
     expect(search).not.toHaveBeenCalled();
+  });
+});
+
+describe("DnTree revealDn 树内定位", () => {
+  const parentDn = "ou=people," + baseDn;
+  const parent = { dn: parentDn, attributes: {} };
+  const targetDn = "cn=alice," + parentDn;
+  const target = { dn: targetDn, attributes: {} };
+
+  it("逐级展开祖先链并高亮目标行（不发 select）", async () => {
+    searchStart
+      .mockResolvedValueOnce({ searchId: "root", entries: [parent], hasMore: false })
+      .mockResolvedValueOnce({ searchId: "parent", entries: [target], hasMore: false });
+    await wrapper.vm.refresh();
+    await flushPromises();
+
+    await expect(wrapper.vm.revealDn(targetDn)).resolves.toBe(true);
+
+    expect(searchStart).toHaveBeenCalledTimes(2);
+    expect(searchStart).toHaveBeenLastCalledWith(expect.objectContaining({ baseDn: parentDn, scope: "one" }));
+    const rows = wrapper.findAll(".tree-node");
+    expect(rows.map((row) => row.attributes("title"))).toEqual([baseDn, parentDn, targetDn]);
+    expect(rows.at(-1)!.attributes("aria-selected")).toBe("true");
+    expect(wrapper.emitted("select")).toBeUndefined();
+  });
+
+  it("目标不在首 500 条 → 用截断续载游标继续取", async () => {
+    const fillers = Array.from({ length: 500 }, (_, index) => ({ dn: `cn=u${index},${baseDn}`, attributes: {} }));
+    searchStart.mockResolvedValueOnce({ searchId: "root", entries: fillers, hasMore: true });
+    searchNext.mockResolvedValueOnce({ entries: [parent], hasMore: false });
+    searchStart.mockResolvedValueOnce({ searchId: "parent", entries: [target], hasMore: false });
+    await wrapper.vm.refresh();
+    await flushPromises();
+
+    await expect(wrapper.vm.revealDn(targetDn)).resolves.toBe(true);
+
+    expect(searchNext).toHaveBeenCalledTimes(1);
+    expect(searchNext).toHaveBeenCalledWith("root", undefined);
+    const titles = wrapper.findAll(".tree-node").map((row) => row.attributes("title"));
+    expect(titles).toContain(parentDn);
+    expect(titles).toContain(targetDn);
+    expect(wrapper.find(".tree-badge--truncated").exists()).toBe(false);
+  });
+
+  it("目标在续载第 2 页内 → 逐页续载并命中（临时 dn 索引不丢新节点）", async () => {
+    const page1 = Array.from({ length: 500 }, (_, index) => ({ dn: `cn=u${index},${baseDn}`, attributes: {} }));
+    const lateDn = "cn=zz-late," + baseDn;
+    searchStart.mockResolvedValueOnce({ searchId: "root", entries: page1, hasMore: true });
+    searchNext
+      .mockResolvedValueOnce({ entries: [{ dn: "cn=mid," + baseDn, attributes: {} }], hasMore: true })
+      .mockResolvedValueOnce({ entries: [{ dn: lateDn, attributes: {} }], hasMore: false });
+    await wrapper.vm.refresh();
+    await flushPromises();
+
+    await expect(wrapper.vm.revealDn(lateDn)).resolves.toBe(true);
+
+    expect(searchNext).toHaveBeenCalledTimes(2);
+    const targetRow = wrapper.findAll(".tree-node").find((row) => row.attributes("title") === lateDn);
+    expect(targetRow).toBeDefined();
+    expect(targetRow!.attributes("aria-selected")).toBe("true");
+  });
+
+  it("游标耗尽仍未找到 → false 且不抛错", async () => {
+    const fillers = Array.from({ length: 500 }, (_, index) => ({ dn: `cn=u${index},${baseDn}`, attributes: {} }));
+    searchStart.mockResolvedValueOnce({ searchId: "root", entries: fillers, hasMore: true });
+    searchNext.mockResolvedValueOnce({ entries: [], hasMore: false });
+    await wrapper.vm.refresh();
+    await flushPromises();
+
+    await expect(wrapper.vm.revealDn("cn=missing," + baseDn)).resolves.toBe(false);
+    expect(searchNext).toHaveBeenCalledTimes(1);
+  });
+
+  it("DN 不在 baseDn 之下 → 直接 false（零请求）", async () => {
+    await expect(wrapper.vm.revealDn("cn=x,dc=other")).resolves.toBe(false);
+    expect(searchStart).not.toHaveBeenCalled();
+  });
+
+  it("祖先懒加载失败 → false（不抛错，树不被清空）", async () => {
+    searchStart.mockResolvedValueOnce({ searchId: "root", entries: [parent], hasMore: false });
+    searchStart.mockRejectedValueOnce(new Error("connection refused"));
+    await wrapper.vm.refresh();
+    await flushPromises();
+
+    await expect(wrapper.vm.revealDn(targetDn)).resolves.toBe(false);
+    expect(wrapper.findAll(".tree-node").map((row) => row.attributes("title"))).toEqual([baseDn, parentDn]);
   });
 });

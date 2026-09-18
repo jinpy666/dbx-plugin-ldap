@@ -2,8 +2,10 @@
 // 连接状态面板：ldap/connections/statuses（多连接 status/lastError/lastUsedAt）
 // + 每行 ldap/check 连接体检（network/bind 两段，行间互不阻塞）。
 import { ref, watch } from "vue";
-import { Activity, Network, RefreshCw, X } from "@lucide/vue";
-import { ldapApi, type LdapCheckResult, type LdapConnectionStatus } from "../lib/api";
+import { Activity, Fingerprint, Loader2, Network, RefreshCw, X } from "@lucide/vue";
+import { getLdapConnectionId, ldapApi, type LdapConnectionStatus } from "../lib/api";
+import { describeLdapCheckResult } from "../lib/ldapCheck";
+import { friendlyLdapError } from "../lib/ldapErrors";
 import { useModalA11y } from "../lib/modal";
 import { t } from "../lib/i18n";
 
@@ -37,32 +39,14 @@ function checkStateOf(connectionId: string): CheckRowState {
   return checkStates.value[connectionId] ?? IDLE_CHECK;
 }
 
-// 按契约把 ldap/check 结果归一成一行文案：网络段优先、认证段次之、全通过给出网络耗时。
-function describeCheckResult(result: LdapCheckResult): CheckRowState {
-  const network = result?.network;
-  const bind = result?.bind;
-  if (!network || !bind) {
-    // 契约外形状（mock / 旧 sidecar 未实现完整返回）→ 统一按检查失败降级，不抛错。
-    return { running: false, message: t("connections.checkFail", { error: "unexpected ldap/check response" }), failed: true };
-  }
-  if (!network.ok) {
-    return { running: false, message: t("connections.checkNetworkFail", { error: network.error ?? "" }), failed: true };
-  }
-  // bind 段失败/未通过（skipped 之外带 error 也视为未通过）。
-  const bindFailed = !bind.ok || (!!bind.error && !bind.skipped);
-  if (bindFailed) {
-    return { running: false, message: t("connections.checkBindFail", { error: bind.error ?? "" }), failed: true };
-  }
-  return { running: false, message: t("connections.checkOk", { networkMs: network.latencyMs ?? 0 }) };
-}
-
 async function runCheck(connectionId: string) {
   if (checkStateOf(connectionId).running) return;
   checkStates.value[connectionId] = { running: true };
   try {
-    // 默认不传 level = network+bind 两段都查。
+    // 默认不传 level = network+bind 两段都查；结果归一在 lib/ldapCheck 纯函数。
     const result = await ldapApi.check(connectionId);
-    checkStates.value[connectionId] = describeCheckResult(result);
+    const described = describeLdapCheckResult(result);
+    checkStates.value[connectionId] = { running: false, message: described.message, failed: described.failed };
   } catch (cause) {
     // 后端未合入 / 连接未知等业务错误 → 行内展示失败文案，不影响其他行。
     checkStates.value[connectionId] = {
@@ -70,6 +54,42 @@ async function runCheck(connectionId: string) {
       message: t("connections.checkFail", { error: cause instanceof Error ? cause.message : String(cause) }),
       failed: true,
     };
+  }
+}
+
+// -- 身份查询（F3 WhoAmI）-----------------------------------------------------
+// 每行独立的 whoami 状态：ldapApi.whoami() 不带 connectionId 参数、语义跟随
+// 全局当前连接，因此仅当前连接的行可点；进行中禁用，结果行内展示。
+
+interface WhoamiRowState {
+  running: boolean;
+  message?: string;
+  /** true → 错误色（form-error），否则 muted。 */
+  failed?: boolean;
+}
+
+const IDLE_WHOAMI: WhoamiRowState = Object.freeze({ running: false });
+const whoamiStates = ref<Record<string, WhoamiRowState>>({});
+
+// 只读访问：未查过的行走共享的空闲态（避免在渲染期写入状态）。
+function whoamiStateOf(connectionId: string): WhoamiRowState {
+  return whoamiStates.value[connectionId] ?? IDLE_WHOAMI;
+}
+
+function isCurrentConnection(connectionId: string): boolean {
+  return connectionId === getLdapConnectionId();
+}
+
+async function runWhoami(connectionId: string) {
+  if (whoamiStateOf(connectionId).running || !isCurrentConnection(connectionId)) return;
+  whoamiStates.value[connectionId] = { running: true };
+  try {
+    const result = await ldapApi.whoami();
+    whoamiStates.value[connectionId] = { running: false, message: t("connections.whoamiOk", { authzId: result?.authzId ?? "" }) };
+  } catch (cause) {
+    // 错误文案过 friendlyLdapError 映射（与树/检查的提示口径一致）。
+    const raw = cause instanceof Error ? cause.message : String(cause);
+    whoamiStates.value[connectionId] = { running: false, message: t("connections.whoamiFailed", { error: friendlyLdapError(raw) }), failed: true };
   }
 }
 
@@ -143,20 +163,40 @@ useModalA11y(
               v-else-if="checkStateOf(status.connectionId).message"
               :class="checkStateOf(status.connectionId).failed ? 'form-error' : 'muted'"
             >{{ checkStateOf(status.connectionId).message }}</span>
+            <!-- 身份查询结果（F3）：与检查结果各自独立、互不覆盖。 -->
+            <span
+              v-if="whoamiStateOf(status.connectionId).message"
+              :class="whoamiStateOf(status.connectionId).failed ? 'form-error' : 'muted'"
+            >{{ whoamiStateOf(status.connectionId).message }}</span>
           </div>
           <span class="muted">{{ stateLabel(status.status) }}</span>
-          <button
-            type="button"
-            class="icon-button check-button"
-            style="flex: 0 0 24px"
-            :title="t('connections.check')"
-            :aria-label="t('connections.check')"
-            :disabled="checkStateOf(status.connectionId).running"
-            @click="runCheck(status.connectionId)"
-          >
-            <RefreshCw v-if="checkStateOf(status.connectionId).running" class="spinning" />
-            <Activity v-else />
-          </button>
+          <span style="display: flex; gap: 2px">
+            <button
+              type="button"
+              class="icon-button check-button"
+              style="flex: 0 0 24px"
+              :title="t('connections.check')"
+              :aria-label="t('connections.check')"
+              :disabled="checkStateOf(status.connectionId).running"
+              @click="runCheck(status.connectionId)"
+            >
+              <RefreshCw v-if="checkStateOf(status.connectionId).running" class="spinning" />
+              <Activity v-else />
+            </button>
+            <!-- 仅当前连接可点（whoami 走全局当前连接语义）；进行中禁用。 -->
+            <button
+              type="button"
+              class="icon-button whoami-button"
+              style="flex: 0 0 24px"
+              :title="t('connections.whoami')"
+              :aria-label="t('connections.whoami')"
+              :disabled="whoamiStateOf(status.connectionId).running || !isCurrentConnection(status.connectionId)"
+              @click="runWhoami(status.connectionId)"
+            >
+              <Loader2 v-if="whoamiStateOf(status.connectionId).running" class="spinning" />
+              <Fingerprint v-else />
+            </button>
+          </span>
         </li>
       </ul>
       <p v-else class="empty compact">{{ t("connections.empty") }}</p>

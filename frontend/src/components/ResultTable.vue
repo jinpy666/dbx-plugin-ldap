@@ -3,10 +3,10 @@
 // attributes 并集；排序/列内文本筛选/列宽拖拽/分页/键盘导航全部由 ag-grid 内建，
 // 交互保留旧行为：
 // - 行双击 / Enter 打开条目编辑器（ldap/entry/get）
-// - 行首复选框多选 + 表头全选 + 批量删除/批量移动入口（选择键 = 小写 DN，
+// - 行首复选框多选 + 表头全选 + 批量删除/批量移动/批量修改入口（选择键 = 小写 DN，
 //   payload 按条目顺序取回原始大小写）
 // - 结果集变化时清空批量选择
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { FileDown, FileJson, FileSpreadsheet } from "@lucide/vue";
 import DbxAgGrid from "./DbxAgGrid.vue";
 import type { LdapEntry } from "../lib/api";
@@ -33,8 +33,12 @@ const props = withDefaults(defineProps<{
   loadingMore?: boolean;
   loadMoreError?: string;
   loadMoreErrorDetail?: string;
+  /** 连接可写门禁（表单 read_only ∥ 宿主 read_only）：false 时禁用批量
+   * 删除/移动/修改三个写入口（App 侧守卫兜底，后端 policy 最终拒绝）。 */
+  canWrite?: boolean;
 }>(), {
   complete: true,
+  canWrite: true,
 });
 
 const emit = defineEmits<{
@@ -44,6 +48,7 @@ const emit = defineEmits<{
   (e: "retry"): void;
   (e: "batchDelete", dns: string[]): void;
   (e: "batchMove", dns: string[]): void;
+  (e: "batchModify", dns: string[]): void;
   (e: "loadMore"): void;
   (e: "retryMore"): void;
 }>();
@@ -68,6 +73,8 @@ const originalDns = ref<Map<string, string>>(new Map());
 const selectedCount = computed(() => selectedDns.value.size);
 
 function onSelectionChanged(rows: unknown[]) {
+  // 任何选择变化都解除批量删除确认态（审计 J-5：确认与所选项必须同步）。
+  disarmBatchDelete();
   const keys = new Set<string>();
   const originals = new Map<string, string>();
   for (const row of rows) {
@@ -84,6 +91,7 @@ function onSelectionChanged(rows: unknown[]) {
 // 清空选择：先清本地态，再同步网格（deselectAll 会触发 selectionChanged([])，
 // 与本地清空幂等；网格未挂载时本地清空兜底）。
 function clearSelection() {
+  disarmBatchDelete();
   selectedDns.value = new Set();
   originalDns.value = new Map();
   grid.value?.deselectAll();
@@ -100,11 +108,32 @@ function collectSelectedDns(): string[] {
   return dns;
 }
 
-// 确认删除：原生 confirm（与 SearchForm.removePreset 同机制）；确认后清空选择。
+// 批量删除行内两步确认（审计 J-5）：宿主 webview 可能拦截 window.confirm
+// 原生确认框导致按钮"静默无响应"（同 SearchForm.requestRemovePreset 模式）。
+// 首次点击进入确认态（文案切到既有 t("confirm")，class 加 is-armed），3 秒
+// 无操作自动回落；确认态再次点击才真正触发批量删除。选择变化即解除确认态。
+const batchDeleteArmed = ref(false);
+let batchDeleteArmTimer = 0;
+
+function disarmBatchDelete() {
+  window.clearTimeout(batchDeleteArmTimer);
+  batchDeleteArmTimer = 0;
+  batchDeleteArmed.value = false;
+}
+
+// 确认删除：行内两步确认；确认后清空选择。只读连接（canWrite=false）直接
+// 拦截：按钮虽已禁用，键盘/自动化仍可能触达（与 App 侧守卫同语义）。
 function confirmBatchDelete() {
+  if (!props.canWrite) return;
   const count = selectedDns.value.size;
   if (count === 0) return;
-  if (!window.confirm(t("result.batchConfirm", { count }))) return;
+  if (!batchDeleteArmed.value) {
+    batchDeleteArmed.value = true;
+    window.clearTimeout(batchDeleteArmTimer);
+    batchDeleteArmTimer = window.setTimeout(disarmBatchDelete, 3000);
+    return;
+  }
+  disarmBatchDelete();
   emit("batchDelete", collectSelectedDns());
   clearSelection();
 }
@@ -112,8 +141,16 @@ function confirmBatchDelete() {
 // 批量移动：目标父 DN 的选择与确认在 App 侧对话框完成，这里直接 emit，
 // payload 与 batchDelete 同序同大小写；随后与 batchDelete 一致地清空选择。
 function batchMoveSelection() {
-  if (selectedDns.value.size === 0) return;
+  if (!props.canWrite || selectedDns.value.size === 0) return;
   emit("batchMove", collectSelectedDns());
+  clearSelection();
+}
+
+// 批量修改：操作类型/属性名/值的选择与确认在 App 侧 BatchModifyDialog 完成，
+// 这里直接 emit，payload 与 batchDelete/batchMove 同序同大小写；随后同样清空选择。
+function batchModifySelection() {
+  if (!props.canWrite || selectedDns.value.size === 0) return;
+  emit("batchModify", collectSelectedDns());
   clearSelection();
 }
 
@@ -121,6 +158,9 @@ watch(
   () => props.entries,
   () => clearSelection(),
 );
+
+// 卸载时清确认态定时器：挂载同 tick 卸载时回调不会随定时器"复活"。
+onBeforeUnmount(disarmBatchDelete);
 
 const hasEntries = computed(() => props.entries.length > 0);
 const complete = computed(() => props.complete);
@@ -157,9 +197,22 @@ const complete = computed(() => props.complete);
       <!-- 批量操作条：选中数 > 0 时出现在表格之上 -->
       <div v-if="selectedCount > 0" class="batch-bar">
         <span class="batch-count">{{ t("result.batchSelected", { count: selectedCount }) }}</span>
-        <button type="button" class="toolbar-button batch-delete" :disabled="disabled" @click="confirmBatchDelete">{{ t("result.batchDelete") }}</button>
+        <!-- 删除走行内两步确认（宿主 webview 可能拦截原生 confirm）：确认态文案
+             用既有 confirm 键，title 同步说明；再点一次才触发。 -->
+        <!-- 只读连接（canWrite=false）：三个写入口全部禁用并提示（编辑器
+             readonlyHint 同一文案）；清除选择不受影响。 -->
+        <button
+          type="button"
+          class="toolbar-button batch-delete"
+          :class="{ 'is-armed': batchDeleteArmed }"
+          :disabled="disabled || !canWrite"
+          :title="!canWrite ? t('editor.readonlyHint') : (batchDeleteArmed ? t('confirm') : t('result.batchDelete'))"
+          @click="confirmBatchDelete"
+        >{{ batchDeleteArmed ? t("confirm") : t("result.batchDelete") }}</button>
         <!-- 移动所选：不弹确认，目标父 DN 由 App 侧对话框选择 -->
-        <button type="button" class="toolbar-button batch-move" :disabled="disabled" @click="batchMoveSelection">{{ t("result.batchMove") }}</button>
+        <button type="button" class="toolbar-button batch-move" :disabled="disabled || !canWrite" :title="!canWrite ? t('editor.readonlyHint') : t('result.batchMove')" @click="batchMoveSelection">{{ t("result.batchMove") }}</button>
+        <!-- 修改所选：不弹确认，操作类型/属性名/值由 App 侧 BatchModifyDialog 选择 -->
+        <button type="button" class="toolbar-button batch-modify" :disabled="disabled || !canWrite" :title="!canWrite ? t('editor.readonlyHint') : t('result.batchModify')" @click="batchModifySelection">{{ t("result.batchModify") }}</button>
         <button type="button" class="toolbar-button batch-clear" @click="clearSelection">{{ t("result.batchClear") }}</button>
       </div>
       <DbxAgGrid
@@ -217,6 +270,10 @@ const complete = computed(() => props.complete);
   border-color: color-mix(in srgb, var(--destructive) 45%, transparent);
 }
 .batch-bar .batch-delete:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
+}
+/* 确认态（is-armed）：微弱底色提示"再点一次才执行"。 */
+.batch-bar .batch-delete.is-armed {
   background: color-mix(in srgb, var(--destructive) 12%, transparent);
 }
 </style>

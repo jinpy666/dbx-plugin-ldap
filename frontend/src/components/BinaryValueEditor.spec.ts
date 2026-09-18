@@ -6,7 +6,7 @@
 // state. Pure front-end: no api/host bridge is involved, so nothing is
 // mocked; i18n placeholder keys resolve to their key strings (missing from
 // lib/i18n until the integration lands) and assertions reuse the same keys.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { t } from "../lib/i18n";
 import { MAX_BINARY_BYTES, bytesToBase64 } from "../lib/binaryValue";
@@ -90,8 +90,35 @@ describe("BinaryValueEditor", () => {
     expect(hex.exists()).toBe(true);
     expect(hex.text()).toContain("00000000");
     expect(hex.text()).toContain("01 02 03 04");
-    // 未知非证书值没有可切回的视图，只有删除按钮。
-    expect(cards(wrapper)[0].findAll("button")).toHaveLength(1);
+    // 未知非证书值没有可切回的视图：下载 + 删除，无视图切换按钮。
+    expect(cards(wrapper)[0].findAll("button")).toHaveLength(2);
+  });
+
+  it("shows the decoded UUID instead of hex for objectGUID values", () => {
+    const guidBytes = new Uint8Array([0x6c, 0x60, 0x4e, 0x2f, 0x1f, 0x62, 0xb6, 0x4c, 0xb7, 0xe4, 0x3d, 0xfd, 0xf6, 0x60, 0xa0, 0x8f]);
+    const wrapper = trackEditor({ attributeName: "objectGUID", modelValue: [bytesToBase64(guidBytes)] });
+    const decoded = wrapper.find(".binary-card .binary-decoded");
+    expect(decoded.exists()).toBe(true);
+    expect(decoded.text()).toBe("2f4e606c-621f-4cb6-b7e4-3dfdf660a08f");
+    // 有权威解码文本时不再渲染 hex 乱码，也没有视图切换按钮：仅下载 + 删除。
+    expect(hexViews(wrapper)).toHaveLength(0);
+    expect(cards(wrapper)[0].findAll("button")).toHaveLength(2);
+    expect(wrapper.find(".binary-download").exists()).toBe(true);
+    expect(wrapper.find(".binary-delete").exists()).toBe(true);
+  });
+
+  it("shows the decoded S-1-… text for objectSid values", () => {
+    const sidBytes = new Uint8Array([1, 2, 0, 0, 0, 0, 0, 5, 14, 0, 0, 0, 1, 0, 0, 0]);
+    const wrapper = trackEditor({ attributeName: "objectSid", modelValue: [bytesToBase64(sidBytes)] });
+    expect(wrapper.find(".binary-card .binary-decoded").text()).toBe("S-1-5-14-1");
+    expect(hexViews(wrapper)).toHaveLength(0);
+  });
+
+  it("falls back to hex when an objectGUID value does not decode", () => {
+    // 长度不是 16 字节：无法构成合法 GUID，回退 hex 视图。
+    const wrapper = trackEditor({ attributeName: "objectGUID", modelValue: [unknownBase64] });
+    expect(wrapper.find(".binary-card .binary-decoded").exists()).toBe(false);
+    expect(hexViews(wrapper)).toHaveLength(1);
   });
 
   it("pretty-prints a PEM value and toggles it to hex and back", async () => {
@@ -162,9 +189,56 @@ describe("BinaryValueEditor", () => {
     expect(hexViews(wrapper)).toHaveLength(0);
   });
 
-  it("disables delete/toggle/upload when disabled", () => {
+  it("downloads a value through the host save dialog as raw bytes with a sniffed extension", async () => {
+    const saved: Array<{ options: Record<string, unknown>; bytes: Uint8Array }> = [];
+    (window as unknown as { dbxPlugin: unknown }).dbxPlugin = {
+      saveFile: async (options: Record<string, unknown>, bytes: Uint8Array) => {
+        saved.push({ options, bytes });
+        return { path: `/tmp/${options.fileName as string}` };
+      },
+    };
+
+    const wrapper = trackEditor({ attributeName: "jpegPhoto;binary", modelValue: [jpegBase64] });
+    await wrapper.find(".binary-download").trigger("click");
+    await flushPromises();
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0].options).toEqual({ fileName: "jpegPhoto-1.jpg", contentType: "image/jpeg" });
+    expect(saved[0].bytes).toEqual(JPEG_BYTES);
+    // 下载是只读动作：不改变模型值。
+    expect(wrapper.emitted("update:modelValue")).toBeUndefined();
+    delete (window as unknown as { dbxPlugin?: unknown }).dbxPlugin;
+  });
+
+  it("falls back to an anonymous blob download when the host bridge has no save dialog", async () => {
+    const clicked: string[] = [];
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => "blob:mock");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this.download ?? "");
+    });
+
+    const wrapper = trackEditor({ attributeName: "jpegPhoto", modelValue: [jpegBase64] });
+    await wrapper.find(".binary-download").trigger("click");
+    await flushPromises();
+
+    expect(clicked).toEqual(["jpegPhoto-1.jpg"]);
+    // 下载是只读动作：不改变模型值。
+    expect(wrapper.emitted("update:modelValue")).toBeUndefined();
+    vi.mocked(URL.createObjectURL).mockRestore();
+    vi.mocked(URL.revokeObjectURL).mockRestore();
+    clickSpy.mockRestore();
+  });
+
+  it("marks the download button disabled on an invalid card", () => {
+    const wrapper = trackEditor({ attributeName: "jpegPhoto", modelValue: ["not!!base64"] });
+    expect(wrapper.find(".binary-download").attributes("disabled")).toBeDefined();
+  });
+
+  it("disables delete/download/toggle/upload when disabled", () => {
     const wrapper = trackEditor({ attributeName: "jpegPhoto", modelValue: [jpegBase64], disabled: true });
     expect(deleteButton(wrapper).attributes("disabled")).toBeDefined();
+    expect(wrapper.find(".binary-download").attributes("disabled")).toBeDefined();
     expect(wrapper.find('input[type="file"]').attributes("disabled")).toBeDefined();
   });
 

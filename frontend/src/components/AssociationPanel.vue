@@ -27,8 +27,7 @@
 //   owner 等，固定内置表）指向本条目的条目。两个反查仍由 tab 激活
 //   （active=true）惰性加载一次；dn / baseDn 变化时缓存作废，active 下立即
 //   重新搜索（请求序号防竞态）。
-import { computed, ref, watch } from "vue";
-import { Copy } from "@lucide/vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ldapApi } from "../lib/api";
 import { splitFirstDnRdn } from "../lib/dn";
 import { escapeLdapFilterValue } from "../lib/ldapFilter";
@@ -331,6 +330,59 @@ async function copyDnValue(dn: string) {
   emit("notify", (await writeClipboardText(dn)) ? t("copied") : t("copyFailed"));
 }
 
+// 行右键菜单（对标 ADS）：行内复制按钮已移除，contextmenu 打开
+// 「查看条目 / 复制 DN」。fixed 定位坐标按鼠标落点并夹在视口内。
+const rowMenu = ref<{ x: number; y: number; dn: string } | null>(null);
+const rowMenuEl = ref<HTMLElement>();
+
+function openRowMenu(dn: string, event: MouseEvent) {
+  event.preventDefault();
+  event.stopPropagation();
+  rowMenu.value = {
+    x: Math.max(4, Math.min(event.clientX, window.innerWidth - 190)),
+    y: Math.max(4, Math.min(event.clientY, window.innerHeight - 110)),
+    dn,
+  };
+  void nextTick(() => rowMenuEl.value?.querySelector<HTMLElement>("[role='menuitem']")?.focus({ preventScroll: true }));
+}
+
+function closeRowMenu() {
+  rowMenu.value = null;
+}
+
+function openFromRowMenu() {
+  const dn = rowMenu.value?.dn;
+  closeRowMenu();
+  if (!dn) return;
+  emit("openEntry", dn);
+  emit("openRelation", dn);
+}
+
+async function copyFromRowMenu() {
+  const dn = rowMenu.value?.dn;
+  closeRowMenu();
+  if (dn) await copyDnValue(dn);
+}
+
+function onRowMenuKeydown(event: KeyboardEvent) {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  event.stopPropagation();
+  closeRowMenu();
+}
+
+function onDocumentClick() {
+  closeRowMenu();
+}
+
+onMounted(() => {
+  window.setTimeout(() => document.addEventListener("click", onDocumentClick), 0);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("click", onDocumentClick);
+});
+
 function openAssociation(entry: AssocEntry) {
   emit("openEntry", entry.dn);
   emit("openRelation", entry.dn, entry.attribute);
@@ -379,6 +431,7 @@ function openAssociation(entry: AssocEntry) {
             :title="item.dn"
             style="cursor: pointer; height: 100%; gap: 6px"
             @click="openAssociation(item)"
+            @contextmenu.prevent="openRowMenu(item.dn, $event)"
           >
             <span style="display: flex; min-width: 0; flex: 1; flex-direction: column; justify-content: center; gap: 1px">
               <span style="display: flex; min-width: 0; align-items: baseline; gap: 6px">
@@ -390,13 +443,6 @@ function openAssociation(entry: AssocEntry) {
               <span class="muted" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px">{{ item.dn }}</span>
             </span>
             <!-- span role=button：button 内不再嵌套 button（与树行 twist 同解法） -->
-            <span
-              class="tree-twist assoc-copy"
-              role="button"
-              :title="t('associations.copyDn')"
-              :aria-label="t('associations.copyDn')"
-              @click.stop="copyDnValue(item.dn)"
-            ><Copy aria-hidden="true" /></span>
           </button>
         </template>
       </VirtualList>
@@ -413,6 +459,7 @@ function openAssociation(entry: AssocEntry) {
             :title="item.dn"
             style="cursor: pointer; height: 100%; gap: 6px"
             @click="openAssociation(item)"
+            @contextmenu.prevent="openRowMenu(item.dn, $event)"
           >
             <span style="display: flex; min-width: 0; flex: 1; flex-direction: column; justify-content: center; gap: 1px">
               <span style="display: flex; min-width: 0; align-items: baseline; gap: 6px">
@@ -421,13 +468,6 @@ function openAssociation(entry: AssocEntry) {
               </span>
               <span class="muted" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px">{{ item.dn }}</span>
             </span>
-            <span
-              class="tree-twist assoc-copy"
-              role="button"
-              :title="t('associations.copyDn')"
-              :aria-label="t('associations.copyDn')"
-              @click.stop="copyDnValue(item.dn)"
-            ><Copy aria-hidden="true" /></span>
           </button>
         </template>
       </VirtualList>
@@ -450,6 +490,7 @@ function openAssociation(entry: AssocEntry) {
               :title="item.dn"
               style="cursor: pointer; height: 100%; gap: 6px"
               @click="openAssociation(item)"
+              @contextmenu.prevent="openRowMenu(item.dn, $event)"
             >
               <span style="display: flex; min-width: 0; flex: 1; flex-direction: column; justify-content: center; gap: 1px">
                 <span style="display: flex; min-width: 0; align-items: baseline; gap: 6px">
@@ -458,13 +499,6 @@ function openAssociation(entry: AssocEntry) {
                 </span>
                 <span class="muted" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px">{{ item.dn }}</span>
               </span>
-              <span
-                class="tree-twist assoc-copy"
-                role="button"
-                :title="t('associations.copyDn')"
-                :aria-label="t('associations.copyDn')"
-                @click.stop="copyDnValue(item.dn)"
-              ><Copy aria-hidden="true" /></span>
             </button>
           </template>
         </VirtualList>
@@ -489,6 +523,7 @@ function openAssociation(entry: AssocEntry) {
               :title="item.dn"
               style="cursor: pointer; height: 100%; gap: 6px"
               @click="openAssociation(item)"
+              @contextmenu.prevent="openRowMenu(item.dn, $event)"
             >
               <span style="display: flex; min-width: 0; flex: 1; flex-direction: column; justify-content: center; gap: 1px">
                 <span style="display: flex; min-width: 0; align-items: baseline; gap: 6px">
@@ -497,13 +532,6 @@ function openAssociation(entry: AssocEntry) {
                 </span>
                 <span class="muted" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px">{{ item.dn }}</span>
               </span>
-              <span
-                class="tree-twist assoc-copy"
-                role="button"
-                :title="t('associations.copyDn')"
-                :aria-label="t('associations.copyDn')"
-                @click.stop="copyDnValue(item.dn)"
-              ><Copy aria-hidden="true" /></span>
             </button>
           </template>
         </VirtualList>
@@ -526,5 +554,28 @@ function openAssociation(entry: AssocEntry) {
         @click="setAssociationPage(associationPage + 1)"
       >›</button>
     </div>
+
+    <!-- 行右键菜单：查看条目 / 复制 DN（行内复制按钮已移除，对标 ADS）。
+         Teleport 到 body：面板在弹窗内，菜单要浮在最上层且坐标全局。 -->
+    <Teleport to="body">
+      <div
+        v-if="rowMenu"
+        ref="rowMenuEl"
+        class="context-menu"
+        role="menu"
+        tabindex="-1"
+        :style="{ left: `${rowMenu.x}px`, top: `${rowMenu.y}px`, width: '170px' }"
+        @click.stop
+        @contextmenu.prevent
+        @keydown="onRowMenuKeydown"
+      >
+        <button type="button" role="menuitem" :title="t('tree.viewEntry')" @click="openFromRowMenu">
+          <span class="context-menu-item-label">{{ t("tree.viewEntry") }}</span>
+        </button>
+        <button type="button" role="menuitem" :title="t('associations.copyDn')" @click="copyFromRowMenu">
+          <span class="context-menu-item-label">{{ t("associations.copyDn") }}</span>
+        </button>
+      </div>
+    </Teleport>
   </div>
 </template>

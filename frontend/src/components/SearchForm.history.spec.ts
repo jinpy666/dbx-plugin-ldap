@@ -1,14 +1,18 @@
 // @vitest-environment happy-dom
 // SearchForm 历史过滤器（对账表 P1，对标 ADS 搜索历史）：recordSearch 本地入队
 // （队首去重 / 10 条上限 / localStorage 持久化与重挂载恢复），下拉应用只回填表单
-// 不自动运行，confirm 清空，快捷条与展开态双入口。
+// 不自动运行，confirm 清空，快捷条与展开态双入口；历史键按连接派生（审计 J-3），
+// 测试未注入 connectionId 时统一落 "default" 段。
 // Network calls (presets/schema) reject harmlessly without a dbxPlugin host bridge.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { setLdapConnectionId } from "../lib/api";
 import SearchForm from "./SearchForm.vue";
 import type { SearchFormModel } from "./SearchForm.vue";
 
-const HISTORY_KEY = "dbx.ldap.ui.searchHistory";
+// 未调用 setLdapConnectionId 时组件历史键落到 default 段（连接未知语义）。
+const HISTORY_KEY = "dbx.ldap.ui.searchHistory.default";
+const LEGACY_GLOBAL_KEY = "dbx.ldap.ui.searchHistory";
 
 type Exposed = {
   recordSearch: (model: SearchFormModel) => void;
@@ -52,6 +56,8 @@ beforeEach(() => {
 afterEach(() => {
   wrapper?.unmount();
   wrapper = undefined;
+  // 归零连接注入，避免串染后续用例的派生键。
+  setLdapConnectionId("");
   vi.unstubAllGlobals();
 });
 
@@ -136,6 +142,48 @@ describe("SearchForm search history", () => {
     expect(wrapper.find(".history-empty").exists()).toBe(true);
     expect(wrapper.findAll(".history-item")).toHaveLength(0);
     expect(window.localStorage.getItem(HISTORY_KEY)).toBe("[]");
+  });
+
+  it("isolates history per connection and restores it when switching back (J-3)", async () => {
+    setLdapConnectionId("conn-a");
+    wrapper = await mountForm();
+    record(wrapper, baseModel({ filter: "(uid=conn-a)" }));
+    expect(window.localStorage.getItem("dbx.ldap.ui.searchHistory.conn-a")).toContain("(uid=conn-a)");
+    // 不再写旧全局键。
+    expect(window.localStorage.getItem(LEGACY_GLOBAL_KEY)).toBeNull();
+    wrapper.unmount();
+    // 换连接：读不到上一台目录的历史（组件不随连接重建，打开面板时现读派生键）。
+    setLdapConnectionId("conn-b");
+    wrapper = await mountForm();
+    record(wrapper, baseModel({ filter: "(uid=conn-b)" }));
+    expect(window.localStorage.getItem("dbx.ldap.ui.searchHistory.conn-b")).toContain("(uid=conn-b)");
+    await historyToggle(wrapper).trigger("click");
+    const items = wrapper.findAll(".history-item");
+    expect(items).toHaveLength(1);
+    expect(items[0].text()).toContain("(uid=conn-b)");
+    wrapper.unmount();
+    // 切回原连接：该连接自己的历史仍在。
+    setLdapConnectionId("conn-a");
+    wrapper = await mountForm();
+    await historyToggle(wrapper).trigger("click");
+    const restored = wrapper.findAll(".history-item");
+    expect(restored).toHaveLength(1);
+    expect(restored[0].text()).toContain("(uid=conn-a)");
+  });
+
+  it("ignores the legacy global key without migrating it (J-3)", async () => {
+    window.localStorage.setItem(
+      LEGACY_GLOBAL_KEY,
+      JSON.stringify([{ filter: "(legacy=1)", baseDn: "dc=old", scope: "sub", attributes: "" }]),
+    );
+    setLdapConnectionId("conn-c");
+    wrapper = await mountForm();
+    await historyToggle(wrapper).trigger("click");
+    // 旧全局键不读取：切换连接后不会把旧键内容灌进当前表单。
+    expect(wrapper.findAll(".history-item")).toHaveLength(0);
+    // 也不迁移不删除：旧键原样留存（一次性忽略语义）。
+    expect(window.localStorage.getItem(LEGACY_GLOBAL_KEY)).toContain("(legacy=1)");
+    expect(window.localStorage.getItem(HISTORY_KEY)).toBeNull();
   });
 
   it("keeps the history trigger reachable in both compact and expanded forms", async () => {

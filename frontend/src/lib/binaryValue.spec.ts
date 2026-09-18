@@ -95,17 +95,16 @@ describe("base64 round-trips", () => {
 describe("toHexView", () => {
   const pngMagic = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]);
 
-  it("renders offset + hex + ASCII columns in hexdump -C style", () => {
-    expect(toHexView(pngMagic)).toBe("00000000  89 50 4e 47 0d 0a 1a 0a  00 00 00 0d 49 48 44 52 |.PNG........IHDR|");
+  it("renders offset + hex columns without the ASCII projection", () => {
+    expect(toHexView(pngMagic)).toBe("00000000  89 50 4e 47 0d 0a 1a 0a  00 00 00 0d 49 48 44 52");
   });
 
-  it("pads short trailing lines and keeps offsets monotonic", () => {
+  it("keeps offsets monotonic on short trailing lines", () => {
     const view = toHexView(new Uint8Array([0x41, 0x42, 0x43, 0x44, 0x45]), 4);
     const lines = view.split("\n");
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toBe(`00000000  ${"41 42 43 44".padEnd(23)} |ABCD|`);
-    expect(lines[1].startsWith("00000004  45")).toBe(true);
-    expect(lines[1].endsWith("|E   |")).toBe(true);
+    expect(lines[0]).toBe("00000000  41 42 43 44");
+    expect(lines[1]).toBe("00000004  45");
   });
 
   it("accepts base64 input directly", () => {

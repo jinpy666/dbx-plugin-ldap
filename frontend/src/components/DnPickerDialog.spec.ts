@@ -68,16 +68,43 @@ describe("DnPickerDialog", () => {
     expect(wrapper.emitted("select")![0]).toEqual(["ou=people,dc=demo,dc=dbx"]);
   });
 
-  it("shows the truncation badge when the child list hits the cap", async () => {
+  it("shows the truncation badge when the backend reports truncation", async () => {
     searchMock.mockResolvedValue({ entries: Array.from({ length: 20 }, (_, i) => entry(`cn=u${i},dc=demo,dc=dbx`)), count: 20, truncated: true });
     const wrapper = await track();
     expect(wrapper.find(".badge").exists()).toBe(true);
+  });
+
+  it("requests the 500-entry cap aligned with TREE_FETCH_PAGE", async () => {
+    searchMock.mockResolvedValue({ entries: [], count: 0, truncated: false });
+    await track();
+    expect(searchMock).toHaveBeenCalledWith(expect.objectContaining({ sizeLimit: 500 }));
+  });
+
+  it("shows the badge past the 500 cap when the backend omits the truncation flag", async () => {
+    searchMock.mockResolvedValue({
+      entries: Array.from({ length: 501 }, (_, i) => entry(`cn=u${i},dc=demo,dc=dbx`)),
+      count: 501,
+      truncated: false,
+    });
+    const wrapper = await track();
+    expect(wrapper.find(".badge").exists()).toBe(true);
+  });
+
+  it("hides the badge at exactly the 500 cap without a truncation flag", async () => {
+    searchMock.mockResolvedValue({
+      entries: Array.from({ length: 500 }, (_, i) => entry(`cn=u${i},dc=demo,dc=dbx`)),
+      count: 500,
+      truncated: false,
+    });
+    const wrapper = await track();
+    expect(wrapper.find(".badge").exists()).toBe(false);
   });
 
   it("surfaces search errors without crashing", async () => {
     searchMock.mockRejectedValue(new Error("connection lost"));
     const wrapper = await track();
     expect(wrapper.find(".form-error").text()).toContain("connection lost");
+    expect(wrapper.find(".form-error").attributes("role")).toBe("alert");
   });
 
   it("renders nothing interactive without a base DN", async () => {

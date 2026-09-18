@@ -14,17 +14,6 @@ interface DbxPluginBackendEvent {
 // Current bridges also send environment updates through onEvent (no method/params).
 type DbxPluginEvent = DbxPluginBackendEvent | { type: "env"; locale?: string; theme?: DbxPluginTheme };
 
-interface DbxPluginFileTransferApi {
-  pick(options?: { accept?: string; multiple?: boolean }): Promise<{ files: Array<{ handleId: string; name: string; size: number; contentType: string }> }>;
-  read(handleId: string, offset: number, length?: number): Promise<{ dataBase64: string; length: number; eof: boolean }>;
-  beginSave(options: { name: string; contentType?: string; size?: number }): Promise<{ handleId: string; chunkBytes: number }>;
-  write(handleId: string, offset: number, data: Uint8Array | ArrayBuffer | string): Promise<{ written: number; nextOffset: number }>;
-  finish(handleId: string): Promise<void>;
-  cancel(handleId: string): Promise<void>;
-  onDragState(listener: (active: boolean) => void): () => void;
-  onDrop(listener: (files: Array<{ handleId: string; name: string; size: number; contentType: string }>) => void): () => void;
-}
-
 interface DbxPluginTheme {
   appearance: "light" | "dark";
   /** 宿主根节点解析后的设计令牌（--color-* / --radius-* / --font-*），Host API 1.0 无此字段。 */
@@ -90,7 +79,12 @@ interface DbxPluginApi {
   onContextChange?(listener: (context: Record<string, unknown>) => void): () => void;
   decodeBase64(value: string): Uint8Array;
   encodeBase64(value: Uint8Array | ArrayBuffer): string;
-  readonly fileTransfer?: DbxPluginFileTransferApi;
+  /**
+   * 宿主原生另存为对话框（host.saveFile）：宿主侧落盘，沙箱 iframe 无法
+   * 触发下载。用户取消 resolve null；DBX desktop ≥0.2.111 起提供，旧桥为
+   * undefined。
+   */
+  readonly saveFile?: (options: { fileName?: string; contentType?: string }, data: Uint8Array | ArrayBuffer | string) => Promise<{ path: string } | null>;
   readonly workbenchState?: { set(state: Record<string, unknown>): Promise<void> };
   readonly clipboard?: { readText(): Promise<string>; writeText(text: string): Promise<void> };
 }

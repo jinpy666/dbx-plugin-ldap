@@ -79,8 +79,18 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .identity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
 .connection-color { width: 4px; height: 16px; flex: 0 0 4px; border-radius: 999px; }
 .read-only-badge { border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; color: var(--muted-foreground); font-size: 10px; }
+/* 全局 .badge 徽标兜底（自由裁量）：工具栏协议/服务器徽标、导入格式、DN 选择器
+   截断提示共 4 处在用，但样式表此前没有 .badge 规则，渲染成裸文本、和
+   .read-only-badge/.tree-badge 的 pill 家族不一致。补中性 pill（不带语义色，
+   语义色由各组件自有类叠加），纯观感收口。 */
+.badge { display: inline-flex; max-width: 180px; align-items: center; overflow: hidden; border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; background: color-mix(in srgb, var(--muted) 45%, transparent); color: var(--muted-foreground); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .toolbar-actions { min-width: 0; justify-content: flex-end; gap: 2px; }
-.toolbar-separator { width: 1px; height: 16px; flex: 0 0 1px; margin: 0 3px; background: var(--border); }
+/* UX-V5 图标按钮分组：右侧 icon-only 簇的相邻按钮拉开间距（默认 2px 太挤，
+   五六个图标平铺难扫读），文字按钮与首个图标之间同样留出组间隙；主分界仍由
+   .toolbar-separator 承担（间距同步加大）。纯间距微调，不改布局顺序。 */
+.toolbar-actions .toolbar-button + .icon-button,
+.toolbar-actions .icon-button + .icon-button { margin-left: 6px; }
+.toolbar-separator { width: 1px; height: 16px; flex: 0 0 1px; margin: 0 6px; background: var(--border); }
 
 .icon-button, .toolbar-button, .link-button, .context-menu button,
 .modal button, .panel-header button {
@@ -474,8 +484,18 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .danger-button { border-color: transparent !important; background: color-mix(in srgb, var(--destructive) 12%, transparent) !important; color: var(--destructive); }
 .danger-button:hover { background: color-mix(in srgb, var(--destructive) 20%, transparent) !important; }
 .small-modal { width: min(460px, 100%); }
-.editor-modal { width: min(780px, calc(100vw - 40px)); height: min(680px, calc(100vh - 40px)); }
-.editor-modal > .empty { flex: 1; }
+/* UX-V6 弹窗底部死区：原来是固定 height，属性只有一两行/表单很短时
+   .attr-editor（flex:1）被撑出大片空白。改为内容自适应——仅约束上限，
+   内容少时弹窗收缩到自然高；内容多（长 LDIF/多属性）时仍受 680px 封顶，
+   滚动路径不回退（.attr-editor overflow:auto、.ldif-editor textarea 原生滚动、
+   导入弹窗预览区自带 max-height+overflow）。
+   关键前提：弹窗高度改为自动后，内容区 flex 必须是 basis auto——basis 0%
+   在自动高度容器里不贡献高度，弹窗会塌成纯标题条（走查实测 LDIF 页签
+   258px/textarea 46px）。textarea 的固有高度只有 rows 两行，撑不起容器，
+   因此 .ldif-editor 需要显式 height 参与容器 intrinsic sizing（55vh 兜
+   矮窗口，弹窗封顶时由 min-height:0 + overflow 接管收缩）。 */
+.editor-modal { width: min(780px, calc(100vw - 40px)); max-height: min(680px, calc(100vh - 40px)); }
+.editor-modal > .empty { flex: 1 1 auto; min-height: 200px; }
 .entry-relation-backdrop { position: fixed; z-index: 80; inset: 0; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 16px; background: var(--overlay); }
 .entry-relation-layout {
   display: grid;
@@ -500,7 +520,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .entry-relation-heading span { min-width: 0; overflow: hidden; color: var(--muted-foreground); font-family: var(--mono-font-family); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .entry-relation-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 6px; overflow: hidden; }
 .entry-relation-label { display: flex; min-width: 0; flex: 0 0 auto; align-items: baseline; gap: 8px; color: var(--foreground); font-size: 11px; }
-.entry-relation-label strong { color: var(--primary); font-size: 12px; }
+/* strong 不换行：窄栏 + 长 DN 时 flex 收缩会把「当前条目」按 CJK 字符拆行
+   （走查实测「当前条/目」）；标签固定占位，长 DN 由 span 的 ellipsis 承担。 */
+.entry-relation-label strong { flex: 0 0 auto; color: var(--primary); font-size: 12px; white-space: nowrap; }
 .entry-relation-label span { min-width: 0; overflow: hidden; color: var(--muted-foreground); font-family: var(--mono-font-family); text-overflow: ellipsis; white-space: nowrap; }
 .entry-relation-field-label { flex: 0 0 auto; overflow: hidden; max-width: 130px; border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border)); border-radius: 999px; padding: 2px 7px; background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary); font-family: var(--mono-font-family); font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .entry-relation-tabs { display: flex; min-width: 0; min-height: 34px; flex: 0 0 auto; align-items: center; gap: 4px; overflow-x: auto; border: 1px solid var(--border); border-radius: 7px; padding: 3px; background: color-mix(in srgb, var(--muted) 55%, transparent); scrollbar-width: thin; }
@@ -525,7 +547,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .entry-editor-relation-host { display: flex; min-width: 0; min-height: 0; flex: 1; }
 .editor-modal--relation { width: 100%; height: 100%; max-height: none; min-height: 0; border: 0; border-radius: 0; padding: 0; background: transparent; box-shadow: none; }
 .editor-modal--relation > header { display: none; }
-.editor-modal--relation > footer { min-height: 0; margin: 0; align-items: center; gap: 8px; border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: 0; padding: 8px 0 0; background: transparent; }
+/* footer 不得参与收缩：min-height:0 + 默认 shrink 1 时，attr-editor 的
+   basis auto（= 全部属性行内容高）在定高容器里溢出，收缩按 basis 比例
+   分摊会把 footer 压到按钮一半高（走查实测 36px→21px，保存/关闭被裁）。
+   溢出必须整段落给 min-height:0 + overflow:auto 的 attr-editor。 */
+.editor-modal--relation > footer { flex-shrink: 0; min-height: 0; margin: 0; align-items: center; gap: 8px; border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: 0; padding: 8px 0 0; background: transparent; }
 .editor-modal--relation > footer > button { box-sizing: border-box; height: 28px; min-height: 28px; padding: 0 12px; white-space: nowrap; }
 .editor-modal--relation > footer > .toolbar-button { min-width: auto; padding: 0 10px; font-size: 11px; }
 .editor-modal--relation > footer > .toolbar-button svg { width: 14px; height: 14px; }
@@ -549,9 +575,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .hint { margin: 0; color: var(--muted-foreground); font-size: 10px; }
 
 /* Entry editor attribute rows */
-.attr-editor { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 6px; overflow: auto; }
-.attr-column-labels { display: grid; grid-template-columns: minmax(110px, 170px) 1fr auto; gap: 6px; padding: 0 2px; color: var(--muted-foreground); font-size: 10px; font-weight: 600; letter-spacing: .02em; }
-.attr-row { display: grid; grid-template-columns: minmax(110px, 170px) 1fr auto; gap: 6px; align-items: start; }
+/* flex basis 必须 auto：弹窗高度自适应后，basis 0% 的内容区不参与容器
+   intrinsic sizing，长表单时弹窗不再长到封顶值（见 .editor-modal 注释）。 */
+.attr-editor { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; gap: 6px; overflow: auto; }
+.attr-column-labels { display: grid; grid-template-columns: minmax(130px, 210px) 1fr auto; gap: 6px; padding: 0 2px; color: var(--muted-foreground); font-size: 10px; font-weight: 600; letter-spacing: .02em; }
+.attr-row { display: grid; grid-template-columns: minmax(130px, 210px) 1fr auto; gap: 6px; align-items: start; }
 .attr-name-field, .attr-value-field { min-width: 0; }
 .attr-name-field { display: flex; flex-direction: column; gap: 3px; }
 .attr-meta { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 3px; }
@@ -589,7 +617,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .attr-row .attr-value-cell .integer-input { max-width: 260px; }
 .attr-row .binary-decoded { margin: 0; font-size: 11px; color: var(--muted-foreground); overflow-wrap: anywhere; }
 .attr-row .attr-value-cell .form-error { font-size: 10px; }
-.ldif-editor { min-height: 0; flex: 1; border: 1px solid var(--border); border-radius: 4px; padding: 8px; outline: none; background: var(--background); color: var(--foreground); font-family: var(--mono-font-family); font-size: 12px; resize: none; }
+.ldif-editor { min-height: 0; height: min(420px, 55vh); flex: 1 1 auto; border: 1px solid var(--border); border-radius: 4px; padding: 8px; outline: none; background: var(--background); color: var(--foreground); font-family: var(--mono-font-family); font-size: 12px; resize: none; }
 
 /* Side panels (schema / connections) */
 .settings-body { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; gap: 12px; overflow-y: auto; padding-right: 4px; }
@@ -615,8 +643,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 /* 阶段2：属性定义可点击展开语法详情 */
 .schema-attribute-row.is-selected { background: var(--accent); }
 .schema-attribute-button { border: 0; background: none; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
-.kv-grid { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 6px 12px; padding: 6px 0; }
-.kv-grid dt { color: var(--muted-foreground); }
+/* 首列不能钉死 110px：RootDSE/Schema 明细的 dt 是不可断行的长属性名
+   （supportedSASLMechanisms 在 11px mono 下 152px），溢出轨道会直接压到
+   值列上。max-content 上限=按内容精确撑开、不贪婪吞空闲空间（minmax 配
+   固定上限会在 maximize-tracks 阶段被撑满），短标签仍落在 110px 下限，
+   Schema 明细观感不变；dt 的 anywhere 兜底极端超长断行。 */
+.kv-grid { display: grid; grid-template-columns: minmax(110px, max-content) minmax(0, 1fr); gap: 6px 12px; padding: 6px 0; }
+.kv-grid dt { color: var(--muted-foreground); overflow-wrap: anywhere; }
 .kv-grid dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-family: var(--mono-font-family); font-size: 11px; }
 
 @media (max-width: 900px) {

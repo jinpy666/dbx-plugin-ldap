@@ -549,15 +549,23 @@ describe("AssociationPanel copy affordance", () => {
     (window as unknown as { dbxPlugin?: unknown }).dbxPlugin = { clipboard: { writeText } };
     document.execCommand = () => false;
     const wrapper = mountPanel({ dn: GROUP_DN, attributes: { member: MEMBER_DNS } });
-    // 行点击不应被复制按钮触发（stopPropagation）
-    await wrapper.find(".assoc-members .assoc-copy").trigger("click");
-    await flushPromises();
+    // 行内复制按钮已移除：右键行打开菜单，取「复制 DN」项（菜单 Teleport 到
+    // body，须经 document 查询）。菜单复制不触发行点击（openEntry 不发生）。
+    const copyViaContextMenu = async () => {
+      await wrapper.find(".assoc-members .assoc-row").trigger("contextmenu", { clientX: 10, clientY: 10 });
+      await flushPromises();
+      const item = document.querySelector(".context-menu [role='menuitem'][title='复制 DN']") as HTMLButtonElement | null;
+      expect(item).not.toBeNull();
+      item!.click();
+      await flushPromises();
+    };
+    await copyViaContextMenu();
     expect(writeText).toHaveBeenLastCalledWith(MEMBER_DNS[0]);
     expect(wrapper.emitted("openEntry")).toBeUndefined();
     expect(wrapper.emitted("notify")?.at(-1)).toEqual(["已复制"]);
     // 桥写入失败如实反馈"复制失败"
     writeText.mockRejectedValue(new Error("boom"));
-    await wrapper.find(".assoc-members .assoc-copy").trigger("click");
+    await copyViaContextMenu();
     await flushPromises();
     expect(wrapper.emitted("notify")?.at(-1)).toEqual(["复制失败"]);
   });

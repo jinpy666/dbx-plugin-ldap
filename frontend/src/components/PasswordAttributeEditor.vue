@@ -5,6 +5,8 @@
 // 已有值只展示 scheme 识别结果（哈希不可逆，不回显明文）；随机生成的明文
 // 通过 `plainGenerated` 一次性交给父层提示（组件自身不留存、不落日志）。
 // 纯前端哈希，值仍走 entry/modify，sidecar 零改动。
+// F3：可写且已接线条目 DN 时提供「RFC 3062 扩展操作」模式（默认关闭）——
+// 提交改走 ldapApi.entryPasswdModify（服务端选哈希，支持 identity/旧密码）。
 import { computed, ref } from "vue";
 import { Eye, EyeOff, RefreshCw } from "@lucide/vue";
 import {
@@ -14,12 +16,16 @@ import {
     parsePasswordHash,
     type PasswordScheme,
 } from "../lib/passwordHash";
+import { ldapApi } from "../lib/api";
+import { friendlyLdapError } from "../lib/ldapErrors";
 import { t } from "../lib/i18n";
 
 const props = defineProps<{
   /** 当前存储值（可空；哈希或明文均可能）。 */
   modelValue: string;
   disabled?: boolean;
+  /** RFC 3062 扩展操作目标条目 DN（F3）：非空且可写时才显示模式切换。 */
+  dn?: string;
 }>();
 
 const emit = defineEmits<{
@@ -27,6 +33,10 @@ const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
   /** 仅随机生成路径发出：一次性明文，父层负责展示，不得持久化。 */
   (e: "plainGenerated", plain: string): void;
+  /** 扩展操作成功通知（父层转发到工作台 notify 通道）。 */
+  (e: "notify", message: string): void;
+  /** 失败冒泡：扩展操作（经 friendlyLdapError 映射）或本地哈希失败（i18n 文案）。 */
+  (e: "error", message: string): void;
 }>();
 
 // 占位 key（lib/i18n.ts 由主控合并，见任务收口说明）：t() 对缺失 key 直通
@@ -38,6 +48,17 @@ const showPlain = ref(false);
 const applying = ref(false);
 // 最近一次新密码是否来自随机生成：只有该路径才把明文交给父层提示。
 const wasGenerated = ref(false);
+
+// RFC 3062 扩展操作（F3）：默认关闭（沿用本地哈希 + entry/modify 路径）；
+// identity / 旧密码为可选字段，留空不随请求发送。
+const useExtended = ref(false);
+const identityDraft = ref("");
+const oldPlain = ref("");
+
+// 扩展是写路径：仅可写（未禁用）且已接线条目 DN 时显示切换（只读态、
+// 新增态等无 DN 场景一律隐藏）。开启后才出现两个可选字段。
+const extendedAvailable = computed(() => Boolean(props.dn) && !props.disabled);
+const extendedActive = computed(() => extendedAvailable.value && useExtended.value);
 
 const inputType = computed(() => (showPlain.value ? "text" : "password"));
 const canApply = computed(() => !props.disabled && !applying.value && newPlain.value !== "");
@@ -63,27 +84,76 @@ const toggleShow = () => {
   showPlain.value = !showPlain.value;
 };
 
-// 提交：哈希后回写存储值；输入即清空，明文不留在组件状态里。
+// 提交：扩展模式走 RFC 3062 passwdModify；默认模式本地哈希后回写存储值。
+// 输入即清空，明文不留在组件状态里。
 const apply = async () => {
   if (!canApply.value) return;
+  if (extendedActive.value) {
+    await applyExtended();
+    return;
+  }
+  await applyHashed();
+};
+
+// 默认路径：本地哈希（RFC 2307 形态）后回写存储值，仍由父层走 entry/modify。
+// 成功即清空输入，明文不留在组件状态里；失败保留输入（error 冒泡）便于重试。
+async function applyHashed() {
   const plain = newPlain.value;
   applying.value = true;
   try {
     const hashed = await hashPassword(plain, scheme.value);
     emit("update:modelValue", hashed);
     if (wasGenerated.value) emit("plainGenerated", plain);
-  } finally {
-    applying.value = false;
     newPlain.value = "";
     showPlain.value = false;
     wasGenerated.value = false;
+  } catch {
+    // 非安全上下文已由 lib/sha 兜底,正常不会失败;一旦命中异常宿主环境,
+    // 以 error 冒泡本地化文案,不再把原始异常裸抛成未处理 rejection。
+    emit("error", t("ldap.passwordEditor.hashFailed"));
+  } finally {
+    applying.value = false;
   }
-};
+}
+
+// RFC 3062 提交：identity/oldPassword 留空则不出现在参数里（api 层对空值
+// 同样省略，这里在调用侧收紧参数形状，保证「缺省不传」可被测试与审计直接
+// 观察）。成功 → notify(extendedDone) 并按「已应用」流程清空输入；密码由
+// 服务端写入，表单存储值不动（不发 update:modelValue，避免伪造本地哈希）。
+// 失败 → error 冒泡（结果码经 friendlyLdapError 映射），输入保留便于重试。
+// 扩展路径不发一次性明文通知：密码已直接交付服务器，无待写入的表单值。
+async function applyExtended() {
+  const dn = props.dn;
+  if (!dn) return;
+  applying.value = true;
+  try {
+    const options: { identity?: string; oldPassword?: string; newPassword: string } = { newPassword: newPlain.value };
+    if (identityDraft.value.trim() !== "") options.identity = identityDraft.value.trim();
+    if (oldPlain.value !== "") options.oldPassword = oldPlain.value;
+    const result = await ldapApi.entryPasswdModify(dn, options);
+    if (!result?.success) {
+      emit("error", t("ldap.passwordEditor.extendedFailed"));
+      return;
+    }
+    emit("notify", t("ldap.passwordEditor.extendedDone"));
+    identityDraft.value = "";
+    oldPlain.value = "";
+    newPlain.value = "";
+    showPlain.value = false;
+    wasGenerated.value = false;
+  } catch (cause) {
+    emit("error", friendlyLdapError(cause instanceof Error ? cause.message : String(cause)));
+  } finally {
+    applying.value = false;
+  }
+}
 </script>
 
 <template>
   <div class="password-editor" :data-scheme="existing?.scheme ?? ''">
-    <label class="field">
+    <!-- 哈希方案仅作用于本地哈希路径：扩展操作（RFC 3062）的哈希由服务器
+         决定，隐藏下拉以免误导（重新切回默认模式即恢复）。 -->
+    <label v-if="!extendedActive" class="field">
       <span class="muted">{{ t("ldap.passwordEditor.scheme") }}</span>
       <select v-model="scheme" :disabled="disabled">
         <option v-for="option in PASSWORD_SCHEMES" :key="option" :value="option">{{ option }}</option>
@@ -112,6 +182,23 @@ const apply = async () => {
         </button>
       </span>
     </label>
+    <!-- RFC 3062 扩展操作切换（F3）：写路径，仅可写且已接线 DN 时出现；
+         默认关闭，开启后追加目标身份 / 旧密码两个可选字段。 -->
+    <label v-if="extendedAvailable" class="field password-extended-toggle">
+      <input v-model="useExtended" type="checkbox" />
+      <span class="muted">{{ t("ldap.passwordEditor.useExtended") }}</span>
+    </label>
+    <div v-if="extendedActive" class="password-extended-fields">
+      <label class="field">
+        <span class="muted">{{ t("ldap.passwordEditor.identity") }}</span>
+        <!-- 占位直接展示当前条目 DN：留空即默认以 DN 为目标身份（后端行为）。 -->
+        <input v-model="identityDraft" type="text" :placeholder="dn" spellcheck="false" :disabled="disabled" />
+      </label>
+      <label class="field">
+        <span class="muted">{{ t("ldap.passwordEditor.oldPassword") }}</span>
+        <input v-model="oldPlain" type="password" autocomplete="current-password" spellcheck="false" :disabled="disabled" />
+      </label>
+    </div>
     <span class="password-actions">
       <button type="button" :disabled="disabled" @click="generate">
         <RefreshCw aria-hidden="true" />{{ t("ldap.passwordEditor.generate") }}
@@ -126,3 +213,20 @@ const apply = async () => {
     <p v-if="existingNote" class="form-error">{{ existingNote }}</p>
   </div>
 </template>
+
+<style scoped>
+/* RFC 3062 扩展操作切换行（F3）：横向 checkbox + 说明文字，区别于
+   .field 默认的纵向「标签在上、控件在下」。 */
+.password-extended-toggle {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+/* 扩展字段组：保持与上方字段的纵向节奏一致。 */
+.password-extended-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+</style>

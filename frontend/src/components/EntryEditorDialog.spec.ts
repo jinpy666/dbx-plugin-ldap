@@ -187,27 +187,38 @@ describe("EntryEditorDialog", () => {
     expect(wrapper.find(".required-attributes").exists()).toBe(false);
   });
 
-  it("routes password attributes to the hash editor (M6 N2)", () => {
+  it("routes password attributes to the dialog hash editor (M6 N2)", async () => {
     const wrapper = trackEditor({
       canWrite: true,
       open: true,
       entry: { dn: "uid=bob,dc=demo,dc=dbx", attributes: { uid: ["bob"], userPassword: ["{SSHA}abcd"] } },
     });
-    expect(wrapper.find(".password-editor").exists()).toBe(true);
-    expect(wrapper.find(".password-editor").attributes("data-scheme")).toBe("{SSHA}");
+    // ADS 交互：行内只读展示 + 编辑按钮，哈希编辑器在弹窗内。
+    expect(wrapper.find(".password-editor").exists()).toBe(false);
+    const row = attrRows(wrapper).find((row) => (row.find("input").element as HTMLInputElement).value === "userPassword")!;
+    expect(row.find(".value-edit-button").exists()).toBe(true);
+    await row.find(".value-edit-button").trigger("click");
+    await wrapper.vm.$nextTick();
+    const editor = wrapper.find(".value-editor-dialog .password-editor");
+    expect(editor.exists()).toBe(true);
+    expect(editor.attributes("data-scheme")).toBe("{SSHA}");
     const rows = attrRows(wrapper);
     const uidRow = rows.find((row) => (row.find("input").element as HTMLInputElement).value === "uid")!;
     expect(uidRow.find("textarea").exists()).toBe(true);
   });
 
-  it("routes binary attributes to the binary viewer/uploader (M6 N3)", () => {
+  it("routes binary attributes to the dialog viewer/uploader (M6 N3)", async () => {
     const wrapper = trackEditor({
       canWrite: true,
       open: true,
       entry: { dn: "uid=bob,dc=demo,dc=dbx", attributes: { uid: ["bob"], jpegPhoto: ["/9j/4AAQSkZJRg=="] } },
     });
-    expect(wrapper.find(".binary-editor").exists()).toBe(true);
-    expect(wrapper.find(".binary-editor img.binary-preview").exists()).toBe(true);
+    expect(wrapper.find(".binary-editor").exists()).toBe(false);
+    const row = attrRows(wrapper).find((row) => (row.find("input").element as HTMLInputElement).value === "jpegPhoto")!;
+    await row.find(".value-edit-button").trigger("click");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".value-editor-dialog .binary-editor").exists()).toBe(true);
+    expect(wrapper.find(".value-editor-dialog img.binary-preview").exists()).toBe(true);
   });
 
   it("renders nothing while closed", () => {
@@ -240,7 +251,7 @@ describe("EntryEditorDialog", () => {
     for (const button of wrapper.findAll(".attr-editor .attr-actions button[title='移除属性']")) {
       expect(button.attributes("disabled")).toBeDefined();
     }
-    for (const button of wrapper.findAll(".attr-editor .attr-actions button[title='复制值']")) {
+    for (const button of wrapper.findAll(".attr-editor .attr-actions button[title='复制']")) {
       expect(button.attributes("disabled")).toBeUndefined();
     }
     expect(wrapper.find(".toolbar-button").attributes("disabled")).toBeDefined();
@@ -266,19 +277,28 @@ describe("EntryEditorDialog", () => {
     document.execCommand = () => false;
     try {
       const wrapper = trackEditor({ canWrite: true, open: true, entry: demoEntry });
-      // DN 行复制
-      await wrapper.find(".entry-dn-row .icon-button").trigger("click");
+      // DN 行复制：右键打开单项菜单（行内复制按钮已移除）
+      const openDnMenu = async () => {
+        await wrapper.find(".entry-dn-row").trigger("contextmenu", { clientX: 40, clientY: 40 });
+        await wrapper.vm.$nextTick();
+        await wrapper.find(".context-menu [role='menuitem'][title='复制 DN']").trigger("click");
+      };
+      await openDnMenu();
       await flushPromises();
       expect(writeText).toHaveBeenLastCalledWith("cn=alice,dc=demo,dc=dbx");
       expect(wrapper.emitted("notify")?.at(-1)).toEqual(["已复制"]);
       // 属性行复制（rows 按属性名字典序：cn / description / objectClass），
-      // 多行值整段复制；空值行禁用复制。
-      const copyButtons = wrapper.findAll(".attr-actions button[title='复制值']");
-      expect(copyButtons).toHaveLength(3);
-      await copyButtons[0].trigger("click");
+      // 多行值整段复制；行内复制按钮已移除，右键值行打开菜单取「复制原值」
+      //（Base64 / hex 等项由 valueEditors 专项 spec 覆盖）。
+      const copyRawViaContextMenu = async (rowIndex: number) => {
+        await wrapper.findAll(".attr-row")[rowIndex].trigger("contextmenu", { clientX: 40, clientY: 40 });
+        await wrapper.vm.$nextTick();
+        await wrapper.find(".context-menu [role='menuitem'][title='复制原值']").trigger("click");
+      };
+      await copyRawViaContextMenu(0);
       await flushPromises();
       expect(writeText).toHaveBeenLastCalledWith("alice");
-      await copyButtons[1].trigger("click");
+      await copyRawViaContextMenu(1);
       await flushPromises();
       expect(writeText).toHaveBeenLastCalledWith("line1\nline2");
       // LDIF 模式复制当前 LDIF 文本
@@ -290,7 +310,7 @@ describe("EntryEditorDialog", () => {
       expect(writeText).toHaveBeenLastCalledWith((wrapper.find(".ldif-editor").element as HTMLTextAreaElement).value);
       // 桥写入失败要如实反馈"复制失败"（不假装成功）
       writeText.mockRejectedValue(new Error("boom"));
-      await wrapper.find(".entry-dn-row .icon-button").trigger("click");
+      await openDnMenu();
       await flushPromises();
       expect(wrapper.emitted("notify")?.at(-1)).toEqual(["复制失败"]);
     } finally {
@@ -619,5 +639,31 @@ describe("EntryEditorDialog", () => {
     const withoutDn = trackEditor({ canWrite: true, open: true, entry: demoEntry });
     await withoutDn.findAll(".mode-switch button")[2].trigger("click");
     expect(withoutDn.findComponent({ name: "AssociationPanel" }).props("dnAttributes")).toBeUndefined();
+  });
+
+  it("warns about an invalid integer value at save time but still sends the request", async () => {
+    entryAddMock.mockResolvedValue({ success: true });
+    // schema 提供 integer 语法：employeeNumber 走 valueKinds 分流 → integer。
+    const integerSchema: LdapSchema = { attributeInfo: { employeenumber: { syntax: "1.3.6.1.4.1.1466.115.121.1.27" } } };
+    const wrapper = trackEditor({ canWrite: true, open: true, parentDn: "ou=people,dc=demo,dc=dbx", schema: integerSchema });
+    await rdnInput(wrapper).setValue("cn=bob");
+    await wrapper.find(".toolbar-button").trigger("click");
+    const newRow = attrRows(wrapper).at(-1)!;
+    await newRow.find("input").setValue("employeeNumber");
+    // integer 分流为单行输入：非法值只触发行内提示与保存警告，不禁用保存。
+    await newRow.find(".integer-input").setValue("12abc");
+    await saveButton(wrapper).trigger("click");
+    await flushPromises();
+    const warnings = wrapper.find(".value-kind-warnings");
+    expect(warnings.exists()).toBe(true);
+    expect(warnings.text()).toContain("employeeNumber");
+    // 文案断言不锁具体语言：editor.valueKindWarning 键当前缺失于 i18n.ts
+    //（t() 对缺失键直通键名），键由 i18n 主控补齐；此处只断言警告渲染与
+    // 数据流（属性名在场），键落地后插值文本自然接上。
+    // 警告不阻断保存：add 请求仍发出且携带非法值（服务器才是权威）。
+    expect(entryAddMock).toHaveBeenCalledWith(
+      "cn=bob,ou=people,dc=demo,dc=dbx",
+      expect.objectContaining({ employeeNumber: ["12abc"] }),
+    );
   });
 });

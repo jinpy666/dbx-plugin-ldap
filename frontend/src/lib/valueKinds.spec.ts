@@ -33,6 +33,23 @@ describe("attributeValueKind name bindings", () => {
     expect(attributeValueKind("userAccountControl", { syntax: LDAP_SYNTAX.integer })).toBe("uac");
   });
 
+  it("binds password attributes by name (ADS PasswordValueEditor set)", () => {
+    // ADS PasswordValueEditor 按属性名绑定 userPassword / unicodePwd；AD 的
+    // unicodePwd 在 schema 中常标 octetString，名字绑定必须优先于语法。
+    expect(attributeValueKind("userPassword")).toBe("password");
+    expect(attributeValueKind("USERPASSWORD")).toBe("password");
+    expect(attributeValueKind("unicodePwd", { syntax: LDAP_SYNTAX.octetString })).toBe("password");
+  });
+
+  it("applies the *password suffix rule and keeps name bindings ahead of it", () => {
+    // 后缀兜底（sambaNTPassword 等），且同样压过不准的 octetString 语法。
+    expect(attributeValueKind("sambaNTPassword")).toBe("password");
+    expect(attributeValueKind("adminPassword", { syntax: LDAP_SYNTAX.octetString })).toBe("password");
+    // 名字表优先于后缀：badPasswordTime 以 time 结尾，走 FILETIME 绑定而非
+    // *password 后缀（含 password 字样但结尾不是 password）。
+    expect(attributeValueKind("badPasswordTime")).toBe("filetime");
+  });
+
   it("falls back to common DN reference names when schema is unavailable", () => {
     expect(attributeValueKind("member")).toBe("dn");
     expect(attributeValueKind("memberOf")).toBe("dn");
@@ -96,5 +113,7 @@ describe("isBinaryKind", () => {
     expect(isBinaryKind("sid")).toBe(true);
     expect(isBinaryKind("text")).toBe(false);
     expect(isBinaryKind("integer")).toBe(false);
+    // password 是专用编辑器 kind，不进二进制分流。
+    expect(isBinaryKind("password")).toBe(false);
   });
 });

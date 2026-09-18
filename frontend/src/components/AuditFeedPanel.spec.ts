@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { mount } from "@vue/test-utils";
 import { formatAuditTime, type AuditFeedItem } from "../lib/auditFeed";
+import { t } from "../lib/i18n";
 import AuditFeedPanel from "./AuditFeedPanel.vue";
 
 let seq = 0;
@@ -135,5 +136,32 @@ describe("AuditFeedPanel", () => {
     // Already expanded manually; the ok arrival neither collapses nor re-expands.
     expect(wrapper.find(".audit-list").exists()).toBe(true);
     expect(wrapper.find(".audit-summary").text()).toBe("2 条事件 · 1 条被拒绝");
+  });
+
+  // F10：新事件的 operation 徽标与 durationMs 耗时展示（旧事件两者皆无）。
+  it("renders the operation badge and duration for structured events", async () => {
+    const structured = feedItem("ok", { action: "ldap/entry/modify", operation: "modify", durationMs: 123 });
+    const wrapper = mountPanel([structured]);
+    await toggle(wrapper).trigger("click");
+    const row = wrapper.findAll(".audit-item")[0];
+    expect(row.find(".audit-op").text()).toBe("modify");
+    expect(row.find(".audit-op").attributes("title")).toBe(`${t("audit.operation")}: modify`);
+    expect(row.find(".audit-duration").text()).toBe(`${t("audit.duration")} 123ms`);
+  });
+
+  it("omits the operation badge and duration for legacy events without the new fields", async () => {
+    const wrapper = mountPanel([feedItem("ok")]);
+    await toggle(wrapper).trigger("click");
+    const row = wrapper.findAll(".audit-item")[0];
+    expect(row.find(".audit-op").exists()).toBe(false);
+    expect(row.find(".audit-duration").exists()).toBe(false);
+  });
+
+  it("hides the duration for zero and negative durations", async () => {
+    const wrapper = mountPanel([feedItem("ok", { operation: "add", durationMs: 0 }), feedItem("ok", { operation: "delete", durationMs: -5 })]);
+    await toggle(wrapper).trigger("click");
+    expect(wrapper.findAll(".audit-duration")).toHaveLength(0);
+    // 操作徽标与耗时互不依赖：durationMs=0 仍显示操作名。
+    expect(wrapper.findAll(".audit-op").map((badge) => badge.text())).toEqual(["add", "delete"]);
   });
 });

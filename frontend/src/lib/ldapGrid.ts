@@ -30,12 +30,20 @@ export function joinValues(values: string[] | undefined | null): string {
   return values.join(" | ");
 }
 
+// 行 VM 按 entry 对象引用做弱引用 memo（审计 K-2）：游标排空/重放期间既有条目
+// 的对象引用不变，memo 保持行对象身份稳定，ag-grid 走 getRowId 差量更新时无需
+// 重建整表行；被结果集替换掉的旧条目对象由 GC 随 WeakMap 回收。
+const rowMemo = new WeakMap<LdapEntry, ResultRow>();
+
 export function toResultRows(entries: LdapEntry[]): ResultRow[] {
   return entries.map((entry) => {
+    const cached = rowMemo.get(entry);
+    if (cached) return cached;
     const row: ResultRow = { id: entry.dn, dn: entry.dn };
     for (const [name, values] of Object.entries(entry.attributes)) {
       if (!RESERVED_ROW_FIELDS.has(name)) row[name] = joinValues(values);
     }
+    rowMemo.set(entry, row);
     return row;
   });
 }
@@ -77,6 +85,8 @@ export function resultColumns(attributeNames: string[]): ColDef<ResultRow>[] {
     {
       field: "dn",
       headerName: "dn",
+      // 列头截断时悬停可见全名（UX-V4，ag-grid 原生 headerTooltip）。
+      headerTooltip: "dn",
       sortable: true,
       resizable: true,
       filter: "agTextColumnFilter",
@@ -92,6 +102,7 @@ export function resultColumns(attributeNames: string[]): ColDef<ResultRow>[] {
       .map((name) => ({
         field: name,
         headerName: name,
+        headerTooltip: name,
         sortable: true,
         resizable: true,
         filter: "agTextColumnFilter",

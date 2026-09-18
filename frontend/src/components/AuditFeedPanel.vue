@@ -38,6 +38,11 @@ const summary = computed(() => {
 function resultLabel(result: AuditFeedItem["result"]): string {
   return t(`audit.result.${result}`);
 }
+
+// F10：耗时展示为「耗时标签 + 123ms」；仅新事件携带 durationMs>0 时出现。
+function durationLabel(durationMs: number): string {
+  return `${t("audit.duration")} ${durationMs}ms`;
+}
 </script>
 
 <template>
@@ -71,9 +76,32 @@ function resultLabel(result: AuditFeedItem["result"]): string {
       >
         <span class="audit-time">{{ formatAuditTime(item.at) }}</span>
         <span class="audit-badge" :class="`audit-badge-${item.result}`">{{ resultLabel(item.result) }}</span>
+        <!-- F10：操作名徽标（旧事件无 operation 字段时不显示）。 -->
+        <span v-if="item.operation" class="audit-op" :title="`${t('audit.operation')}: ${item.operation}`">{{ item.operation }}</span>
         <span class="audit-action">{{ item.action }}</span>
         <span class="audit-target">{{ item.target || "—" }}</span>
+        <span v-if="item.durationMs && item.durationMs > 0" class="audit-duration">{{ durationLabel(item.durationMs) }}</span>
       </li>
     </ol>
   </section>
 </template>
+
+<style scoped>
+/* F10 新增元素的操作徽标与耗时（style.css 尚无 audit 系列规则，先组件内自持）：
+   徽标沿用小号 mono 的中性观感，不与 result 徽标抢视觉层级。 */
+.audit-op {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 5px;
+  font-family: var(--mono-font-family);
+  font-size: 10px;
+  color: var(--muted-foreground);
+}
+.audit-duration {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  white-space: nowrap;
+}
+</style>

@@ -6,7 +6,7 @@
 // (frontend tsconfig has no node types), so bytes travel as Uint8Array.
 // @ts-expect-error node builtin module has no types under types:["vite/client"]; runtime is vitest's node env
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
     PASSWORD_SCHEMES,
     generateRandomPassword,
@@ -94,6 +94,76 @@ describe("hashPassword", () => {
             if (scheme === "{CLEARTEXT}") expect(stored).toBe("password");
             else expect(parsePasswordHash(stored)?.scheme).toBe(scheme);
         }
+    });
+});
+
+// 非安全上下文模拟:DBX 宿主的插件 webview 常以局域网 HTTP 打开,此时
+// crypto.subtle 为 undefined;部分引擎(Gecko 风格)则保留 subtle 但调用
+// 即抛 SecurityError("The operation is insecure.")。两种形态都要兜底。
+type CryptoHost = { subtle?: unknown };
+
+const hideSubtle = (): (() => void) => {
+    const host = globalThis.crypto as unknown as CryptoHost;
+    const descriptor =
+        Object.getOwnPropertyDescriptor(globalThis.crypto, "subtle") ??
+        Object.getOwnPropertyDescriptor(Object.getPrototypeOf(globalThis.crypto), "subtle");
+    Object.defineProperty(host, "subtle", { configurable: true, value: undefined });
+    return () => {
+        if (descriptor) Object.defineProperty(globalThis.crypto, "subtle", { ...descriptor, configurable: true });
+        else delete (globalThis.crypto as unknown as CryptoHost).subtle;
+    };
+};
+
+describe("hashPassword / verifyPasswordHash 在 crypto.subtle 不可用时(非安全上下文兜底)", () => {
+    let restoreSubtle: (() => void) | undefined;
+
+    beforeEach(() => {
+        restoreSubtle = hideSubtle();
+    });
+
+    afterEach(() => {
+        restoreSubtle?.();
+        restoreSubtle = undefined;
+    });
+
+    it("unsalted 方案仍与 node:crypto 向量完全一致", async () => {
+        expect(await hashPassword("password", "{SHA}")).toBe(`{SHA}${expectedHash("password", "sha1")}`);
+        expect(await hashPassword("password", "{SHA256}")).toBe(`{SHA256}${expectedHash("password", "sha256")}`);
+        expect(await hashPassword("password", "{SHA512}")).toBe(`{SHA512}${expectedHash("password", "sha512")}`);
+    });
+
+    it("salted 方案以 node:crypto 按存储盐重建,且 verifyPasswordHash 正确往返", async () => {
+        const cases = [
+            ["{SSHA}", "sha1", 20],
+            ["{SSHA256}", "sha256", 32],
+            ["{SSHA512}", "sha512", 64],
+        ] as const;
+        for (const [scheme, algorithm, digestLength] of cases) {
+            const stored = await hashPassword("password", scheme);
+            const payload = fromBase64(parsePasswordHash(stored)!.params!);
+            expect(payload.length).toBe(digestLength + 16);
+            const salt = payload.subarray(digestLength);
+            expect(stored).toBe(`${scheme}${expectedHash("password", algorithm, salt)}`);
+            expect(await verifyPasswordHash("password", stored)).toBe(true);
+            expect(await verifyPasswordHash("Pass word", stored)).toBe(false);
+        }
+    });
+
+    it("跨块与多字节输入(>256 字节、CJK/emoji)仍与 node:crypto 一致", async () => {
+        const longPlain = "x".repeat(200) + "密码+☕";
+        expect(await hashPassword(longPlain, "{SHA}")).toBe(`{SHA}${expectedHash(longPlain, "sha1")}`);
+        expect(await hashPassword(longPlain, "{SHA256}")).toBe(`{SHA256}${expectedHash(longPlain, "sha256")}`);
+        expect(await hashPassword(longPlain, "{SHA512}")).toBe(`{SHA512}${expectedHash(longPlain, "sha512")}`);
+    });
+
+    it("subtle 存在但 digest 抛 SecurityError(Gecko 风格)时同样回退", async () => {
+        const host = globalThis.crypto as unknown as CryptoHost;
+        Object.defineProperty(host, "subtle", {
+            configurable: true,
+            value: { digest: () => Promise.reject(new DOMException("The operation is insecure.", "SecurityError")) },
+        });
+        expect(await hashPassword("password", "{SHA}")).toBe(`{SHA}${expectedHash("password", "sha1")}`);
+        expect(await verifyPasswordHash("password", "{SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g=")).toBe(true);
     });
 });
 

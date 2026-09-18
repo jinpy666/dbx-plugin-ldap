@@ -19,7 +19,10 @@ import { builtinAttributeInfo } from "./builtinSchema";
 /** 密码类属性：哈希不可复用（ADS PasswordValueEditor 亦不允许复制既有哈希）。 */
 const NON_COPYABLE_PASSWORDS = new Set(["userpassword", "unicodepwd", "userpassword;binary"]);
 
-/** 系统/操作属性名（小写）；RDN 属性即便命中也按 RDN 规则单独处理。 */
+/** 系统/操作属性名（小写）；RDN 属性即便命中也按 RDN 规则单独处理。
+ *  distinguishedName/name/dSCorePropagationData/isCriticalSystemObject 来自
+ *  AD 走查：AD 的 subSchema 不发布 NO-USER-MODIFICATION，schema 判定兜不住，
+ *  只能在此内置剔除（DN 由父 DN+RDN 重建、name 由 RDN 派生、系统标记不随复制）。 */
 const NON_COPYABLE_SYSTEM = new Set([
   "objectsid",
   "objectguid",
@@ -27,6 +30,8 @@ const NON_COPYABLE_SYSTEM = new Set([
   "nsuniqueid",
   "ipauniqueid",
   "entrydn",
+  "distinguishedname",
+  "name",
   "entrycsn",
   "creatorsname",
   "modifiersname",
@@ -42,6 +47,8 @@ const NON_COPYABLE_SYSTEM = new Set([
   "lastknownparent",
   "replpropertymetadata",
   "structuralobjectclass",
+  "dscorepropagationdata",
+  "iscriticalsystemobject",
 ]);
 
 export interface CopyEntrySource {

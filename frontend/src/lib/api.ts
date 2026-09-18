@@ -67,6 +67,8 @@ export interface LdapSearchPreset {
   scope?: LdapScope;
   attributes?: string[];
   sizeLimit?: number;
+  /** 预设分组名（F11，可选；旧 sidecar/旧预设缺省 = 未分组）。 */
+  group?: string;
 }
 
 export interface LdapConnectionStatus {
@@ -76,6 +78,8 @@ export interface LdapConnectionStatus {
   /** 策略层只读门禁（表单 read_only ∥ 宿主标准 read_only），旧 sidecar 可能缺省。 */
   readOnly?: boolean;
   lastError?: string;
+  /** 建连时间，unix 毫秒（旧 sidecar 可能缺省）。 */
+  connectedAt?: number;
   /** unix 毫秒时间戳（sidecar JSON number）。 */
   lastUsedAt?: number;
 }
@@ -95,6 +99,10 @@ export interface SchemaResult {
   /** 原始 RFC 4512 定义串（阶段1 起由 sidecar 透出；mock/旧 sidecar 缺省）。 */
   rawAttributeTypes?: string[];
   rawObjectClasses?: string[];
+  /** Schema 三类补充定义（F2b；旧 sidecar 缺省 = 空数组不显示分类页签）。 */
+  matchingRules?: Array<{ oid: string; names?: string[]; desc?: string; syntax?: string }>;
+  matchingRuleUses?: Array<{ oid: string; names?: string[]; attributeTypes?: string[] }>;
+  ldapSyntaxes?: Array<{ oid: string; desc?: string }>;
   /** 服务器方言检测摘要（dialect.go；RootDSE 不可读时缺省）。 */
   dialect?: string;
   vendorName?: string;
@@ -226,6 +234,26 @@ export const ldapApi = {
       "ldap/entry/modifyDn",
       { dn, newRdn, ...(newParentDn ? { newSuperior: newParentDn } : {}), deleteOldRdn },
     );
+  },
+
+  /** Compare（RFC 4511 Compare 操作，F3）：断言条目在某属性上持有指定值。 */
+  entryCompare(dn: string, attribute: string, value: string) {
+    return callLdap<{ match: boolean }>("ldap/entry/compare", { dn, attribute, value });
+  },
+
+  /** WhoAmI（RFC 4531 扩展操作，F3）：返回服务器认可的授权身份。 */
+  whoami() {
+    return callLdap<{ authzId: string }>("ldap/whoami");
+  },
+
+  /** 密码修改扩展操作（RFC 3062，F3）：write 路径，受 read_only/审计约束。 */
+  entryPasswdModify(dn: string, options: { identity?: string; oldPassword?: string; newPassword?: string }) {
+    return callLdap<{ success: boolean }>("ldap/entry/passwdModify", {
+      dn,
+      ...(options.identity ? { identity: options.identity } : {}),
+      ...(options.oldPassword ? { oldPassword: options.oldPassword } : {}),
+      ...(options.newPassword ? { newPassword: options.newPassword } : {}),
+    });
   },
 
   connectionStatuses() {

@@ -48,6 +48,31 @@ describe("prepareCopyEntry", () => {
     expect(withSchema.skipped).toContain("seen");
   });
 
+  // AD 走查回归：AD 的 subSchema 不发布 NO-USER-MODIFICATION，DN/name 等系统
+  // 属性只能靠内置表剔除；objectCategory 可写、随 objectClass 保持有效，保留。
+  it("strips AD system-only attributes even when the schema publishes no NO-USER-MODIFICATION", () => {
+    const adContainer = prepareCopyEntry({
+      dn: "CN=Computers,DC=CORP,DC=INT,DC=KN",
+      attributes: {
+        objectClass: ["top", "container"],
+        cn: ["Computers"],
+        description: ["Default container for upgraded computer accounts"],
+        distinguishedName: ["CN=Computers,DC=CORP,DC=INT,DC=KN"],
+        name: ["Computers"],
+        dSCorePropagationData: ["16010101000000.0Z"],
+        isCriticalSystemObject: ["TRUE"],
+        objectCategory: ["CN=Container,CN=Schema,CN=Configuration,DC=CORP,DC=INT,DC=KN"],
+      },
+    });
+    expect(adContainer.attributes.distinguishedName).toBeUndefined();
+    expect(adContainer.attributes.name).toBeUndefined();
+    expect(adContainer.attributes.dSCorePropagationData).toBeUndefined();
+    expect(adContainer.attributes.isCriticalSystemObject).toBeUndefined();
+    expect(adContainer.attributes.objectCategory).toEqual(["CN=Container,CN=Schema,CN=Configuration,DC=CORP,DC=INT,DC=KN"]);
+    expect(adContainer.attributes.cn).toEqual([""]);
+    expect(adContainer.skipped).toEqual(["distinguishedName", "name", "dSCorePropagationData", "isCriticalSystemObject"]);
+  });
+
   it("honours an explicit target parent DN", () => {
     const draft = prepareCopyEntry(source, { parentDn: "ou=archive,dc=demo,dc=dbx" });
     expect(draft.parentDn).toBe("ou=archive,dc=demo,dc=dbx");

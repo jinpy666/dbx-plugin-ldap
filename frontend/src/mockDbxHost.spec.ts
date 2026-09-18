@@ -3,7 +3,7 @@
 // ldap/entry/delete recursive path: the fixture mirrors the backend N1
 // behaviour in simplified form (whole-subtree removal + one aggregated
 // "subtree_delete" audit record with deletedCount, incl. the target itself).
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import "./mockDbxHost";
 import type { LdapSearchPreset } from "./lib/api";
 
@@ -109,5 +109,55 @@ describe("mockDbxHost read contracts", () => {
     expect(listener).not.toHaveBeenCalled();
     expect(off).toBeTypeOf("function");
     off?.();
+  });
+});
+
+describe("mockDbxHost schema five categories (F2b)", () => {
+  it("returns matching rules, uses and syntaxes with the contract shape", async () => {
+    const result = (await window.dbxPlugin.invoke("ldap/schema")) as {
+      matchingRules?: Array<{ oid: string; names?: string[]; syntax?: string }>;
+      matchingRuleUses?: Array<{ attributeTypes?: string[] }>;
+      ldapSyntaxes?: Array<{ desc?: string }>;
+    };
+    expect((result.matchingRules ?? []).length).toBeGreaterThanOrEqual(2);
+    const caseIgnore = (result.matchingRules ?? []).find((rule) => rule.names?.includes("caseIgnoreMatch"));
+    expect(caseIgnore?.syntax).toBe("1.3.6.1.4.1.1466.115.121.1.15");
+    expect(result.matchingRuleUses?.[0]?.attributeTypes).toEqual(["cn", "sn", "uid"]);
+    expect((result.ldapSyntaxes ?? []).some((syntax) => syntax.desc === "Directory String")).toBe(true);
+  });
+});
+
+describe("mockDbxHost extended operations (F3)", () => {
+  const branchDn = "ou=ext-ops,dc=demo,dc=dbx";
+  const userDn = `uid=extuser,${branchDn}`;
+  const invoke = (method: string, params: Record<string, unknown>) => window.dbxPlugin.invoke(method, params);
+  const addEntry = (dn: string, attributes: Record<string, string[]>) => invoke("ldap/entry/add", { dn, attributes });
+
+  afterAll(async () => {
+    for (const dn of [userDn, branchDn]) {
+      await invoke("ldap/entry/delete", { dn }).catch(() => {});
+    }
+  });
+
+  it("compare matches case-insensitively and reports no-match without erroring", async () => {
+    await addEntry(branchDn, { objectClass: ["top"], ou: ["ext-ops"] });
+    await addEntry(userDn, { objectClass: ["top"], uid: ["extuser"] });
+    expect(await invoke("ldap/entry/compare", { dn: userDn, attribute: "UID", value: "EXTUSER" })).toEqual({ match: true });
+    expect(await invoke("ldap/entry/compare", { dn: userDn, attribute: "uid", value: "other" })).toEqual({ match: false });
+    expect(await invoke("ldap/entry/compare", { dn: userDn, attribute: "mail", value: "x" })).toEqual({ match: false });
+    await expect(invoke("ldap/entry/compare", { dn: "uid=missing,dc=demo,dc=dbx", attribute: "uid", value: "x" })).rejects.toThrow("entry not found");
+    await expect(invoke("ldap/entry/compare", { dn: userDn, attribute: "", value: "x" })).rejects.toThrow("attribute is required");
+  });
+
+  it("whoami returns the admin authzId", async () => {
+    expect(await invoke("ldap/whoami", {})).toEqual({ authzId: "dn:cn=admin,dc=demo,dc=dbx" });
+  });
+
+  it("passwdModify writes a hash placeholder and requires an existing entry", async () => {
+    await addEntry(userDn, { objectClass: ["top"], uid: ["extuser"] }).catch(() => {});
+    expect(await invoke("ldap/entry/passwdModify", { dn: userDn, newPassword: "walkthrough-secret" })).toEqual({ success: true });
+    const read = (await invoke("ldap/entry/get", { dn: userDn })) as { entry: { attributes: Record<string, string[]> } };
+    expect(read.entry.attributes.userPassword).toEqual(["{SSHA}fixture-digest"]);
+    await expect(invoke("ldap/entry/passwdModify", { dn: "uid=missing,dc=demo,dc=dbx", newPassword: "x" })).rejects.toThrow("entry not found");
   });
 });

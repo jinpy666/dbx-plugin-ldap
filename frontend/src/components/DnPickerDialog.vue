@@ -2,13 +2,16 @@
 // DnPickerDialog：DN 值的「从目录树选择」弹窗（层级选择）。
 // 自包含实现：以传入 baseDn 为根，懒展开加载直接子条目（ldap/search
 // scope=one），点击行即回填选中 DN；不依赖 DnTree 的工作台状态（右键菜单/
-// 虚拟滚动等重能力），保持选择器轻量。sizeLimit=200 截断时显示徽标。
+// 虚拟滚动等重能力），保持选择器轻量。单次读取上限与 DnTree 的
+// TREE_FETCH_PAGE 对齐（500）；命中截断时显示徽标（真实 sidecar 与 mock 均
+// 返回截断条目 + truncated 标志，不再有 Size Limit Exceeded 硬错误）。
 // 渲染走扁平化可见行列表（lib/dnTree 的 flattenDnTree 同思路），避免递归组件。
 import { computed, ref, watch } from "vue";
 import { ChevronDown, ChevronRight, X } from "@lucide/vue";
 import { ldapApi, type LdapEntry } from "../lib/api";
 import { useModalA11y } from "../lib/modal";
 import { splitFirstDnRdn } from "../lib/dn";
+import { TREE_FETCH_PAGE } from "../lib/dnTree";
 import { t } from "../lib/i18n";
 
 interface PickerNode {
@@ -50,9 +53,11 @@ async function loadChildren(node: PickerNode) {
   node.loading = true;
   loadError.value = "";
   try {
-    const result = await ldapApi.search({ baseDn: node.dn, scope: "one", filter: "(objectClass=*)", attributes: ["dn"], sizeLimit: 200 });
+    const result = await ldapApi.search({ baseDn: node.dn, scope: "one", filter: "(objectClass=*)", attributes: ["dn"], sizeLimit: TREE_FETCH_PAGE });
     node.children = result.entries.map(toNode);
-    node.truncated = result.truncated || result.count >= 200;
+    // 后端 truncated 标志优先；无标志时以数量兜底，仅确超上限（>上限，恰好
+    // 等于不算截断）才置位，避免恰满一页时误报「未展示完」。
+    node.truncated = result.truncated || result.count > TREE_FETCH_PAGE;
     node.loaded = true;
   } catch (cause) {
     loadError.value = cause instanceof Error ? cause.message : String(cause);
@@ -130,7 +135,7 @@ const rowIndent = (depth: number) => ({ paddingLeft: `${depth * 16 + 8}px` });
             <button class="dn-picker-name mono" :title="row.node.dn" :aria-label="`${t('ldap.dnPicker.select')}: ${row.node.dn}`" @click="select(row.node)">
               {{ row.node.label }}
             </button>
-            <span v-if="row.node.truncated" class="badge">{{ t("ldap.dnPicker.truncated", { limit: 200 }) }}</span>
+            <span v-if="row.node.truncated" class="badge">{{ t("ldap.dnPicker.truncated", { limit: TREE_FETCH_PAGE }) }}</span>
           </li>
         </ul>
         <p v-if="rows.length === 1 && root.loaded && root.children.length === 0 && !loadError" class="empty">{{ t("ldap.dnPicker.empty") }}</p>

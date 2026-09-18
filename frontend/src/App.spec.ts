@@ -5,7 +5,9 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { defineComponent, h } from "vue";
 import App from "./App.vue";
 import { getLdapConnectionId, ldapApi, setLdapConnectionId } from "./lib/api";
+import { emitEntryDeleted } from "./lib/entryEvents";
 import { setWorkbenchLocale, workbenchLocale } from "./lib/i18n";
+import { resetSchemaCacheForTests } from "./lib/schemaCache";
 
 const context = (id: string, connectionPatch: Record<string, unknown> = {}) => ({
   connectionId: id,
@@ -65,6 +67,8 @@ afterEach(() => {
   wrapper = undefined;
   delete (window as unknown as { dbxPlugin?: unknown }).dbxPlugin;
   setLdapConnectionId("");
+  // J-8：schema 缓存提升为模块级共享单例，清空以免用例间命中彼此的 TTL 条目。
+  resetSchemaCacheForTests();
   setWorkbenchLocale("zh-CN");
 });
 
@@ -353,8 +357,124 @@ describe("App current host bridge contract", () => {
     host.sendEvent({ type: "env", locale: "ja" });
     await flushPromises();
     expect(workbenchLocale.value).toBe("ja");
+    // ok 结果只进最近操作面板（数据已入 AuditFeedPanel），不再弹通知覆盖领域反馈。
     host.sendEvent({ method: "ldap/audit", params: { connectionId: "first", action: "modify", target: "cn=a,dc=first", result: "ok" } });
     await flushPromises();
     expect(wrapper?.findComponent({ name: "AuditFeedPanel" }).props("items")).toHaveLength(1);
+    expect(wrapper?.find(".notice").exists()).toBe(false);
+    // denied/error 保留错误横幅。
+    host.sendEvent({ method: "ldap/audit", params: { connectionId: "first", action: "modify", target: "cn=a,dc=first", result: "denied" } });
+    await flushPromises();
+    expect(wrapper?.findComponent({ name: "AuditFeedPanel" }).props("items")).toHaveLength(2);
+    expect(wrapper?.find(".error-banner").exists()).toBe(true);
+  });
+});
+
+describe("App batch write guards and replay coalescing", () => {
+  it("aborts a running batch delete when the connection switches mid-loop", async () => {
+    const host = await mountWithHost();
+    const firstDelete = deferred<unknown>();
+    let deleteCalls = 0;
+    host.invoke.mockImplementation(async (method) => {
+      if (method === "ldap/entry/delete") {
+        deleteCalls += 1;
+        if (deleteCalls === 1) return firstDelete.promise;
+        return { success: true };
+      }
+      return { statuses: [], success: true };
+    });
+    resultsPane().vm.$emit("batchDelete", ["cn=a,dc=first", "cn=b,dc=first", "cn=c,dc=first"]);
+    await flushPromises();
+    // 循环挂在第一条删除的响应上，后续 DN 尚未发出。
+    expect(deleteCalls).toBe(1);
+    host.updateContext();
+    await flushPromises();
+    firstDelete.resolve({ success: true });
+    await flushPromises();
+    // 连接守卫中止循环：剩余 DN 不发往新连接（审计 L-1）。
+    expect(deleteCalls).toBe(1);
+    // 汇总通知只统计已执行条目（1 成功 0 失败），用户可感知中途停止。
+    expect(wrapper!.find(".notice").text()).toContain("1");
+  });
+
+  it("merges a burst of deleted events into a single search replay (150ms trailing debounce)", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = await mountWithHost();
+      let startCalls = 0;
+      host.invoke.mockImplementation(async (method) => {
+        if (method === "ldap/search/start") {
+          startCalls += 1;
+          return { searchId: `search-${startCalls}`, entries: [{ dn: "cn=hit,dc=first", attributes: {} }], hasMore: false };
+        }
+        return { statuses: [], success: true };
+      });
+      wrapper!.findComponent(searchStub).vm.$emit("run", searchModel);
+      await flushPromises();
+      expect(startCalls).toBe(1);
+      // 批量写连发多条事件：防抖窗口内不重放（旧实现每条各重放一次，会撞后端会话上限）。
+      emitEntryDeleted("first", "cn=hit,dc=first", true);
+      emitEntryDeleted("first", "cn=hit,dc=first", true);
+      emitEntryDeleted("first", "cn=hit,dc=first", true);
+      await flushPromises();
+      expect(startCalls).toBe(1);
+      vi.advanceTimersByTime(150);
+      await flushPromises();
+      // 窗口收沿合并为一次重放。
+      expect(startCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a pending replay when the connection switches inside the debounce window", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = await mountWithHost();
+      let startCalls = 0;
+      host.invoke.mockImplementation(async (method) => {
+        if (method === "ldap/search/start") {
+          startCalls += 1;
+          return { searchId: `search-${startCalls}`, entries: [{ dn: "cn=hit,dc=first", attributes: {} }], hasMore: false };
+        }
+        return { statuses: [], success: true };
+      });
+      wrapper!.findComponent(searchStub).vm.$emit("run", searchModel);
+      await flushPromises();
+      emitEntryDeleted("first", "cn=hit,dc=first", true);
+      await flushPromises();
+      host.updateContext();
+      await flushPromises();
+      vi.advanceTimersByTime(150);
+      await flushPromises();
+      // 旧连接的挂起重放不落到新连接的搜索会话上。
+      expect(startCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// -- 宿主禁存储（WebKit 非安全上下文）下的工作台启动 ---------------------------
+// DBX webview 里访问 localStorage 绑定本身即抛 SecurityError（"The operation
+// is insecure."）。初始化链 initialize → syncConnectionContext → reloadBookmarks
+// 曾因 bookmarks 的裸 typeof 访问抛错，被 initialize().catch 显示成 init 错误横幅。
+describe("App startup with a storage-blocked host webview", () => {
+  it("mounts without surfacing an init error when localStorage access throws", async () => {
+    const previous = Object.getOwnPropertyDescriptor(window, "localStorage");
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      get() {
+        throw new DOMException("The operation is insecure.", "SecurityError");
+      },
+    });
+    try {
+      await mountWithHost();
+      // initError 走 .tree-state 展示：存在即代表启动被存储异常打断。
+      expect(wrapper!.find(".tree-state").exists()).toBe(false);
+    } finally {
+      if (previous) Object.defineProperty(window, "localStorage", previous);
+      else delete (window as unknown as Record<string, unknown>).localStorage;
+    }
   });
 });

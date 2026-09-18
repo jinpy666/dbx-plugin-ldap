@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 // DatetimeValueEditor 组件测试：generalizedTime / FILETIME 双模式的原始值
-// 编辑回写、日期选择器回写（原始格式落地）、「现在」按钮、哨兵值与非法值
-// 预览。t() 对未知键原样透传，断言匹配键名。
+// 编辑回写、日期选择器回写（原始格式落地）、step=1 时分秒字段、哨兵值与
+// 非法值提示。走查定稿后行内只有原始值 + 选择器：无「现在」按钮、无预览行。
+// t() 对未知键原样透传，断言匹配键名。
 import { afterEach, describe, expect, it } from "vitest";
 import { mount } from "@vue/test-utils";
 import DatetimeValueEditor from "./DatetimeValueEditor.vue";
@@ -34,9 +35,10 @@ describe("DatetimeValueEditor (generalizedTime)", () => {
     expect(wrapper.emitted("update:modelValue")![0]).toEqual(["20260102030406Z"]);
   });
 
-  it("shows a human-readable preview for valid values and none for empty", () => {
-    expect(track({ modelValue: "20260102030405Z" }).find(".datetime-preview").exists()).toBe(true);
-    expect(track({ modelValue: "" }).find(".datetime-preview").exists()).toBe(false);
+  it("renders only raw value and picker: no preview line, no 'now' button", () => {
+    const wrapper = track({ modelValue: "20260102030405Z" });
+    expect(wrapper.find(".datetime-preview").exists()).toBe(false);
+    expect(wrapper.find(".datetime-now").exists()).toBe(false);
   });
 
   it("flags non-GeneralizedTime input via the error hint", () => {
@@ -46,37 +48,30 @@ describe("DatetimeValueEditor (generalizedTime)", () => {
 
   it("picker writes back a normalized GeneralizedTime raw string", async () => {
     const wrapper = track({ modelValue: "" });
-    await wrapper.find(PICKER).setValue("2026-01-02T03:04");
+    // step=1：原生选择器暴露时分秒字段，与 GeneralizedTime 秒级精度对齐。
+    expect(wrapper.find(PICKER).attributes("step")).toBe("1");
+    await wrapper.find(PICKER).setValue("2026-01-02T03:04:05");
     const emitted = wrapper.emitted("update:modelValue")!.at(-1)![0] as string;
     // 选择器按本地时区解释、落地 UTC 原始格式；断言形状 + 可解析往返
     expect(emitted).toMatch(/^\d{14}Z$/u);
     expect(parseGeneralizedTime(emitted)).not.toBeNull();
   });
-
-  it("'now' button emits the current time in raw format", async () => {
-    const wrapper = track({ modelValue: "" });
-    await wrapper.find(".datetime-controls button").trigger("click");
-    const emitted = wrapper.emitted("update:modelValue")![0][0] as string;
-    expect(emitted).toMatch(/^\d{14}Z$/u);
-  });
 });
 
 describe("DatetimeValueEditor (filetime)", () => {
-  it("renders the sentinel label for 0 without a date", () => {
-    const wrapper = track({ modelValue: "0", kind: "filetime" });
-    expect(wrapper.find(".datetime-preview").text()).toContain("0");
-    expect(wrapper.text()).not.toMatch(/20\d\d/u);
+  it("keeps raw value + empty picker for sentinels, with no preview line", () => {
+    for (const sentinel of ["0", "9223372036854775807"]) {
+      const wrapper = track({ modelValue: sentinel, kind: "filetime" });
+      expect((wrapper.find(PICKER).element as HTMLInputElement).value).toBe("");
+      expect(wrapper.find(".datetime-preview").exists()).toBe(false);
+      expect(wrapper.text()).not.toMatch(/20\d\d/u);
+    }
   });
 
   it("keeps the picker empty for sentinels (0 is not a 1601 date)", () => {
     expect((track({ modelValue: "0", kind: "filetime" }).find(PICKER).element as HTMLInputElement).value).toBe("");
     expect((track({ modelValue: "9223372036854775807", kind: "filetime" }).find(PICKER).element as HTMLInputElement).value).toBe("");
     expect((track({ modelValue: "132223104000000000", kind: "filetime" }).find(PICKER).element as HTMLInputElement).value).not.toBe("");
-  });
-
-  it("renders the never sentinel for INT64_MAX", () => {
-    const wrapper = track({ modelValue: "9223372036854775807", kind: "filetime" });
-    expect(wrapper.find(".datetime-preview").exists()).toBe(true);
   });
 
   it("picker writes back a FILETIME raw string", async () => {
@@ -90,21 +85,12 @@ describe("DatetimeValueEditor (filetime)", () => {
     const wrapper = track({ modelValue: "abc", kind: "filetime" });
     expect(wrapper.find(".form-error").exists()).toBe(true);
   });
-
-  it("'now' button emits a FILETIME integer string", async () => {
-    const wrapper = track({ modelValue: "", kind: "filetime" });
-    await wrapper.find(".datetime-controls button").trigger("click");
-    const emitted = wrapper.emitted("update:modelValue")![0][0] as string;
-    expect(emitted).toMatch(/^\d+$/u);
-    expect(Number(emitted)).toBeGreaterThan(130_000_000_000_000_000);
-  });
 });
 
 describe("DatetimeValueEditor disabled gating", () => {
-  it("disables raw input, picker and now-button", () => {
+  it("disables raw input and picker", () => {
     const wrapper = track({ modelValue: "20260102030405Z", disabled: true });
     expect((wrapper.find(RAW_INPUT).element as HTMLInputElement).disabled).toBe(true);
     expect((wrapper.find(PICKER).element as HTMLInputElement).disabled).toBe(true);
-    expect((wrapper.find(".datetime-controls button").element as HTMLButtonElement).disabled).toBe(true);
   });
 });

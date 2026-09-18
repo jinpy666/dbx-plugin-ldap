@@ -86,11 +86,12 @@ export function parseDatetimeLocalValue(value: string): Date | null {
   return date;
 }
 
-/** UTC Date → datetime-local input 值（本地时区呈现，秒被舍去）。 */
+/** UTC Date → datetime-local input 值（本地时区呈现，含秒：picker step=1
+ *  需要完整时分秒字段，LDAP GeneralizedTime/FILETIME 本身也精确到秒）。 */
 export function toDatetimeLocalValue(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return (
     `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
-    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
   );
 }

@@ -5,22 +5,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import ConnectionsPanel from "./ConnectionsPanel.vue";
 
-// 照库内其他组件 spec 的方式 mock ../lib/api（面板同时用到 statuses 与 check）。
+// 照库内其他组件 spec 的方式 mock ../lib/api（面板同时用到 statuses/check/whoami
+// 与全局当前连接 id）。
 vi.mock("../lib/api", () => ({
+  getLdapConnectionId: vi.fn(() => "conn-a"),
   ldapApi: {
     connectionStatuses: vi.fn(),
     check: vi.fn(),
+    whoami: vi.fn(),
   },
 }));
 
-import { ldapApi, type LdapCheckResult } from "../lib/api";
+import { getLdapConnectionId, ldapApi, type LdapCheckResult } from "../lib/api";
 
 const connectionStatusesMock = vi.mocked(ldapApi.connectionStatuses);
 const checkMock = vi.mocked(ldapApi.check);
+const whoamiMock = vi.mocked(ldapApi.whoami);
+const currentConnectionMock = vi.mocked(getLdapConnectionId);
 
 beforeEach(() => {
   connectionStatusesMock.mockReset();
   checkMock.mockReset();
+  whoamiMock.mockReset();
+  currentConnectionMock.mockReset().mockReturnValue("conn-a");
   connectionStatusesMock.mockResolvedValue({ statuses: [statusOf("conn-a")] });
 });
 
@@ -163,5 +170,45 @@ describe("ConnectionsPanel 每行检查连接", () => {
     await rows[0].find(".check-button").trigger("click");
     await flushPromises();
     expect(rows[0].find(".settings-list-main span:last-child").text()).toBe("网络不通:host unreachable");
+  });
+});
+
+describe("ConnectionsPanel 每行身份查询（WhoAmI）", () => {
+  it("当前连接可查：进行中禁用，成功显示 whoamiOk 含 authzId（muted）", async () => {
+    const pending = deferred<{ authzId: string }>();
+    whoamiMock.mockReturnValueOnce(pending.promise);
+    const rows = await mountedRows(["conn-a"]);
+    const button = rows[0].find(".whoami-button");
+    expect(button.attributes("title")).toBe("身份查询");
+    expect(button.attributes("aria-label")).toBe("身份查询");
+    expect(button.attributes("disabled")).toBeUndefined();
+
+    await button.trigger("click");
+    expect(whoamiMock).toHaveBeenCalledWith();
+    expect(rows[0].find(".whoami-button").attributes("disabled")).toBeDefined();
+
+    pending.resolve({ authzId: "cn=admin,dc=demo" });
+    await flushPromises();
+    const result = rows[0].find(".settings-list-main span:last-child");
+    expect(result.text()).toBe("当前认证身份：cn=admin,dc=demo");
+    expect(result.classes()).toContain("muted");
+    expect(result.classes()).not.toContain("form-error");
+    expect(rows[0].find(".whoami-button").attributes("disabled")).toBeUndefined();
+  });
+
+  it("非当前连接禁用；当前连接查询 reject → whoamiFailed 文案走错误色且按钮恢复", async () => {
+    whoamiMock.mockRejectedValueOnce(new Error("-32601 method not found"));
+    const rows = await mountedRows(["conn-a", "conn-b"]);
+
+    // 全局当前连接是 conn-a：conn-b 行的 whoami 按钮禁用（whoami 语义跟随当前连接）。
+    expect(rows[1].find(".whoami-button").attributes("disabled")).toBeDefined();
+    expect(rows[0].find(".whoami-button").attributes("disabled")).toBeUndefined();
+
+    await rows[0].find(".whoami-button").trigger("click");
+    await flushPromises();
+    const result = rows[0].find(".settings-list-main span:last-child");
+    expect(result.text()).toBe("身份查询失败：-32601 method not found");
+    expect(result.classes()).toContain("form-error");
+    expect(rows[0].find(".whoami-button").attributes("disabled")).toBeUndefined();
   });
 });

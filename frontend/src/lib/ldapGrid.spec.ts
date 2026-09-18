@@ -46,6 +46,18 @@ describe("toResultRows", () => {
     // 保留字段不落 VM，但列仍会渲染（值为空）
     expect(resultColumns(["id", "cn"]).map((def) => def.field)).toEqual(["dn", "cn"]);
   });
+
+  it("memoizes row VMs by entry identity so cursor drain commits keep row identity (K-2)", () => {
+    const entry: LdapEntry = { dn: "cn=alice,dc=demo,dc=dbx", attributes: { cn: ["alice"] } };
+    const [first] = toResultRows([entry]);
+    // 同一 entry 对象重复提交（游标排空期间的既有条目）→ 复用同一行 VM。
+    const [again] = toResultRows([entry, { dn: "cn=bob,dc=demo,dc=dbx", attributes: {} }]);
+    expect(again).toBe(first);
+    // 不同对象（新一次搜索返回的条目）→ 新行 VM，不会串用旧数据。
+    const [fresh] = toResultRows([{ dn: entry.dn, attributes: { cn: ["alice"] } }]);
+    expect(fresh).not.toBe(first);
+    expect(fresh).toEqual(first);
+  });
 });
 
 describe("copyRowText", () => {
@@ -65,6 +77,11 @@ describe("resultColumns", () => {
       expect(def.resizable).toBe(true);
       expect(def.filter).toBe("agTextColumnFilter");
     }
+  });
+
+  it("exposes headerTooltip on every column so truncated headers reveal the full name (UX-V4)", () => {
+    const defs = resultColumns(["objectClass", "cn"]);
+    expect(defs.map((def) => def.headerTooltip)).toEqual(["dn", "objectClass", "cn"]);
   });
 
   it("truncates the displayed cell text but keeps full values for filtering and tooltips", () => {

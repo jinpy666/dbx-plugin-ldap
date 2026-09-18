@@ -21,6 +21,7 @@ export type AttributeValueKind =
     | "guid" // AD objectGUID（二进制，显示为标准 UUID）
     | "sid" // AD objectSid（二进制，显示为 S-1-…）
     | "uuid" // entryUUID 等 RFC UUID 字符串
+    | "password" // 口令属性（ADS PasswordValueEditor 绑定；编辑器层特判为专用组件）
     | "binary" // 二进制（base64/证书/图像）
     | "oid" // OID（supportedControl 等）
     | "text";
@@ -67,6 +68,10 @@ const NAME_KINDS: Record<string, AttributeValueKind> = {
     // MSAD 二进制标识（显示解码，编辑仍走二进制/base64）
     objectguid: "guid",
     objectsid: "sid",
+    // 口令属性（ADS PasswordValueEditor 的属性名绑定：userPassword / unicodePwd；
+    // 表单分流到专用口令编辑器，LDIF 页签保持纯文本）
+    userpassword: "password",
+    unicodepwd: "password",
     // AD 位掩码（专用的复选框合成编辑器）
     useraccountcontrol: "uac",
     // UUID
@@ -90,11 +95,13 @@ const NAME_KINDS: Record<string, AttributeValueKind> = {
     distinguishedname: "dn",
 };
 
-/** 后缀规则：*Certificate / *Photo 家族按名字兜底（对齐 ADS 证书编辑器注释：
- * AD/eDirectory/Sun DSEE 的证书属性不携带正确 syntax）。 */
+/** 后缀规则：*Certificate / *Photo / *password 家族按名字兜底（对齐 ADS：
+ * 证书/照片族因服务器 schema 语法不准按名兜底；口令族对齐
+ * PasswordValueEditor 对密码类属性名的宽松绑定，如 sambaNTPassword）。 */
 const NAME_SUFFIX_KINDS: ReadonlyArray<readonly [suffix: string, kind: AttributeValueKind]> = [
     ["certificate", "binary"],
     ["photo", "binary"],
+    ["password", "password"],
 ];
 
 /** 语法 OID → kind（ADS syntax 绑定子集）。 */

@@ -3,11 +3,14 @@
 // attributes (jpegPhoto, *Certificate, …). Each base64 value gets one card:
 // image preview (data URL) / pretty-printed PEM / hex view, a hex toggle and
 // a per-value delete (emits update:modelValue; the dialog owns persistence via
-// the existing entry/modify channel). Upload is front-end only:
+// the existing entry/modify channel). objectGUID/objectSid render the decoded
+// UUID / S-1-… text instead of a hex dump (ADS getDisplayValue behaviour).
+// Upload is front-end only:
 // <input type="file"> → FileReader → base64, hard-capped at MAX_BINARY_BYTES
 // so stdio-jsonl messages stay small. No new protocol methods.
 import { computed, ref } from "vue";
-import { Trash2, Upload } from "@lucide/vue";
+import { Download, Trash2, Upload } from "@lucide/vue";
+import { objectGuidDisplay, objectSidDisplay } from "../lib/adValues";
 import {
   MAX_BINARY_BYTES,
   base64ToBytes,
@@ -18,6 +21,7 @@ import {
   toHexView,
   type BinaryKind,
 } from "../lib/binaryValue";
+import { saveBinaryFile } from "../lib/fileSave";
 import { t } from "../lib/i18n";
 
 const props = defineProps<{
@@ -36,10 +40,12 @@ interface BinaryCard {
   previewUrl?: string;
   pemText?: string;
   hexText: string;
+  /** AD 二进制标识（objectGUID/objectSid）的人类可读解码（UUID / S-1-…）。 */
+  decoded?: string;
   invalid: boolean;
 }
 
-type CardMode = "preview" | "pem" | "hex";
+type CardMode = "decoded" | "preview" | "pem" | "hex";
 
 const IMAGE_MIME: Partial<Record<BinaryKind, string>> = {
   jpeg: "image/jpeg",
@@ -48,9 +54,27 @@ const IMAGE_MIME: Partial<Record<BinaryKind, string>> = {
   webp: "image/webp",
 };
 
+// 下载扩展名按嗅探结果选择，未知二进制落 .bin；PEM 值直接以文本保存。
+const DOWNLOAD_EXT: Partial<Record<BinaryKind, string>> = {
+  jpeg: "jpg",
+  png: "png",
+  gif: "gif",
+  webp: "webp",
+  pem: "pem",
+};
+
 // PEM 美化只对"证书语义"开放：属性名启发式命中证书/PKCS#12，或值本身解码后
 // 就是 PEM 文本（sniff = pem）。纯图片/未知二进制不套 BEGIN/END。
 const isCertificateAttribute = computed(() => looksBinaryAttribute(props.attributeName) && /certificate|pkcs12/i.test(props.attributeName));
+
+// AD 二进制标识按裸属性名判定（剥 ";binary" 等传输后缀）：这类值有权威的
+// 人类可读形式，卡片直接展示解码文本，不再渲染 hex（hex 对用户只是乱码）。
+function decodedIdentifierFor(attributeName: string, value: string): string {
+  const bare = attributeName.split(";")[0]?.trim().toLowerCase();
+  if (bare === "objectguid") return objectGuidDisplay(value);
+  if (bare === "objectsid") return objectSidDisplay(value);
+  return "";
+}
 
 function buildCard(value: string): BinaryCard {
   try {
@@ -65,12 +89,14 @@ function buildCard(value: string): BinaryCard {
         pemText = undefined;
       }
     }
+    const decoded = decodedIdentifierFor(props.attributeName, value);
     return {
       value,
       kind,
       previewUrl: mime ? `data:${mime};base64,${value}` : undefined,
       pemText,
       hexText: toHexView(bytes),
+      decoded: decoded || undefined,
       invalid: false,
     };
   } catch {
@@ -86,6 +112,7 @@ const pemToggled = ref(new Set<string>());
 
 function cardMode(card: BinaryCard): CardMode {
   if (card.invalid) return "hex";
+  if (card.decoded) return "decoded";
   if (hexToggled.value.has(card.value)) return "hex";
   if (card.kind === "pem") return "pem";
   if (card.kind === "unknown") return pemToggled.value.has(card.value) ? "pem" : "hex";
@@ -93,7 +120,7 @@ function cardMode(card: BinaryCard): CardMode {
 }
 
 function hasAlternateView(card: BinaryCard): boolean {
-  if (card.invalid) return false;
+  if (card.invalid || card.decoded) return false;
   if (cardMode(card) !== "hex") return true;
   // hex 视图下还有得切回去的：图片预览、PEM 文本，或证书语义下的 PEM 包装。
   return card.previewUrl !== undefined || card.kind === "pem" || (card.kind === "unknown" && isCertificateAttribute.value && card.pemText !== undefined);
@@ -122,6 +149,20 @@ function removeValue(index: number): void {
     "update:modelValue",
     props.modelValue.filter((_, i) => i !== index),
   );
+}
+
+// base64 → 原始字节 → fileSave 三级回退（宿主另存为 → 浏览器选择器 →
+// 匿名下载）：与上传互为镜像，服务端值/上传值都能存回本地文件；命名
+// <属性名>-<序号>.<嗅探扩展名>。用户取消对话框时静默收场。
+async function downloadValue(card: BinaryCard, index: number): Promise<void> {
+  if (props.disabled || card.invalid) return;
+  const baseName = props.attributeName.split(";")[0]?.trim() || "value";
+  const mime = IMAGE_MIME[card.kind] ?? (card.kind === "pem" ? "text/plain" : "application/octet-stream");
+  await saveBinaryFile({
+    name: `${baseName}-${index + 1}.${DOWNLOAD_EXT[card.kind] ?? "bin"}`,
+    contentType: mime,
+    bytes: base64ToBytes(card.value),
+  });
 }
 
 const uploadError = ref("");
@@ -163,6 +204,7 @@ async function onFilesChosen(event: Event): Promise<void> {
   <div class="binary-editor">
     <div v-for="(card, index) in cards" :key="index" class="binary-card" :class="{ 'binary-card-invalid': card.invalid }">
       <p v-if="card.invalid" class="binary-error">{{ t("ldap.binary.invalidBase64") }}</p>
+      <p v-else-if="cardMode(card) === 'decoded'" class="binary-decoded mono">{{ card.decoded }}</p>
       <img
         v-else-if="cardMode(card) === 'preview'"
         class="binary-preview"
@@ -174,6 +216,9 @@ async function onFilesChosen(event: Event): Promise<void> {
       <footer class="binary-actions">
         <button v-if="hasAlternateView(card)" type="button" class="toolbar-button" :disabled="disabled" @click="toggleView(card)">
           {{ toggleLabel(card) }}
+        </button>
+        <button type="button" class="toolbar-button binary-download" :disabled="disabled || card.invalid" @click="downloadValue(card, index)">
+          <Download aria-hidden="true" /><span>{{ t("ldap.binary.download") }}</span>
         </button>
         <button type="button" class="toolbar-button binary-delete" :disabled="disabled" @click="removeValue(index)">
           <Trash2 aria-hidden="true" /><span>{{ t("ldap.binary.deleteValue") }}</span>

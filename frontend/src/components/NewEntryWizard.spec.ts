@@ -24,7 +24,7 @@ const SCHEMA: LdapSchema = {
   },
 };
 
-type WizardProps = { open?: boolean; parentDn?: string; schema?: LdapSchema };
+type WizardProps = { open?: boolean; parentDn?: string; schema?: LdapSchema; canWrite?: boolean };
 
 function mountWizard(props: WizardProps = {}) {
   return mount(NewEntryWizard, { props: { open: true, ...props } });
@@ -233,5 +233,25 @@ describe("NewEntryWizard", () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     await wrapper.vm.$nextTick();
     expect(wrapper.emitted("cancel")).toHaveLength(3);
+  });
+});
+
+// 只读连接（canWrite=false）：第 ④ 步提交按钮禁用并展示只读提示（与编辑器/
+// 导入对话框同一 i18n 键），表单填满也不 emit submit（App 侧 guardWrite 同语义
+// 兜底，后端 policy 最终拒绝）；取消等非写出口不受影响。
+describe("NewEntryWizard read-only gating", () => {
+  it("disables submit with the read-only hint and never emits submit when canWrite is false", async () => {
+    const wrapper = trackWizard({ parentDn: PARENT, schema: SCHEMA, canWrite: false });
+    await chooseTemplate(wrapper, "user");
+    await gotoStep(wrapper, 3);
+    await fillRdn(wrapper, "cn", "Alice");
+    await gotoStep(wrapper, 4);
+    await mustFieldInput(wrapper, "sn").setValue("Doe");
+    // 表单已满足 must 约束（无 form-error），仅因只读而禁用提交。
+    expect(wrapper.find(".form-error").exists()).toBe(false);
+    expect(submitButton(wrapper).attributes("disabled")).toBeDefined();
+    expect(wrapper.text()).toContain(t("editor.readonlyHint"));
+    await submitButton(wrapper).trigger("click");
+    expect(wrapper.emitted("submit")).toBeUndefined();
   });
 });

@@ -90,7 +90,7 @@ function selectAttributes(attributes: MockEntry["attributes"], requested: unknow
 
 put(BASE_DN, { dc: ["demo"], o: ["Demo Organization"], objectClass: ["dcObject", "organization"] });
 put(`ou=people,${BASE_DN}`, { ou: ["people"], objectClass: ["organizationalUnit"] });
-put(`ou=groups,${BASE_DN}`, { ou: ["groups"], objectClass: ["organizationalUnit"] });
+put(`ou=groups,${BASE_DN}`, { ou: ["groups"], cn: ["groups"], objectClass: ["organizationalUnit"] });
 // managedBy→用户 DN（AD 的 OU 管理者语义）：条目关联视图 DN 引用 / 被引用两区
 // 的 fixture——正查直读本条目 managedBy，反查 (managedBy=<DN>) 通用等值求值可命中。
 put(`ou=services,${BASE_DN}`, { ou: ["services"], managedBy: [`uid=user0000,ou=people,${BASE_DN}`], objectClass: ["organizationalUnit"] });
@@ -237,21 +237,29 @@ function search(params_: Record<string, unknown>) {
     throw new Error("alias dereferencing is not implemented in the fixture");
   }
   const matched: MockEntry[] = [];
+  // 非分页路径的截断标志：预读确认真溢出后才置位（恰好等于上限不算截断）。
+  let overflowed = false;
   for (const entry of directory.values()) {
     if (!dnInSearchScope(entry.dn, baseDn, scope)) continue;
     if (!matches(entry)) continue;
+    if (limit > 0 && matched.length >= limit && !paged) {
+      // 非分页 sizeLimit 命中：对齐真实 sidecar 聚合语义——条目照给前 limit
+      // 条 + truncated 标志，不再抛 Size Limit Exceeded 硬错误（DnPicker 等
+      // 只读浏览遇到大 OU 时降级为截断展示而非报错）。
+      overflowed = true;
+      break;
+    }
     matched.push(entry);
     if (limit > 0 && matched.length >= limit && paged) break;
-    if (limit > 0 && matched.length > limit) throw new Error('LDAP Result Code 4 "Size Limit Exceeded"');
   }
   const entries = matched.map((entry) => ({
     dn: entry.dn,
     attributes: selectAttributes(entry.attributes, params_.attributes, params_.typesOnly === true),
   }));
-  // Mirror successful Go aggregation, including its exact-limit flag. pageSize
-  // is a transport page size, not a UI page. Server-specific paging-control
-  // failures (e.g. OpenLDAP sizeLimit interactions) are not simulated.
-  return { entries, count: entries.length, truncated: paged && entries.length >= limit, baseDn, filter };
+  // 分页路径保持 Go pagedSearchEntries 的 exact-limit 标志（达上限即
+  // truncated）；非分页路径以预读结果诚实置位。pageSize 是传输页大小，
+  // 不是 UI 页。服务端分页控件特有故障（如 OpenLDAP sizeLimit 交互）不做模拟。
+  return { entries, count: entries.length, truncated: paged ? entries.length >= limit : overflowed, baseDn, filter };
 }
 
 interface SearchSession {
@@ -368,6 +376,20 @@ const objectClassDefinitions = [
   "( 2.5.20.1 NAME 'subschema' AUXILIARY MAY ( dITContentRules $ dITStructureRules $ namingContexts $ subordinateSuffix $ objectClasses $ attributeTypes $ matchingRules $ matchingRuleUse ) )",
 ];
 
+// 五分类 Schema（F2b）fixture：三类补充定义，供 SchemaPanel 页签与明细走查。
+const matchingRuleDefinitions = [
+  { oid: "2.5.13.2", names: ["caseIgnoreMatch"], desc: "case ignore matching of Directory String", syntax: "1.3.6.1.4.1.1466.115.121.1.15" },
+  { oid: "2.5.13.5", names: ["caseExactMatch"], desc: "case exact matching of Directory String", syntax: "1.3.6.1.4.1.1466.115.121.1.15" },
+  { oid: "2.5.13.14", names: ["integerMatch"], desc: "integer matching", syntax: "1.3.6.1.4.1.1466.115.121.1.27" },
+];
+const matchingRuleUseDefinitions = [
+  { oid: "2.5.13.2", names: ["caseIgnoreMatch"], attributeTypes: ["cn", "sn", "uid"] },
+];
+const ldapSyntaxDefinitions = [
+  { oid: "1.3.6.1.4.1.1466.115.121.1.15", desc: "Directory String" },
+  { oid: "1.3.6.1.4.1.1466.115.121.1.27", desc: "Integer" },
+];
+
 // -- request / invoke ----------------------------------------------------------
 
 const request: DbxPluginApi["request"] = async <T = unknown>(method: string) =>
@@ -409,12 +431,27 @@ const invoke: DbxPluginApi["invoke"] = async <T = unknown>(method: string, rawPa
         objectClass: ["top"],
         namingContexts: [BASE_DN],
         supportedLDAPVersion: ["3"],
+        supportedControl: ["1.2.840.113556.1.4.319", "1.3.6.1.4.1.4203.1.10.1", "1.3.6.1.1.22"],
+        supportedExtension: ["1.3.6.1.4.1.4203.1.11.1", "1.3.6.1.4.1.4203.1.11.3"],
         supportedSASLMechanisms: ["SIMPLE", "EXTERNAL"],
         subschemaSubentry: ["cn=Subschema"],
         vendorName: ["FixtureLDAP"],
+        vendorVersion: ["FixtureLDAP/1.0"],
+        productName: ["FixtureLDAP Server"],
       }, input.attributes, false, true),
     };
-  } else if (method === "ldap/schema") result = { attributeTypes: attributeTypeDefinitions, objectClasses: objectClassDefinitions };
+  } else if (method === "ldap/check") {
+    // 连接体检（连接面板/F12 服务器信息用）：fixture 环境总是可达，
+    // network 段给固定小延迟、bind 段按 fixture 放行。契约同后端 check.go。
+    result = { ok: true, network: { ok: true, latencyMs: 1 }, bind: { ok: true } };
+  } else if (method === "ldap/schema")
+    result = {
+      attributeTypes: attributeTypeDefinitions,
+      objectClasses: objectClassDefinitions,
+      matchingRules: matchingRuleDefinitions,
+      matchingRuleUses: matchingRuleUseDefinitions,
+      ldapSyntaxes: ldapSyntaxDefinitions,
+    };
   else if (method === "ldap/count") result = countChildren(input);
   else if (method === "ldap/entry/childrenCount") {
     const dn = String(input.dn ?? "").trim();
@@ -456,6 +493,27 @@ const invoke: DbxPluginApi["invoke"] = async <T = unknown>(method: string, rawPa
       } else throw new Error(`change ${index} operation must be add, replace, or delete`);
     }
     entry.attributes = attributes;
+  } else if (method === "ldap/entry/compare") {
+    // Compare（RFC 4511 §4.10）：按 caseIgnoreMatch 目录字符串默认规则比较
+    // 属性首值；属性缺失/无值返回 match:false（compareFalse 走成功通道，非错误）。
+    const entry = get(String(input.dn ?? ""));
+    if (!entry) throw new Error(`entry not found: ${input.dn}`);
+    const attribute = String(input.attribute ?? "").trim();
+    if (!attribute) throw new Error("attribute is required");
+    const values = Object.entries(entry.attributes).find(
+      ([name]) => name.toLowerCase() === attribute.toLowerCase(),
+    )?.[1] ?? [];
+    result = { match: (values[0] ?? "").toLowerCase() === String(input.value ?? "").toLowerCase() };
+  } else if (method === "ldap/whoami") {
+    result = { authzId: "dn:cn=admin,dc=demo,dc=dbx" };
+  } else if (method === "ldap/entry/passwdModify") {
+    if (readOnly) denyWrite(String(input.dn ?? ""));
+    const dn = String(input.identity ?? input.dn ?? "");
+    const entry = get(dn);
+    if (!entry) throw new Error(`entry not found: ${dn}`);
+    // 密码值不落盘明文：写固定占位哈希（明文仅存在于请求参数内）。
+    entry.attributes["userPassword"] = ["{SSHA}fixture-digest"];
+    result = { success: true };
   } else if (method === "ldap/entry/delete") {
     if (readOnly) denyWrite(String(input.dn ?? ""));
     const dn = String(input.dn ?? "");
@@ -597,13 +655,19 @@ window.dbxPlugin = {
     return btoa(binary);
   },
   workbenchState: { set: async () => undefined },
-  clipboard: { readText: async () => "", writeText: async () => undefined },
+  clipboard: {
+    readText: async () => clipboardWrites.at(-1) ?? "",
+    writeText: async (text: string) => {
+      clipboardWrites.push(text);
+    },
+  },
 };
 
 // 走查注入：ui_test 经 window.dbxPlugin.emitUiIntent 发 ldap/ui/intent
 // （vitest 直接走模块导出）。mock 专用钩子不属于宿主桥契约面，用
 // Object.assign 挂载避免污染 DbxPluginApi 类型（函数声明提升，此处引用安全）。
-Object.assign(window.dbxPlugin, { emitUiIntent });
+const clipboardWrites: string[] = [];
+Object.assign(window.dbxPlugin, { emitUiIntent, clipboardWrites });
 
 export { context, appearance };
 

@@ -25,6 +25,30 @@ describe("parseAuditEvent", () => {
     const item = parseAuditEvent({}, 4, Number.NaN);
     expect(Number.isFinite(item.at)).toBe(true);
   });
+
+  // F10：后端新增 operation/durationMs 字段的结构化解析。
+  it("解析新增 operation 与 durationMs 字段", () => {
+    const item = parseAuditEvent({ action: "ldap/entry/modify", operation: "modify", durationMs: 123 }, 5, 0);
+    expect(item.operation).toBe("modify");
+    expect(item.durationMs).toBe(123);
+  });
+
+  it("旧事件容忍：无新字段时不产出键（同 detail 约定）", () => {
+    const item = parseAuditEvent({ action: "ldap/search", result: "ok" }, 6, 0);
+    expect(item.operation).toBeUndefined();
+    expect(item.durationMs).toBeUndefined();
+    expect(item).not.toHaveProperty("operation");
+    expect(item).not.toHaveProperty("durationMs");
+  });
+
+  it("新字段类型不符时兜底丢弃，绝不抛错", () => {
+    expect(parseAuditEvent({ operation: 42, durationMs: "slow" }, 7, 0)).not.toHaveProperty("operation");
+    expect(parseAuditEvent({ operation: 42, durationMs: "slow" }, 7, 0)).not.toHaveProperty("durationMs");
+    // 非正数耗时同样视为无（0/负数不参与展示）。
+    expect(parseAuditEvent({ durationMs: 0 }, 8, 0)).not.toHaveProperty("durationMs");
+    expect(parseAuditEvent({ durationMs: -5 }, 9, 0)).not.toHaveProperty("durationMs");
+    expect(parseAuditEvent({ durationMs: Number.NaN }, 10, 0)).not.toHaveProperty("durationMs");
+  });
 });
 
 describe("pushAuditItem", () => {

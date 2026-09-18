@@ -76,10 +76,15 @@ describe("display helpers", () => {
 });
 
 describe("datetime-local conversions", () => {
-  it("round-trips local wall clock (no zone shift at field level)", () => {
-    const local = "2026-01-02T03:04";
+  it("round-trips local wall clock with seconds at field level", () => {
+    const local = "2026-01-02T03:04:05";
     const date = parseDatetimeLocalValue(local)!;
     expect(toDatetimeLocalValue(date)).toBe(local);
+  });
+
+  it("still parses minute-only datetime-local values (seconds default 0)", () => {
+    const date = parseDatetimeLocalValue("2026-01-02T03:04")!;
+    expect(toDatetimeLocalValue(date)).toBe("2026-01-02T03:04:00");
   });
 
   it("maps UTC-based generalized time through local zone both ways", () => {

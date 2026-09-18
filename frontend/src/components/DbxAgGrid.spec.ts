@@ -21,7 +21,15 @@ const gridMock = vi.hoisted(() => ({
 }));
 
 vi.mock("ag-grid-community", () => ({
-  AllCommunityModule: {},
+  // 与 DbxAgGrid.vue 显式注册的模块清单同形（K-7：不再用 AllCommunityModule）；
+  // mock 下模块对象内容无关紧要，仅保证命名导出存在。
+  ClientSideRowModelModule: {},
+  ClientSideRowModelApiModule: {},
+  TextFilterModule: {},
+  PaginationModule: {},
+  RowSelectionModule: {},
+  ColumnApiModule: {},
+  LocaleModule: {},
   ModuleRegistry: { registerModules: vi.fn() },
   createGrid: vi.fn((el: unknown, options: GridOptions) => {
     const api = {
