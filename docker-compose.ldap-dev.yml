@@ -1,0 +1,42 @@
+# Local OpenLDAP dev container for the DBX LDAP workbench (editor-kind fixtures).
+# Separate from docker-compose.ldap-test.yml (smoke tests, port 1389): this one
+# serves on 127.0.0.1:13890 and additionally loads the custom fixture schema.
+# No credential literals here:
+#   docker compose -f docker-compose.ldap-dev.yml --env-file scripts/ldap-dev-seed/.env.dev up -d
+# (.env.dev is gitignored and holds a generated LDAP_DEV_PASSWORD.)
+#
+# Attaching smoke scripts to this container: they read LDAP_TEST_BINDPW (not
+# LDAP_ADMIN_PASSWORD) plus LDAP_TEST_HOST/PORT/ROOT/BINDDN, e.g.
+#   export LDAP_TEST_BINDPW="$LDAP_DEV_PASSWORD" LDAP_TEST_PORT=13890 \
+#          LDAP_TEST_HOST=127.0.0.1 LDAP_TEST_ROOT=dc=example,dc=org \
+#          LDAP_TEST_BINDDN="cn=admin,dc=example,dc=org"
+# 02-smoke-fixtures.ldif mirrors the entries the S1-S18 suite expects.
+services:
+  ldap-dev:
+    # Same pin as the smoke container (bitnamilegacy org, see compose note there).
+    image: bitnamilegacy/openldap:2.6.10-debian-12-r4
+    container_name: dbx-ldap-dev
+    environment:
+      LDAP_ROOT: "dc=example,dc=org"
+      LDAP_ADMIN_USERNAME: "admin"
+      LDAP_ADMIN_PASSWORD: "${LDAP_DEV_PASSWORD:?generate one into scripts/ldap-dev-seed/.env.dev first}"
+      LDAP_PORT_NUMBER: "1389"
+      LDAP_LDAPS_PORT_NUMBER: "636"
+      # TLS: StartTLS on 1389 (host 13890) + LDAPS on 636 (host 13936).
+      # Certs are throwaway self-signed, generated into scripts/ldap-dev-seed/tls/
+      # (gitignored): CN=localhost, SAN DNS:localhost/IP:127.0.0.1.
+      LDAP_ENABLE_TLS: "yes"
+      LDAP_TLS_CERT_FILE: "/certs/openldap.crt"
+      LDAP_TLS_KEY_FILE: "/certs/openldap.key"
+      LDAP_TLS_CA_FILE: "/certs/openldap-ca.crt"
+      # bitnami slapadds *.ldif in this dir into cn=config (olcAttributeTypes
+      # LDIF form) before importing the seed tree — NOT slapd.conf .schema syntax.
+      LDAP_CUSTOM_SCHEMA_DIR: "/custom-schemas"
+      LDAP_CUSTOM_LDIF_DIR: "/ldifs"
+    ports:
+      - "13890:1389"
+      - "13936:636"
+    volumes:
+      - ./scripts/ldap-dev-seed/schemas:/custom-schemas:ro
+      - ./scripts/ldap-dev-seed:/ldifs:ro
+      - ./scripts/ldap-dev-seed/tls:/certs:ro

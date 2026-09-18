@@ -1,0 +1,102 @@
+# Editor-kind fixtures for the DBX LDAP dev container
+# (docker-compose.ldap-dev.yml, LDAP_CUSTOM_LDIF_DIR). Root DN dc=example,dc=org.
+# Every value-editor kind gets a real, schema-conformant value:
+#   text(cn/sn/mail) integer(dbxScore/uidNumber) boolean(dbxIsActive)
+#   generalizedTime(dbxLastSync/createTimestamp) OID(dbxControlOid)
+#   DN single(dbxManager/owner -> dialog editor) DN multi(member -> textarea)
+#   filetime(pwdLastSet) uac(userAccountControl) guid/sid(objectGUID/objectSid)
+#   binary(jpegPhoto/userCertificate) password(userPassword/sambaNTPassword)
+#   multi-value(mail/dbxMultiNote) multiline(description)
+# All credentials below are throwaway fixture literals, never real secrets.
+#
+# Note: with LDAP_CUSTOM_LDIF_DIR set, bitnami skips its default tree entirely,
+# so the base entry must be seeded here (same as scripts/ldap-seed).
+
+dn: dc=example,dc=org
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+o: Example Org
+dc: example
+
+dn: ou=DevFixtures,dc=example,dc=org
+objectClass: organizationalUnit
+ou: DevFixtures
+
+dn: uid=alice,ou=DevFixtures,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: dbxTestAccount
+cn: Alice Fixtures
+sn: Fixtures
+uid: alice
+mail: alice@example.org
+mail: alice.fixture@example.org
+dbxIsActive: TRUE
+dbxManager: uid=bob,ou=DevFixtures,dc=example,dc=org
+dbxScore: 42
+dbxControlOid: 2.16.840.1.113730.3.4.2
+dbxLastSync: 20260918093000Z
+dbxMultiNote: first note
+dbxMultiNote: second note
+userAccountControl: 512
+pwdLastSet: 133900000000000000
+objectGUID:: UHrMeUvwJ0O7rS+zy+a4TA==
+objectSid:: AQUAAAAAAAUVAAAA3PTcO4M9K0aCi6YoUQQAAA==
+userPassword: {SSHA}Zmlyc3RhdGhhc2h2YWx1ZW5vdHJlYWw=
+sambaNTPassword: AB12CD34EF5677889900AABBCCDDEEFF
+description:: bGluZSBvbmUKbGluZSB0d28=
+
+dn: uid=bob,ou=DevFixtures,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: dbxTestAccount
+cn: Bob Fixtures
+sn: Fixtures
+uid: bob
+dbxManager: uid=alice,ou=DevFixtures,dc=example,dc=org
+dbxIsActive: FALSE
+userPassword: {SSHA}c2Vjb25kc3RhdGhhc2h2YWx1ZW5vdHJlYWw=
+
+dn: uid=locked,ou=DevFixtures,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: dbxTestAccount
+cn: Locked Fixture
+sn: Fixture
+uid: locked
+userAccountControl: 514
+pwdLastSet: 0
+
+dn: uid=numbers,ou=DevFixtures,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: posixAccount
+cn: Numbers Fixture
+sn: Fixture
+uid: numbers
+uidNumber: 10000
+gidNumber: 10000
+homeDirectory: /home/numbers
+
+dn: uid=certuser,ou=DevFixtures,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: dbxTestAccount
+cn: Cert Fixture
+sn: Fixture
+uid: certuser
+userCertificate;binary:: MIICSjCCAbOgAwIBAgIUAUo8o7M+d8qRLsfIFax5/uxbmRIwDQYJKoZIhvcNAQELBQAwNzEUMBIG
+ A1UEAwwLZGJ4LWZpeHR1cmUxEDAOBgNVBAoMB0RCWCBEZXYxDTALBgNVBAsMBFRlc3QwHhcNMjYw
+ OTE4MTYwODE1WhcNMzYwOTE1MTYwODE1WjA3MRQwEgYDVQQDDAtkYngtZml4dHVyZTEQMA4GA1UE
+ CgwHREJYIERldjENMAsGA1UECwwEVGVzdDCBnzANBgkqhkiG9w0BAQEFAAOBjQAwgYkCgYEAs7m7
+ LAz98BmcHWS44w3uqco1F1uCui2hVQUblqnqNuWiU0+LWCE3yXmKoY31TIUy70EuCzjfNnnkyLPL
+ YT7rMmJvadZmcdr39zPPM1x2KJ9AdBrWtTysce80UWF8H+UhcB0ZC3+zSqy4rA46HajWPif8DuD2
+ vPgIBZH7v1SCf1UCAwEAAaNTMFEwHQYDVR0OBBYEFCGfTt7WYDULxxCAJ6yzd5ZCqXWaMB8GA1Ud
+ IwQYMBaAFCGfTt7WYDULxxCAJ6yzd5ZCqXWaMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQEL
+ BQADgYEANCNjo1Dg4LuZ3rRqydopTt6cTGXrCMsU2+Mks3tIh8pXPOgKRC0Kw0ylXVr9thUqCUNj
+ v0betqLzfQW069iqYIQQhjipFNhhg7chScNyvBFKuFdaTIbkSND2525UJhkfDk7ry7muz+qtbPDO
+ MO5Ms/xky5r/oXNeCM+Z2KGZvro=
+
+dn: cn=editors,ou=DevFixtures,dc=example,dc=org
+objectClass: groupOfNames
+cn: editors
+member: uid=alice,ou=DevFixtures,dc=example,dc=org
+member: uid=bob,ou=DevFixtures,dc=example,dc=org
+member: uid=certuser,ou=DevFixtures,dc=example,dc=org
+owner: uid=alice,ou=DevFixtures,dc=example,dc=org

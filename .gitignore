@@ -11,6 +11,9 @@
 node_modules/
 .DS_Store
 *.log
+scripts/ldap-dev-seed/.env*
 .dbx-repository-signing-key.env
 .idea/
 .zcode/
+.mimosa
+scripts/ldap-dev-seed/tls/

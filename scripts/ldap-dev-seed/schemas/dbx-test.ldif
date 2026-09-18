@@ -1,0 +1,52 @@
+# Custom schema for the DBX LDAP dev container, in cn=config LDIF form
+# (bitnami's LDAP_CUSTOM_SCHEMA_DIR slapadds *.ldif into cn=config before the
+# data import). Local throwaway fixtures only — the 1.3.6.1.4.1.99999 arc is a
+# placeholder, never use these definitions on a real directory.
+#
+# Covers every value-editor fixture kind the workbench routes on:
+#   boolean / DN / integer / OID / generalizedTime (by syntax OID) and
+#   userAccountControl (uac) / pwdLastSet (filetime) / objectGUID (guid) /
+#   objectSid (sid) / sambaNTPassword (password, *password suffix) by name.
+dn: cn=dbx-test,cn=schema,cn=config
+objectClass: olcSchemaConfig
+cn: dbx-test
+olcAttributeTypes: ( 1.3.6.1.4.1.99999.1.1 NAME 'dbxIsActive'
+  DESC 'DBX fixture: boolean syntax' EQUALITY booleanMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.7 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.99999.1.2 NAME 'dbxManager'
+  DESC 'DBX fixture: DN syntax single value' EQUALITY distinguishedNameMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.99999.1.3 NAME 'dbxScore'
+  DESC 'DBX fixture: integer syntax' EQUALITY integerMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.99999.1.4 NAME 'dbxControlOid'
+  DESC 'DBX fixture: OID syntax' EQUALITY objectIdentifierMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.99999.1.5 NAME 'dbxLastSync'
+  DESC 'DBX fixture: generalizedTime syntax' EQUALITY generalizedTimeMatch
+  ORDERING generalizedTimeOrderingMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.99999.1.6 NAME 'dbxMultiNote'
+  DESC 'DBX fixture: multi-valued directory string' EQUALITY caseIgnoreMatch
+  SUBSTR caseIgnoreSubstringsMatch
+  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+olcAttributeTypes: ( 1.3.6.1.4.1.99999.1.7 NAME 'userAccountControl'
+  DESC 'DBX fixture: AD UAC bitmask simulated with integer syntax'
+  EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.99999.1.8 NAME 'pwdLastSet'
+  DESC 'DBX fixture: AD FILETIME simulated with integer syntax'
+  EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.99999.1.9 NAME 'objectGUID'
+  DESC 'DBX fixture: AD GUID simulated with octetString syntax'
+  EQUALITY octetStringMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.40 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.99999.1.10 NAME 'objectSid'
+  DESC 'DBX fixture: AD SID simulated with octetString syntax'
+  EQUALITY octetStringMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.40 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.99999.1.11 NAME 'sambaNTPassword'
+  DESC 'DBX fixture: password-family name binding (not a real hash)'
+  EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 SINGLE-VALUE )
+olcObjectClasses: ( 1.3.6.1.4.1.99999.2.1 NAME 'dbxTestAccount'
+  DESC 'DBX fixture: auxiliary class bundling every editor kind' AUXILIARY
+  MAY ( dbxIsActive $ dbxManager $ dbxScore $ dbxControlOid $ dbxLastSync $
+  dbxMultiNote $ userAccountControl $ pwdLastSet $ objectGUID $ objectSid $
+  sambaNTPassword $ userCertificate ) )
