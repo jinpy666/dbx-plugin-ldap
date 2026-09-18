@@ -178,6 +178,9 @@ type AuditRecord struct {
 	Result       string `json:"result"`       // ok | denied | error
 	// Source 调用来源（可选，缺省空 = 工作台；"mcp" = MCP 写路径）。
 	Source string `json:"source,omitempty"`
+	// Operation / DurationMs 写操作名与耗时毫秒（F10，可选；旧记录缺省）。
+	Operation  string `json:"operation,omitempty"`
+	DurationMs int64  `json:"durationMs,omitempty"`
 }
 
 // AppendAudit 追加一条审计记录；rec.Time 为空时取当前时间（RFC3339）。

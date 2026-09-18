@@ -325,6 +325,175 @@ func TestSchemaCacheTTLExpiryTriggersColdFetch(t *testing.T) {
 	}
 }
 
+// —— F2b：schema 三类补充定义（matchingRules / matchingRuleUses / ldapSyntaxes） ——
+
+// 三类补充定义样例（含多 NAME、引号 DESC、{len} 后缀、APPLIES 多值、
+// X-NOT-HUMAN-READABLE 扩展、OID-only 条目）。
+var sampleSchemaExtensionsEntry = LDAPEntry{
+	DN: "cn=Subschema",
+	Attributes: map[string][]string{
+		"matchingRules": {
+			`( 2.5.13.2 NAME ( 'caseIgnoreMatch' 'ciMatch' ) DESC 'ignore case match' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )`,
+			`( 1.2.3.40 DESC 'no name rule' SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 )`,
+			`( 2.5.13.5 NAME 'caseExactMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{64} )`,
+		},
+		"matchingRuleUses": {
+			`( 2.5.13.2 NAME 'caseIgnoreMatch' APPLIES ( cn $ sn $ commonName ) )`,
+			`( 2.5.13.5 NAME 'caseExactMatch' DESC 'exact match applies' APPLIES uid )`,
+		},
+		"ldapSyntaxes": {
+			`( 1.3.6.1.4.1.1466.115.121.1.15 DESC 'Directory String' )`,
+			`( 1.3.6.1.4.1.1466.115.121.1.40 DESC 'Octet String' X-NOT-HUMAN-READABLE 'TRUE' )`,
+			`( 1.2.3.99 )`,
+		},
+	},
+}
+
+func TestParseLDAPMatchingRules(t *testing.T) {
+	items := parseLDAPMatchingRules(sampleSchemaExtensionsEntry.Attributes["matchingRules"])
+	if len(items) != 3 {
+		t.Fatalf("items len = %d, want 3", len(items))
+	}
+	// 排序键 = 首个 NAME（无 NAME 回退 OID）：1.2.3.40 < caseExactMatch < caseIgnoreMatch
+	if items[0].OID != "1.2.3.40" || items[1].Names[0] != "caseExactMatch" || items[2].Names[0] != "caseIgnoreMatch" {
+		t.Fatalf("order = %+v", items)
+	}
+	ci := items[2]
+	if ci.OID != "2.5.13.2" {
+		t.Errorf("ci oid = %q", ci.OID)
+	}
+	if len(ci.Names) != 2 || ci.Names[0] != "caseIgnoreMatch" || ci.Names[1] != "ciMatch" {
+		t.Errorf("ci names = %v", ci.Names)
+	}
+	// 引号 DESC 原文
+	if ci.Description != "ignore case match" {
+		t.Errorf("ci desc = %q", ci.Description)
+	}
+	if ci.Syntax != "1.3.6.1.4.1.1466.115.121.1.15" {
+		t.Errorf("ci syntax = %q", ci.Syntax)
+	}
+	// {64} 长度后缀剥离；OID-only 条目回退 OID、无 NAME
+	ce := items[1]
+	if ce.Syntax != "1.3.6.1.4.1.1466.115.121.1.15" {
+		t.Errorf("ce syntax = %q, want stripped OID", ce.Syntax)
+	}
+	if items[0].OID != "1.2.3.40" || len(items[0].Names) != 0 || items[0].Description != "no name rule" {
+		t.Errorf("oid-only rule = %+v", items[0])
+	}
+}
+
+func TestParseLDAPMatchingRuleUses(t *testing.T) {
+	items := parseLDAPMatchingRuleUses(sampleSchemaExtensionsEntry.Attributes["matchingRuleUses"])
+	if len(items) != 2 {
+		t.Fatalf("items len = %d, want 2", len(items))
+	}
+	// 排序键 = 首个 NAME：caseExactMatch < caseIgnoreMatch
+	if items[0].Names[0] != "caseExactMatch" || items[1].Names[0] != "caseIgnoreMatch" {
+		t.Fatalf("order = %+v", items)
+	}
+	ci := items[1]
+	if ci.OID != "2.5.13.2" {
+		t.Errorf("ci oid = %q", ci.OID)
+	}
+	// APPLIES 多值列表（$ 分隔）
+	if got, want := strings.Join(ci.AttributeTypes, ","), "cn,sn,commonName"; got != want {
+		t.Errorf("ci applies = %q, want %q", got, want)
+	}
+	// 引号 DESC 不参与字段集，但不得截断其后的 APPLIES 解析
+	ce := items[0]
+	if got, want := strings.Join(ce.AttributeTypes, ","), "uid"; got != want {
+		t.Errorf("ce applies = %q, want %q", got, want)
+	}
+}
+
+func TestParseLDAPLdapSyntaxes(t *testing.T) {
+	items := parseLDAPLdapSyntaxes(sampleSchemaExtensionsEntry.Attributes["ldapSyntaxes"])
+	if len(items) != 3 {
+		t.Fatalf("items len = %d, want 3", len(items))
+	}
+	// 按 OID 排序：1.2.3.99 < 1.3.6.1...
+	if items[0].OID != "1.2.3.99" {
+		t.Fatalf("order[0].oid = %q", items[0].OID)
+	}
+	dirString := items[1]
+	if dirString.OID != "1.3.6.1.4.1.1466.115.121.1.15" || dirString.Description != "Directory String" {
+		t.Errorf("directoryString = %+v", dirString)
+	}
+	// X-NOT-HUMAN-READABLE 扩展忽略：DESC 照常解析
+	octet := items[2]
+	if octet.OID != "1.3.6.1.4.1.1466.115.121.1.40" || octet.Description != "Octet String" {
+		t.Errorf("octetString = %+v", octet)
+	}
+}
+
+func TestParseLDAPSchemaMetadataIncludesExtensions(t *testing.T) {
+	entry := sampleSubschemaEntry
+	for key, values := range sampleSchemaExtensionsEntry.Attributes {
+		entry.Attributes[key] = values
+	}
+	metadata := parseLDAPSchemaMetadata("cn=Subschema", entry)
+	if len(metadata.MatchingRules) != 3 || len(metadata.MatchingRuleUses) != 2 || len(metadata.LdapSyntaxes) != 3 {
+		t.Fatalf("extensions = %d/%d/%d, want 3/2/3",
+			len(metadata.MatchingRules), len(metadata.MatchingRuleUses), len(metadata.LdapSyntaxes))
+	}
+	if metadata.MatchingRules[2].Names[0] != "caseIgnoreMatch" {
+		t.Errorf("matchingRules[2] = %+v", metadata.MatchingRules[2])
+	}
+	// 缓存深拷贝隔离（新增三类同样不可被调用方改动穿透）
+	cache := NewSchemaCache(time.Minute)
+	cache.Put("conn-ext", metadata)
+	got := cache.Get("conn-ext")
+	got.MatchingRules[2].Names[0] = "mutated"
+	got.MatchingRuleUses[1].AttributeTypes[0] = "mutated"
+	again := cache.Get("conn-ext")
+	if again.MatchingRules[2].Names[0] != "caseIgnoreMatch" || again.MatchingRuleUses[1].AttributeTypes[0] != "cn" {
+		t.Errorf("cache entry mutated through extension slices: %+v %+v", again.MatchingRules, again.MatchingRuleUses)
+	}
+}
+
+// 屏蔽属性过滤只作用于 attributeTypes 族（含 raw 定义串），三类补充定义
+// 原样透出不误伤。
+func TestFilterLDAPSchemaMetadataKeepsExtensions(t *testing.T) {
+	entry := sampleSubschemaEntry
+	for key, values := range sampleSchemaExtensionsEntry.Attributes {
+		entry.Attributes[key] = values
+	}
+	metadata := filterLDAPSchemaMetadataForProfile(Profile{}, parseLDAPSchemaMetadata("cn=Subschema", entry))
+	if len(metadata.MatchingRules) != 3 || len(metadata.MatchingRuleUses) != 2 || len(metadata.LdapSyntaxes) != 3 {
+		t.Fatalf("extensions filtered unexpectedly: %d/%d/%d",
+			len(metadata.MatchingRules), len(metadata.MatchingRuleUses), len(metadata.LdapSyntaxes))
+	}
+	if got, want := strings.Join(metadata.MatchingRuleUses[1].AttributeTypes, ","), "cn,sn,commonName"; got != want {
+		t.Errorf("applies drifted = %q, want %q", got, want)
+	}
+	// attributeTypes 屏蔽过滤仍然生效（userPassword 被剔除）
+	if len(metadata.AttributeTypes) != 3 {
+		t.Errorf("attributeTypes len = %d, want 3", len(metadata.AttributeTypes))
+	}
+}
+
+func TestDefaultSchemaSearchSpecIncludesExtensions(t *testing.T) {
+	spec := DefaultSchemaSearchSpec()
+	want := []string{"attributeTypes", "objectClasses", "matchingRules", "matchingRuleUses", "ldapSyntaxes"}
+	if len(spec.SubschemaAttrs) != len(want) {
+		t.Fatalf("SubschemaAttrs = %v, want %v", spec.SubschemaAttrs, want)
+	}
+	for i, attr := range want {
+		if spec.SubschemaAttrs[i] != attr {
+			t.Fatalf("SubschemaAttrs = %v, want %v", spec.SubschemaAttrs, want)
+		}
+	}
+}
+
+func TestSchemaItemSortKeyFallsBackToOID(t *testing.T) {
+	if got := schemaItemSortKey(nil, "1.2.3.4"); got != "1.2.3.4" {
+		t.Errorf("oid fallback = %q", got)
+	}
+	if got := schemaItemSortKey([]string{"cnMatch"}, "1.2.3.4"); got != "cnMatch" {
+		t.Errorf("name key = %q", got)
+	}
+}
+
 // —— 语法语义扩展（阶段1：value editor 注册表数据源） ————————————————
 
 func TestParseLDAPAttributeTypesSyntaxSemantics(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	ldap "github.com/go-ldap/ldap/v3"
 )
@@ -185,12 +186,16 @@ func TestChildrenCountValidation(t *testing.T) {
 }
 
 func TestSubtreeDeleteAuditRecordShape(t *testing.T) {
-	rec := subtreeDeleteAuditRecord("conn-1", "ou=tree,dc=example,dc=com", 3, "")
+	rec := subtreeDeleteAuditRecord("conn-1", "ou=tree,dc=example,dc=com", 3, "", "deleteSubtree", time.Now())
 	if rec.Action != "subtree_delete" || rec.Result != "ok" || rec.DeletedCount != 3 {
 		t.Fatalf("record = %+v", rec)
 	}
 	if rec.Target != "ou=tree,dc=example,dc=com" {
 		t.Errorf("target = %q, want the deleted subtree DN", rec.Target)
+	}
+	// F10：聚合记录带 operation 操作名。
+	if rec.Operation != "deleteSubtree" {
+		t.Errorf("operation = %q, want deleteSubtree", rec.Operation)
 	}
 	// 事件/落盘字段 camelCase；单条删除记录不得出现 deletedCount。
 	raw, err := json.Marshal(rec)

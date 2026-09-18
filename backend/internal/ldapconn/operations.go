@@ -12,10 +12,13 @@ package ldapconn
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	ldap "github.com/go-ldap/ldap/v3"
 
@@ -43,6 +46,8 @@ type LDAPSearchPreset struct {
 	Scope      string   `json:"scope,omitempty"` // base | one | sub
 	Attributes []string `json:"attributes,omitempty"`
 	SizeLimit  int      `json:"sizeLimit,omitempty"`
+	// Group 预设分组名（F11，可选；旧预设/旧 sidecar 缺省 = 未分组）。
+	Group string `json:"group,omitempty"`
 }
 
 // PresetStore 是预设持久化接口（main.go 注入 store-backed 实现；
@@ -50,6 +55,22 @@ type LDAPSearchPreset struct {
 type PresetStore interface {
 	LoadPresets() ([]LDAPSearchPreset, error)
 	SavePresets(presets []LDAPSearchPreset) error
+}
+
+// writeAuditRecord 组装写路径审计记录（F10：统一携带 operation 操作名与
+// durationMs 执行耗时毫秒；start 由调用方在方法入口 time.Now() 取得）。
+// target 只记 DN，detail/source 不含属性值与凭据。
+func writeAuditRecord(connectionID, action, target, result, detail, source, operation string, start time.Time) AuditRecord {
+	return AuditRecord{
+		ConnectionID: connectionID,
+		Action:       action,
+		Target:       target,
+		Result:       result,
+		Detail:       detail,
+		Source:       source,
+		Operation:    operation,
+		DurationMs:   time.Since(start).Milliseconds(),
+	}
 }
 
 // Search 实现 ldap/search（tiny-rdm Search :356）。
@@ -60,6 +81,9 @@ type PresetStore interface {
 // 500；pageSize > 0 走 paged search 聚合，达聚合上限截断并置 truncated；
 // 请求 attributes 先 sanitizeLDAPAttributes 剔除屏蔽属性；读白名单拒绝时
 // EmitAudit action:"read-policy"/result:"denied"；返回条目剔除屏蔽属性。
+// K-5：搜索（聚合上限 5000，子树导出复用）是聚合型大读，整体改走独立
+// 短连接（withDedicatedConn，聚合完成即关），长搜索不再占用共享连接互斥
+// 区堵死交互读写；门禁与审计仍在取连接之前执行，语义不变。
 func (s *Service) Search(ctx context.Context, req LDAPSearchRequest) (LDAPSearchResult, error) {
 	profile, err := s.Get(req.ConnectionID)
 	if err != nil {
@@ -90,7 +114,9 @@ func (s *Service) Search(ctx context.Context, req LDAPSearchRequest) (LDAPSearch
 
 	var entries []LDAPEntry
 	truncated := false
-	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
+	// K-5：独立短连接执行（失败回退共享 WithConn，见 withDedicatedConn）。
+	isBinaryValue := s.ldapBinaryValuePredicate(req.ConnectionID)
+	err = s.withDedicatedConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
 		// AD 兼容（KN-LDAP 真实连接验证发现）：分页控件与 SizeLimit 同用、
 		// 且匹配总数超过 SizeLimit 时，AD 直接返回 Size Limit Exceeded
 		//（分页失效）。分页路径把上限交给客户端聚合（aggregateLimit），
@@ -118,14 +144,14 @@ func (s *Service) Search(ctx context.Context, req LDAPSearchRequest) (LDAPSearch
 			if searchErr != nil {
 				return searchErr
 			}
-			entries = ldapEntriesToTypes(result)
+			entries = ldapEntriesToTypes(result, isBinaryValue)
 			return nil
 		}
 		result, searchErr := conn.Search(searchReq)
 		if searchErr != nil {
 			return searchErr
 		}
-		entries = ldapEntriesToTypes(result.Entries)
+		entries = ldapEntriesToTypes(result.Entries, isBinaryValue)
 		return nil
 	})
 	if err != nil {
@@ -146,7 +172,17 @@ func (s *Service) Search(ctx context.Context, req LDAPSearchRequest) (LDAPSearch
 // Count 实现 ldap/count（A-LDAP 遗留：树徽章精确计数）。scope 固定 one，
 // 请求 ["1.1"]（no attributes）+ typesOnly 最小化负载；计数上限 5000，
 // 达到上限以 truncated 标记。复用读白名单与 filter 校验，拒绝发审计。
+// K-5：计数（上限 5000）属聚合型大读，走独立短连接（withDedicatedConn，
+// 失败回退共享 WithConn），长计数不再占用共享连接互斥区。
 func (s *Service) Count(ctx context.Context, req LDAPCountRequest) (LDAPCountResult, error) {
+	return s.count(ctx, req, true)
+}
+
+// count 是 Count/ChildrenCount 的共用实现（K-5）。dedicated=true 走独立短
+// 连接（ldap/count 聚合大读），false 保持共享连接 + WithConn（childrenCount
+// 交互读，K-5 要求其排队语义不变）。两种形态的门禁、审计、limit、truncated
+// 语义完全一致，仅取连接方式不同。
+func (s *Service) count(ctx context.Context, req LDAPCountRequest, dedicated bool) (LDAPCountResult, error) {
 	profile, err := s.Get(req.ConnectionID)
 	if err != nil {
 		return LDAPCountResult{}, err
@@ -173,7 +209,7 @@ func (s *Service) Count(ctx context.Context, req LDAPCountRequest) (LDAPCountRes
 	const countLimit = 5000
 	var count int
 	var truncated bool
-	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
+	countOnConn := func(conn *ldap.Conn) error {
 		searchReq := ldap.NewSearchRequest(
 			baseDN,
 			ldap.ScopeSingleLevel,
@@ -196,7 +232,14 @@ func (s *Service) Count(ctx context.Context, req LDAPCountRequest) (LDAPCountRes
 		}
 		count = len(result.Entries)
 		return nil
-	})
+	}
+	// K-5：dedicated=true（ldap/count 聚合大读）走独立短连接；false
+	// （childrenCount 交互读）保持共享连接 + WithConn，排队语义不变。
+	if dedicated {
+		err = s.withDedicatedConn(ctx, req.ConnectionID, countOnConn)
+	} else {
+		err = s.WithConn(ctx, req.ConnectionID, countOnConn)
+	}
 	if err != nil {
 		return LDAPCountResult{}, err
 	}
@@ -288,6 +331,7 @@ func (s *Service) SchemaMetadata(ctx context.Context, req LDAPSchemaMetadataRequ
 // normalizeLDAPWriteDN → normalizeLDAPAddAttributes（含值校验）→
 // ensureLDAPWriteAllowed → WithConn(conn.Add)。审计 action:"add-entry"。
 func (s *Service) AddEntry(ctx context.Context, req LDAPAddEntryRequest) error {
+	start := time.Now()
 	profile, err := s.Get(req.ConnectionID)
 	if err != nil {
 		return err
@@ -301,21 +345,27 @@ func (s *Service) AddEntry(ctx context.Context, req LDAPAddEntryRequest) error {
 		return err
 	}
 	if err := ensureLDAPWriteAllowed(profile, dn, attrNames); err != nil {
-		s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "write-policy", Target: dn, Result: "denied", Detail: err.Error()})
+		s.EmitAudit(writeAuditRecord(req.ConnectionID, "write-policy", dn, "denied", err.Error(), "", "add", start))
 		return err
 	}
 	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
+		// 二进制语法属性值是前端 base64 上传的（见「二进制值协议传输」），
+		// 写入前解码回原始字节。
+		isBinaryValue := s.ldapBinaryValuePredicate(req.ConnectionID)
 		addReq := ldap.NewAddRequest(dn, nil)
 		for attr, values := range attrs {
+			if isBinaryValue(attr) {
+				values = decodeBinaryProtocolValues(values)
+			}
 			addReq.Attribute(attr, values)
 		}
 		return conn.Add(addReq)
 	})
 	if err != nil {
-		s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "add-entry", Target: dn, Result: "error", Detail: err.Error(), Source: req.Source})
+		s.EmitAudit(writeAuditRecord(req.ConnectionID, "add-entry", dn, "error", err.Error(), req.Source, "add", start))
 		return err
 	}
-	s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "add-entry", Target: dn, Result: "ok", Detail: "attributes: " + strings.Join(attrNames, ","), Source: req.Source})
+	s.EmitAudit(writeAuditRecord(req.ConnectionID, "add-entry", dn, "ok", "attributes: "+strings.Join(attrNames, ","), req.Source, "add", start))
 	return nil
 }
 
@@ -323,6 +373,7 @@ func (s *Service) AddEntry(ctx context.Context, req LDAPAddEntryRequest) error {
 // 屏蔽属性在 ensureLDAPWriteAllowed 内拒绝修改；逐条 add/replace/delete。
 // 审计 action:"modify-entry"。
 func (s *Service) ModifyEntry(ctx context.Context, req LDAPModifyEntryRequest) error {
+	start := time.Now()
 	profile, err := s.Get(req.ConnectionID)
 	if err != nil {
 		return err
@@ -336,28 +387,35 @@ func (s *Service) ModifyEntry(ctx context.Context, req LDAPModifyEntryRequest) e
 		return err
 	}
 	if err := ensureLDAPWriteAllowed(profile, dn, attrs); err != nil {
-		s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "write-policy", Target: dn, Result: "denied", Detail: err.Error()})
+		s.EmitAudit(writeAuditRecord(req.ConnectionID, "write-policy", dn, "denied", err.Error(), "", "modify", start))
 		return err
 	}
 	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
+		// 二进制语法属性值是前端 base64 上传的（见「二进制值协议传输」），
+		// 写入前解码回原始字节。
+		isBinaryValue := s.ldapBinaryValuePredicate(req.ConnectionID)
 		modReq := ldap.NewModifyRequest(dn, nil)
 		for _, change := range changes {
+			values := change.Values
+			if isBinaryValue(change.Attribute) {
+				values = decodeBinaryProtocolValues(values)
+			}
 			switch change.Operation {
 			case "add":
-				modReq.Add(change.Attribute, change.Values)
+				modReq.Add(change.Attribute, values)
 			case "replace":
-				modReq.Replace(change.Attribute, change.Values)
+				modReq.Replace(change.Attribute, values)
 			case "delete":
-				modReq.Delete(change.Attribute, change.Values)
+				modReq.Delete(change.Attribute, values)
 			}
 		}
 		return conn.Modify(modReq)
 	})
 	if err != nil {
-		s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "modify-entry", Target: dn, Result: "error", Detail: err.Error(), Source: req.Source})
+		s.EmitAudit(writeAuditRecord(req.ConnectionID, "modify-entry", dn, "error", err.Error(), req.Source, "modify", start))
 		return err
 	}
-	s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "modify-entry", Target: dn, Result: "ok", Detail: "attributes: " + strings.Join(attrs, ","), Source: req.Source})
+	s.EmitAudit(writeAuditRecord(req.ConnectionID, "modify-entry", dn, "ok", "attributes: "+strings.Join(attrs, ","), req.Source, "modify", start))
 	return nil
 }
 
@@ -366,6 +424,7 @@ func (s *Service) ModifyEntry(ctx context.Context, req LDAPModifyEntryRequest) e
 // 隐式落在目标子树内，与 modifyDn 双端校验语义区分）。审计 action:"delete-entry"；
 // recursive 成功/失败聚合为一条 action:"subtree_delete" 记录。
 func (s *Service) DeleteEntry(ctx context.Context, req LDAPDeleteEntryRequest) error {
+	start := time.Now()
 	profile, err := s.Get(req.ConnectionID)
 	if err != nil {
 		return err
@@ -375,20 +434,20 @@ func (s *Service) DeleteEntry(ctx context.Context, req LDAPDeleteEntryRequest) e
 		return err
 	}
 	if err := ensureLDAPWriteAllowed(profile, dn, nil); err != nil {
-		s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "write-policy", Target: dn, Result: "denied", Detail: err.Error()})
+		s.EmitAudit(writeAuditRecord(req.ConnectionID, "write-policy", dn, "denied", err.Error(), "", "delete", start))
 		return err
 	}
 	if req.Recursive {
-		return s.deleteSubtree(ctx, req.ConnectionID, dn, req.Source)
+		return s.deleteSubtree(ctx, req.ConnectionID, dn, req.Source, start)
 	}
 	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
 		return conn.Del(ldap.NewDelRequest(dn, nil))
 	})
 	if err != nil {
-		s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "delete-entry", Target: dn, Result: "error", Detail: err.Error(), Source: req.Source})
+		s.EmitAudit(writeAuditRecord(req.ConnectionID, "delete-entry", dn, "error", err.Error(), req.Source, "delete", start))
 		return err
 	}
-	s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "delete-entry", Target: dn, Result: "ok", Source: req.Source})
+	s.EmitAudit(writeAuditRecord(req.ConnectionID, "delete-entry", dn, "ok", "", req.Source, "delete", start))
 	return nil
 }
 
@@ -397,7 +456,7 @@ func (s *Service) DeleteEntry(ctx context.Context, req LDAPDeleteEntryRequest) e
 // 服务端返回不支持类错误（unavailableCriticalExtension/unavailable/
 // unwillingToPerform）时回退「先序自底向上」逐条删除（深度倒序，先子后父，
 // 最后删目标自身）。两条路径均只发一条聚合审计记录。
-func (s *Service) deleteSubtree(ctx context.Context, connectionID, dn, source string) error {
+func (s *Service) deleteSubtree(ctx context.Context, connectionID, dn, source string, start time.Time) error {
 	var deletedCount int
 	err := s.WithConn(ctx, connectionID, func(conn *ldap.Conn) error {
 		dns, listErr := listSubtreeDNs(conn, dn)
@@ -426,22 +485,26 @@ func (s *Service) deleteSubtree(ctx context.Context, connectionID, dn, source st
 		return nil
 	})
 	if err != nil {
-		s.EmitAudit(AuditRecord{ConnectionID: connectionID, Action: "subtree_delete", Target: dn, Result: "error", Detail: err.Error(), Source: source})
+		s.EmitAudit(writeAuditRecord(connectionID, "subtree_delete", dn, "error", err.Error(), source, "deleteSubtree", start))
 		return err
 	}
-	s.EmitAudit(subtreeDeleteAuditRecord(connectionID, dn, deletedCount, source))
+	rec := writeAuditRecord(connectionID, "subtree_delete", dn, "ok", "", source, "deleteSubtree", start)
+	rec.DeletedCount = deletedCount
+	s.EmitAudit(rec)
 	return nil
 }
 
 // ChildrenCount 实现 ldap/entry/childrenCount（N1）：dn 下直接子条目计数，
 // 语义与 ldap/count 同构（scope=one、(objectClass=*)、typesOnly、上限 5000
 // 截断标记），复用读白名单门禁与拒绝审计（read-policy/denied）。
+// K-5：树徽章属交互读，保持共享连接 + WithConn（count 的 dedicated=false
+// 分支），不受聚合大读独立短连接改造影响。
 func (s *Service) ChildrenCount(ctx context.Context, req LDAPChildrenCountRequest) (LDAPCountResult, error) {
 	dn := strings.TrimSpace(req.DN)
 	if dn == "" {
 		return LDAPCountResult{}, fmt.Errorf("dn is required")
 	}
-	return s.Count(ctx, LDAPCountRequest{ConnectionID: req.ConnectionID, BaseDN: dn})
+	return s.count(ctx, LDAPCountRequest{ConnectionID: req.ConnectionID, BaseDN: dn}, false)
 }
 
 // newSubtreeDeleteRequest 挂 Tree Delete 控件（critical）的 Del 请求
@@ -537,21 +600,17 @@ func orderDeepestFirst(dns []string) ([]string, error) {
 
 // subtreeDeleteAuditRecord 递归删除成功的聚合审计记录（一条；target 为目标
 // DN，deletedCount 为删除条目数含目标自身；不含任何属性值）。
-func subtreeDeleteAuditRecord(connectionID, dn string, deletedCount int, source string) AuditRecord {
-	return AuditRecord{
-		ConnectionID: connectionID,
-		Action:       "subtree_delete",
-		Target:       dn,
-		Result:       "ok",
-		Source:       source,
-		DeletedCount: deletedCount,
-	}
+func subtreeDeleteAuditRecord(connectionID, dn string, deletedCount int, source, operation string, start time.Time) AuditRecord {
+	rec := writeAuditRecord(connectionID, "subtree_delete", dn, "ok", "", source, operation, start)
+	rec.DeletedCount = deletedCount
+	return rec
 }
 
 // ModifyDN 实现 ldap/entry/modifyDn（tiny-rdm ModifyDN :641）：
 // 新旧 DN 均过写白名单（目标 DN 先 ldapModifyDNDestinationDN 计算）。
 // 审计 action:"modify-dn"。
 func (s *Service) ModifyDN(ctx context.Context, req LDAPModifyDNRequest) error {
+	start := time.Now()
 	profile, err := s.Get(req.ConnectionID)
 	if err != nil {
 		return err
@@ -565,7 +624,7 @@ func (s *Service) ModifyDN(ctx context.Context, req LDAPModifyDNRequest) error {
 		return fmt.Errorf("dn and newRdn are required")
 	}
 	if err := ensureLDAPWriteAllowed(profile, dn, nil); err != nil {
-		s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "write-policy", Target: dn, Result: "denied", Detail: err.Error()})
+		s.EmitAudit(writeAuditRecord(req.ConnectionID, "write-policy", dn, "denied", err.Error(), "", "modifyDn", start))
 		return err
 	}
 	destinationDN, err := ldapModifyDNDestinationDN(dn, newRDN, req.NewSuperior)
@@ -573,18 +632,113 @@ func (s *Service) ModifyDN(ctx context.Context, req LDAPModifyDNRequest) error {
 		return err
 	}
 	if err := ensureLDAPWriteAllowed(profile, destinationDN, nil); err != nil {
-		s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "write-policy", Target: destinationDN, Result: "denied", Detail: err.Error()})
+		s.EmitAudit(writeAuditRecord(req.ConnectionID, "write-policy", destinationDN, "denied", err.Error(), "", "modifyDn", start))
 		return err
 	}
 	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
 		return conn.ModifyDN(ldap.NewModifyDNRequest(dn, newRDN, req.DeleteOldRDN, strings.TrimSpace(req.NewSuperior)))
 	})
 	if err != nil {
-		s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "modify-dn", Target: dn, Result: "error", Detail: err.Error(), Source: req.Source})
+		s.EmitAudit(writeAuditRecord(req.ConnectionID, "modify-dn", dn, "error", err.Error(), req.Source, "modifyDn", start))
 		return err
 	}
-	s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "modify-dn", Target: dn, Result: "ok", Detail: "destinationDn: " + destinationDN, Source: req.Source})
+	s.EmitAudit(writeAuditRecord(req.ConnectionID, "modify-dn", dn, "ok", "destinationDn: "+destinationDN, req.Source, "modifyDn", start))
 	return nil
+}
+
+// Compare 实现 ldap/entry/compare（RFC 4511 Compare，F3）：断言条目在指定
+// 属性上持有指定值。读路径：目标 DN 过读白名单（拒绝发 read-policy 审计）；
+// go-ldap 把 compareTrue/compareFalse 结果码折算为 bool/nil，其余错误原样
+// 返回（main 层 bizError 自动补 [ldap-code=N] 前缀）。
+func (s *Service) Compare(ctx context.Context, req LDAPCompareRequest) (LDAPCompareResult, error) {
+	profile, err := s.Get(req.ConnectionID)
+	if err != nil {
+		return LDAPCompareResult{}, err
+	}
+	dn := strings.TrimSpace(req.DN)
+	if dn == "" {
+		return LDAPCompareResult{}, fmt.Errorf("dn is required")
+	}
+	attribute := strings.TrimSpace(req.Attribute)
+	if attribute == "" {
+		return LDAPCompareResult{}, fmt.Errorf("attribute is required")
+	}
+	if err := ensureLDAPReadAllowed(profile, dn); err != nil {
+		s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "read-policy", Target: dn, Result: "denied", Detail: err.Error()})
+		return LDAPCompareResult{}, err
+	}
+	var match bool
+	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
+		ok, cmpErr := conn.Compare(dn, attribute, req.Value)
+		match = ok
+		return cmpErr
+	})
+	if err != nil {
+		return LDAPCompareResult{}, err
+	}
+	return LDAPCompareResult{Match: match}, nil
+}
+
+// WhoAmI 实现 ldap/whoami（RFC 4532 Who Am I? 扩展操作，F3）：返回服务器
+// 认可的授权身份（go-ldap v3.4 为 Conn.WhoAmI(controls)，内部走
+// NewExtendedRequest(ControlTypeWhoAmI)；无新增请求构造函数）。读路径、
+// 无目标 DN，不经过白名单门禁（对齐 rootDSE/schema 等无定位读）。
+func (s *Service) WhoAmI(ctx context.Context, req LDAPWhoAmIRequest) (LDAPWhoAmIResult, error) {
+	if _, err := s.Get(req.ConnectionID); err != nil {
+		return LDAPWhoAmIResult{}, err
+	}
+	var authzID string
+	err := s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
+		result, whoErr := conn.WhoAmI(nil)
+		if whoErr != nil {
+			return whoErr
+		}
+		authzID = result.AuthzID
+		return nil
+	})
+	if err != nil {
+		return LDAPWhoAmIResult{}, err
+	}
+	return LDAPWhoAmIResult{AuthzID: authzID}, nil
+}
+
+// PasswordModify 实现 ldap/entry/passwdModify（RFC 3062 密码修改扩展操作，
+// F3）。写路径门禁对齐 ModifyEntry：read_only 拒绝 + 目标 DN 写白名单。
+// 目标 DN = identity 非空取 identity（按 DN 校验，dnWithinBase 语义一致），
+// 否则 DN；identity 为空时 go-ldap NewPasswordModifyRequest 的 UserIdentity
+// 作用于会话用户，与 DN 为空会话语义一致。审计 action:"passwd-modify"，
+// target 只记 DN，密码值不落审计。
+func (s *Service) PasswordModify(ctx context.Context, req LDAPPasswordModifyRequest) (LDAPPasswordModifyResult, error) {
+	start := time.Now()
+	profile, err := s.Get(req.ConnectionID)
+	if err != nil {
+		return LDAPPasswordModifyResult{}, err
+	}
+	dn, err := normalizeLDAPWriteDN(req.DN)
+	if err != nil {
+		return LDAPPasswordModifyResult{}, err
+	}
+	target := dn
+	if identity := strings.TrimSpace(req.Identity); identity != "" {
+		target, err = normalizeLDAPWriteDN(identity)
+		if err != nil {
+			return LDAPPasswordModifyResult{}, err
+		}
+	}
+	if err := ensureLDAPWriteAllowed(profile, target, nil); err != nil {
+		s.EmitAudit(writeAuditRecord(req.ConnectionID, "write-policy", target, "denied", err.Error(), "", "passwdModify", start))
+		return LDAPPasswordModifyResult{}, err
+	}
+	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
+		_, err := conn.PasswordModify(ldap.NewPasswordModifyRequest(target, req.OldPassword, req.NewPassword))
+		return err
+	})
+	if err != nil {
+		s.EmitAudit(writeAuditRecord(req.ConnectionID, "passwd-modify", target, "error", err.Error(), req.Source, "passwdModify", start))
+		return LDAPPasswordModifyResult{}, err
+	}
+	s.EmitAudit(writeAuditRecord(req.ConnectionID, "passwd-modify", target, "ok", "", req.Source, "passwdModify", start))
+	return LDAPPasswordModifyResult{Success: true}, nil
 }
 
 // ConnectionStatuses 实现 ldap/connections/statuses（tiny-rdm
@@ -681,6 +835,7 @@ func (s *Service) presetStore() PresetStore {
 // sizeLimit=1、filter=(objectClass=*)、never deref；空结果报 entry not found）。
 func (s *Service) readEntry(ctx context.Context, connectionID, dn string, attributes []string, typesOnly bool) (LDAPEntry, error) {
 	var entry LDAPEntry
+	isBinaryValue := s.ldapBinaryValuePredicate(connectionID)
 	err := s.WithConn(ctx, connectionID, func(conn *ldap.Conn) error {
 		result, err := conn.Search(ldap.NewSearchRequest(
 			dn,
@@ -699,7 +854,7 @@ func (s *Service) readEntry(ctx context.Context, connectionID, dn string, attrib
 		if len(result.Entries) == 0 {
 			return fmt.Errorf("ldap entry not found")
 		}
-		entry = ldapEntryToType(result.Entries[0])
+		entry = ldapEntryToType(result.Entries[0], isBinaryValue)
 		return nil
 	})
 	if err != nil {
@@ -761,23 +916,131 @@ func pagedSearchEntries(conn *ldap.Conn, searchReq *ldap.SearchRequest, pageSize
 	}
 }
 
-// ldapEntriesToTypes / ldapEntryToType（tiny-rdm :2042/:2050 原样）。
-func ldapEntriesToTypes(entries []*ldap.Entry) []LDAPEntry {
-	out := make([]LDAPEntry, 0, len(entries))
-	for _, entry := range entries {
-		out = append(out, ldapEntryToType(entry))
+// 二进制值协议传输：go-ldap 的 attr.Values 是对原始字节做 string() 的产物，
+// 非 UTF-8 字节经 JSON 序列化会被替换为 U+FFFD，二进制值在传输层就已损坏
+//（前端 BinaryValueEditor 拿到的不再是合法 base64）。因此：
+//   - 读路径：二进制属性值统一 base64 编码（前端本就按 base64 解释）；
+//     普通属性仅对非法 UTF-8 的单值 base64 兜底，合法文本保持原样。
+//   - 写路径：二进制语法属性的 base64 值解码回原始字节再下发（修复此前
+//     「上传把 base64 文本当值写进目录」的静默损坏）；解码失败的值原样
+//     下发，保留脚本/客户端直写原始字节的兼容路径。
+//
+// 判定优先级与前端 valueKinds.ts 一致：密码类名字永远排除（unicodePwd
+// 语法是 octetString，值是明文/{SSHA} 文本，绝不能 base64 编解码）→
+// 二进制名字绑定（objectGUID/objectSid/*Photo/*Certificate/userPKCS12）→
+// schema 语法 OID（octetString/JPEG/证书族）。
+
+// ldapBinarySyntaxOIDs 二进制语法集合（对齐 valueKinds.ts SYNTAX_KINDS 的
+// binary 绑定子集；1.3.6.1.4.1.1466.115.121.1.5 Binary 旧语法一并纳入）。
+var ldapBinarySyntaxOIDs = map[string]struct{}{
+	"1.3.6.1.4.1.1466.115.121.1.5":  {}, // Binary（旧传真/图像类）
+	"1.3.6.1.4.1.1466.115.121.1.8":  {}, // Certificate
+	"1.3.6.1.4.1.1466.115.121.1.9":  {}, // Certificate List
+	"1.3.6.1.4.1.1466.115.121.1.10": {}, // Certification Path
+	"1.3.6.1.4.1.1466.115.121.1.28": {}, // JPEG
+	"1.3.6.1.4.1.1466.115.121.1.40": {}, // Octet String
+}
+
+// ldapPasswordValueNames 密码语义属性名（值按文本处理，见上方优先级说明）。
+var ldapPasswordValueNames = map[string]struct{}{
+	"userpassword": {},
+	"unicodepwd":   {},
+}
+
+// ldapAttrNameKey 属性名归一：小写 + 剥 ";binary" 等传输选项后缀。
+func ldapAttrNameKey(name string) string {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if idx := strings.Index(key, ";"); idx >= 0 {
+		key = key[:idx]
+	}
+	return key
+}
+
+func ldapPasswordValueAttribute(name string) bool {
+	key := ldapAttrNameKey(name)
+	if _, ok := ldapPasswordValueNames[key]; ok {
+		return true
+	}
+	return strings.HasSuffix(key, "password")
+}
+
+func ldapBinaryValueAttribute(name string) bool {
+	key := ldapAttrNameKey(name)
+	switch key {
+	case "objectguid", "objectsid", "userpkcs12":
+		return true
+	}
+	return strings.HasSuffix(key, "photo") || strings.HasSuffix(key, "certificate")
+}
+
+// ldapBinaryValuePredicate 返回该连接「属性值是否按二进制 base64 传输」的
+// 判定函数。schema 缓存未加载时仅靠名字绑定（读路径另有非法 UTF-8 兜底）。
+func (s *Service) ldapBinaryValuePredicate(connectionID string) func(string) bool {
+	binaryNames := map[string]struct{}{}
+	if metadata := s.schemaCache().Get(connectionID); metadata != nil {
+		for _, attrType := range metadata.AttributeTypes {
+			if _, ok := ldapBinarySyntaxOIDs[attrType.Syntax]; !ok {
+				continue
+			}
+			for _, name := range append([]string{attrType.Name}, attrType.Names...) {
+				if key := ldapAttrNameKey(name); key != "" {
+					binaryNames[key] = struct{}{}
+				}
+			}
+		}
+	}
+	return func(name string) bool {
+		if ldapPasswordValueAttribute(name) {
+			return false
+		}
+		if ldapBinaryValueAttribute(name) {
+			return true
+		}
+		_, ok := binaryNames[ldapAttrNameKey(name)]
+		return ok
+	}
+}
+
+// decodeBinaryProtocolValues 写路径：base64 → 原始字节；非法 base64 或空
+// 解码结果原样返回（normalizeLDAPWriteValues 已拒绝空值，此处防御直写）。
+func decodeBinaryProtocolValues(values []string) []string {
+	out := make([]string, len(values))
+	for index, value := range values {
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(value))
+		if err != nil || len(decoded) == 0 {
+			out[index] = value
+			continue
+		}
+		out[index] = string(decoded)
 	}
 	return out
 }
 
-func ldapEntryToType(entry *ldap.Entry) LDAPEntry {
+// ldapEntriesToTypes / ldapEntryToType（tiny-rdm :2042/:2050 语义，叠加
+// 二进制值 base64 保真传输，见本文件「二进制值协议传输」说明）。
+func ldapEntriesToTypes(entries []*ldap.Entry, isBinary func(string) bool) []LDAPEntry {
+	out := make([]LDAPEntry, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, ldapEntryToType(entry, isBinary))
+	}
+	return out
+}
+
+func ldapEntryToType(entry *ldap.Entry, isBinary func(string) bool) LDAPEntry {
 	if entry == nil {
 		return LDAPEntry{}
 	}
 	attrs := make(map[string][]string, len(entry.Attributes))
 	for _, attr := range entry.Attributes {
-		values := make([]string, len(attr.Values))
-		copy(values, attr.Values)
+		rawValues := attr.ByteValues
+		values := make([]string, len(rawValues))
+		for index, raw := range rawValues {
+			if isBinary(attr.Name) || !utf8.Valid(raw) {
+				values[index] = base64.StdEncoding.EncodeToString(raw)
+			} else {
+				values[index] = string(raw)
+			}
+		}
 		attrs[attr.Name] = values
 	}
 	return LDAPEntry{DN: entry.DN, Attributes: attrs}

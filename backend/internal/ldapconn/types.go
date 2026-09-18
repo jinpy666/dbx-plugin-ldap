@@ -276,6 +276,32 @@ type LDAPSchemaObjectClassAttributes struct {
 	May         []string `json:"may"`
 }
 
+// LDAPSchemaMatchingRule schema matchingRules 条目（RFC 4512
+// MatchingRuleDescription 最小字段集，F2b）。
+type LDAPSchemaMatchingRule struct {
+	OID   string   `json:"oid"`
+	Names []string `json:"names,omitempty"`
+	// Description SYNTAX 后的引号 DESC 原文；Syntax 语法 OID（剥离 {len} 后缀）。
+	Description string `json:"desc,omitempty"`
+	Syntax      string `json:"syntax,omitempty"`
+}
+
+// LDAPSchemaMatchingRuleUse schema matchingRuleUses 条目（RFC 4512
+// MatchingRuleUseDescription 最小字段集，F2b）。
+type LDAPSchemaMatchingRuleUse struct {
+	OID   string   `json:"oid"`
+	Names []string `json:"names,omitempty"`
+	// AttributeTypes APPLIES 列表（可适用属性集合）。
+	AttributeTypes []string `json:"attributeTypes,omitempty"`
+}
+
+// LDAPSchemaLdapSyntax schema ldapSyntaxes 条目（RFC 4512
+// LdapSyntaxDescription 最小字段集，F2b；X-NOT-HUMAN-READABLE 扩展忽略）。
+type LDAPSchemaLdapSyntax struct {
+	OID         string `json:"oid"`
+	Description string `json:"desc,omitempty"`
+}
+
 // LDAPSchemaMetadata schema 元数据聚合（tiny-rdm :138-143 + 方言/原始定义扩展）。
 type LDAPSchemaMetadata struct {
 	SubschemaSubentry     string                                     `json:"subschemaSubentry"`
@@ -286,6 +312,11 @@ type LDAPSchemaMetadata struct {
 	//（与 AttributeTypes 同序；前端 deriveSchemaMetadata 的历史消费格式）。
 	RawAttributeTypes []string `json:"rawAttributeTypes,omitempty"`
 	RawObjectClasses  []string `json:"rawObjectClasses,omitempty"`
+	// MatchingRules / MatchingRuleUses / LdapSyntaxes schema 三类补充定义
+	//（F2b；服务器未下发对应属性时缺省，旧客户端无感）。
+	MatchingRules    []LDAPSchemaMatchingRule    `json:"matchingRules,omitempty"`
+	MatchingRuleUses []LDAPSchemaMatchingRuleUse `json:"matchingRuleUses,omitempty"`
+	LdapSyntaxes     []LDAPSchemaLdapSyntax      `json:"ldapSyntaxes,omitempty"`
 	// Dialect / VendorName / ProductName 服务器方言检测摘要（RootDSE 推导，
 	// dialect.go；AllowedBaseDNs 禁用 RootDSE 时 Dialect 为 DialectUnknown）。
 	Dialect     string `json:"dialect,omitempty"`
@@ -349,6 +380,49 @@ type LDAPModifyDNRequest struct {
 	Source string `json:"-"`
 }
 
+// LDAPCompareRequest 对应 ldap/entry/compare（RFC 4511 Compare，F3）。
+type LDAPCompareRequest struct {
+	ConnectionID string `json:"connectionId"`
+	DN           string `json:"dn"`
+	Attribute    string `json:"attribute"`
+	Value        string `json:"value"`
+}
+
+// LDAPCompareResult 对应 ldap/entry/compare 返回（compareTrue/compareFalse
+// 折算为 Match，其余结果码走错误通道）。
+type LDAPCompareResult struct {
+	Match bool `json:"match"`
+}
+
+// LDAPWhoAmIRequest 对应 ldap/whoami（RFC 4532 Who Am I? 扩展操作，F3）。
+type LDAPWhoAmIRequest struct {
+	ConnectionID string `json:"connectionId"`
+}
+
+// LDAPWhoAmIResult 对应 ldap/whoami 返回（authzId 如 "dn:cn=admin,dc=x"，
+// 匿名会话服务器可能返回空串）。
+type LDAPWhoAmIResult struct {
+	AuthzID string `json:"authzId"`
+}
+
+// LDAPPasswordModifyRequest 对应 ldap/entry/passwdModify（RFC 3062 密码修改
+// 扩展操作，F3）。Identity 缺省以 DN 为目标 DN；密码字段只在内存流转，
+// 禁止进日志/审计/事件。
+type LDAPPasswordModifyRequest struct {
+	ConnectionID string `json:"connectionId"`
+	DN           string `json:"dn"`
+	Identity     string `json:"identity,omitempty"`
+	OldPassword  string `json:"oldPassword,omitempty"`
+	NewPassword  string `json:"newPassword,omitempty"`
+	// Source 审计来源（内部传参，不进协议；"mcp" = MCP 写路径）。
+	Source string `json:"-"`
+}
+
+// LDAPPasswordModifyResult 对应 ldap/entry/passwdModify 返回。
+type LDAPPasswordModifyResult struct {
+	Success bool `json:"success"`
+}
+
 // LDAPConnectionStatus 连接状态（tiny-rdm :176-184；ProfileID→ConnectionID）。
 type LDAPConnectionStatus struct {
 	ConnectionID string `json:"connectionId"`
@@ -374,6 +448,11 @@ type AuditRecord struct {
 	// Source 调用来源（M0 审计事件形状不变，新增可选字段）：缺省空 = 工作
 	// 台；"mcp" = MCP 写路径（设计 §4：所有 MCP 写审计记 source:"mcp"）。
 	Source string `json:"source,omitempty"`
+	// Operation / DurationMs 写操作名与耗时毫秒（F10，可选字段；旧记录缺省）。
+	// Operation 取值：add | modify | delete | modifyDn | deleteSubtree |
+	// passwdModify；DurationMs 由 time.Since 包裹执行段测得。
+	Operation  string `json:"operation,omitempty"`
+	DurationMs int64  `json:"durationMs,omitempty"`
 	// DeletedCount 仅 recursive 子树删除的聚合审计携带（删除条目数，含目标
 	// 自身；单条删除/拒绝路径不出现）。
 	DeletedCount int `json:"deletedCount,omitempty"`

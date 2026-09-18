@@ -11,6 +11,7 @@
 //	ldap/count | ldap/entry/get | ldap/rootDse | ldap/schema |
 //	ldap/check | ldap/entry/add | ldap/entry/modify | ldap/entry/delete |
 //	ldap/entry/childrenCount | ldap/entry/modifyDn |
+//	ldap/entry/compare | ldap/whoami | ldap/entry/passwdModify      （F3）
 //	ldap/connections/statuses |
 //	ldap/presets/list | ldap/presets/save | ldap/presets/remove    （转发 internal/ldapconn）
 //	ldap/ui/state/report                                            （MCP intent 回报，前端回调）
@@ -28,6 +29,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -75,6 +77,8 @@ func runMcpStdio() {
 			Target:       rec.Target,
 			Result:       auditResultForStore(rec.Result),
 			Source:       rec.Source,
+			Operation:    rec.Operation,
+			DurationMs:   rec.DurationMs,
 		}); err != nil {
 			log.Printf("[dbx-plugin-ldap] audit write failed: %v", err)
 		}
@@ -191,6 +195,12 @@ func (h *pluginHandler) Handle(
 		return h.forwardChildrenCount(params)
 	case "ldap/entry/modifyDn":
 		return h.forwardModifyDN(params)
+	case "ldap/entry/compare":
+		return h.forwardCompare(params)
+	case "ldap/whoami":
+		return h.forwardWhoAmI(params)
+	case "ldap/entry/passwdModify":
+		return h.forwardPasswordModify(params)
 	case "ldap/connections/statuses":
 		return h.forwardStatuses()
 	case "ldap/presets/list":
@@ -424,6 +434,47 @@ func (h *pluginHandler) forwardModifyDN(params json.RawMessage) (any, *dbxplugin
 	return map[string]any{"success": true}, nil
 }
 
+// forwardCompare 处理 ldap/entry/compare（F3，读路径）：门禁/审计在 Service
+// 层完成，这里只转发。
+func (h *pluginHandler) forwardCompare(params json.RawMessage) (any, *dbxpluginsdk.PluginError) {
+	var req ldapconn.LDAPCompareRequest
+	if perr := decodeParams(params, &req); perr != nil {
+		return nil, perr
+	}
+	result, err := h.svc.Compare(getContext(), req)
+	if err != nil {
+		return nil, bizError(err)
+	}
+	return result, nil
+}
+
+// forwardWhoAmI 处理 ldap/whoami（F3，读路径）。
+func (h *pluginHandler) forwardWhoAmI(params json.RawMessage) (any, *dbxpluginsdk.PluginError) {
+	var req ldapconn.LDAPWhoAmIRequest
+	if perr := decodeParams(params, &req); perr != nil {
+		return nil, perr
+	}
+	result, err := h.svc.WhoAmI(getContext(), req)
+	if err != nil {
+		return nil, bizError(err)
+	}
+	return result, nil
+}
+
+// forwardPasswordModify 处理 ldap/entry/passwdModify（F3，写路径）：read_only
+// 门禁与审计在 Service 层完成，handler 只转发。
+func (h *pluginHandler) forwardPasswordModify(params json.RawMessage) (any, *dbxpluginsdk.PluginError) {
+	var req ldapconn.LDAPPasswordModifyRequest
+	if perr := decodeParams(params, &req); perr != nil {
+		return nil, perr
+	}
+	result, err := h.svc.PasswordModify(getContext(), req)
+	if err != nil {
+		return nil, bizError(err)
+	}
+	return result, nil
+}
+
 func (h *pluginHandler) forwardStatuses() (any, *dbxpluginsdk.PluginError) {
 	statuses, err := h.svc.ConnectionStatuses()
 	if err != nil {
@@ -567,6 +618,8 @@ func (h *pluginHandler) auditRecord(rec ldapconn.AuditRecord) {
 			Target:       rec.Target,
 			Result:       auditResultForStore(rec.Result),
 			Source:       rec.Source,
+			Operation:    rec.Operation,
+			DurationMs:   rec.DurationMs,
 		}); err != nil {
 			log.Printf("[dbx-plugin-ldap] audit write failed: %v", err)
 		}
@@ -622,8 +675,25 @@ func invalidParams(err error) *dbxpluginsdk.PluginError {
 }
 
 // bizError 业务错误统一 -32000（对齐 ssh-sftp to_plugin_error）。
+// 错误携带 go-ldap 结果码时，message 前缀 "[ldap-code=<十进制>]"
+// （matchedDN 非空再追加 " [ldap-matched=<DN>]"），与前端
+// frontend/src/lib/ldapErrors.ts 的 parseLdapErrorMeta 构成契约；
+// 原始错误串完整保留，既有文本正则仍可命中。无元数据时行为不变。
 func bizError(err error) *dbxpluginsdk.PluginError {
-	return dbxpluginsdk.NewError(-32000, err.Error())
+	msg := err.Error()
+	if code, matchedDN, ok := ldapconn.LdapErrorMeta(err); ok {
+		var prefix strings.Builder
+		prefix.WriteString("[ldap-code=")
+		prefix.WriteString(strconv.Itoa(code))
+		prefix.WriteString("]")
+		if matchedDN != "" {
+			prefix.WriteString(" [ldap-matched=")
+			prefix.WriteString(matchedDN)
+			prefix.WriteString("]")
+		}
+		msg = prefix.String() + msg
+	}
+	return dbxpluginsdk.NewError(-32000, msg)
 }
 
 // getContext 返回请求级 context（jsonl SDK 无 ctx 传递，超时由

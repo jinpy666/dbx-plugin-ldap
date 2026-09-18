@@ -14,12 +14,16 @@ import (
 	"time"
 )
 
-// parseLDAPSchemaMetadata 解析 subschema 条目（tiny-rdm :773 原样 + 原始定义串保留）。
+// parseLDAPSchemaMetadata 解析 subschema 条目（tiny-rdm :773 原样 + 原始定义串保留
+// + F2b 三类补充定义）。
 func parseLDAPSchemaMetadata(schemaDN string, entry LDAPEntry) LDAPSchemaMetadata {
 	rawAttributeTypes := append([]string{}, entry.Attributes["attributeTypes"]...)
 	rawObjectClasses := append([]string{}, entry.Attributes["objectClasses"]...)
 	attributeTypes := parseLDAPAttributeTypes(entry.Attributes["attributeTypes"])
 	objectClasses := parseLDAPObjectClasses(entry.Attributes["objectClasses"])
+	matchingRules := parseLDAPMatchingRules(entry.Attributes["matchingRules"])
+	matchingRuleUses := parseLDAPMatchingRuleUses(entry.Attributes["matchingRuleUses"])
+	ldapSyntaxes := parseLDAPLdapSyntaxes(entry.Attributes["ldapSyntaxes"])
 	attributeNames := make([]string, 0, len(attributeTypes))
 	seen := map[string]bool{}
 	for _, attr := range attributeTypes {
@@ -38,6 +42,9 @@ func parseLDAPSchemaMetadata(schemaDN string, entry LDAPEntry) LDAPSchemaMetadat
 		AttributeNames:        attributeNames,
 		AttributeTypes:        attributeTypes,
 		ObjectClassAttributes: objectClasses,
+		MatchingRules:         matchingRules,
+		MatchingRuleUses:      matchingRuleUses,
+		LdapSyntaxes:          ldapSyntaxes,
 		RawAttributeTypes:     rawAttributeTypes,
 		RawObjectClasses:      rawObjectClasses,
 	}
@@ -76,6 +83,8 @@ func filterLDAPSchemaMetadataForProfile(profile Profile, metadata LDAPSchemaMeta
 		attributeTypes = append(attributeTypes, attr)
 	}
 	metadata.AttributeTypes = attributeTypes
+	// F2b 三类补充定义（matchingRules/matchingRuleUses/ldapSyntaxes）不经屏蔽
+	// 属性过滤：它们描述规则与语法本身，不含用户数据属性，原样透出。
 	// 原始定义串按同款属性名策略过滤，避免被屏蔽属性的定义透出。
 	metadata.RawAttributeTypes = filterRawDefinitions(metadata.RawAttributeTypes, isAllowedAttr)
 	metadata.RawObjectClasses = filterRawDefinitions(metadata.RawObjectClasses, isAllowedAttr)
@@ -129,6 +138,78 @@ func stripLDAPSyntaxLength(syntax string) string {
 		return syntax[:idx]
 	}
 	return syntax
+}
+
+// schemaItemSortKey 三类补充定义的排序键：首个 NAME，无 NAME（或上游关键字
+// 同名截断）回退 OID，排序行为对齐 parseLDAPAttributeTypes。
+func schemaItemSortKey(names []string, oid string) string {
+	if len(names) > 0 && strings.TrimSpace(names[0]) != "" {
+		return names[0]
+	}
+	return oid
+}
+
+// parseLDAPMatchingRules 解析 RFC 4512 MatchingRuleDescription（F2b 最小字段集：
+// oid/names/desc/syntax；DESC 支持引号原文，SYNTAX 剥离 {len} 后缀）。
+func parseLDAPMatchingRules(values []string) []LDAPSchemaMatchingRule {
+	items := make([]LDAPSchemaMatchingRule, 0, len(values))
+	for _, value := range values {
+		tokens := tokenizeLDAPSchemaValue(value)
+		if len(tokens) == 0 {
+			continue
+		}
+		items = append(items, LDAPSchemaMatchingRule{
+			OID:         tokens[0],
+			Names:       schemaTokenList(tokens, "NAME"),
+			Description: schemaTokenValue(tokens, "DESC"),
+			Syntax:      stripLDAPSyntaxLength(schemaTokenValue(tokens, "SYNTAX")),
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return strings.ToLower(schemaItemSortKey(items[i].Names, items[i].OID)) < strings.ToLower(schemaItemSortKey(items[j].Names, items[j].OID))
+	})
+	return items
+}
+
+// parseLDAPMatchingRuleUses 解析 RFC 4512 MatchingRuleUseDescription（F2b 最小
+// 字段集：oid/names/attributeTypes，attributeTypes 取 APPLIES 列表）。
+func parseLDAPMatchingRuleUses(values []string) []LDAPSchemaMatchingRuleUse {
+	items := make([]LDAPSchemaMatchingRuleUse, 0, len(values))
+	for _, value := range values {
+		tokens := tokenizeLDAPSchemaValue(value)
+		if len(tokens) == 0 {
+			continue
+		}
+		items = append(items, LDAPSchemaMatchingRuleUse{
+			OID:            tokens[0],
+			Names:          schemaTokenList(tokens, "NAME"),
+			AttributeTypes: schemaTokenList(tokens, "APPLIES"),
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return strings.ToLower(schemaItemSortKey(items[i].Names, items[i].OID)) < strings.ToLower(schemaItemSortKey(items[j].Names, items[j].OID))
+	})
+	return items
+}
+
+// parseLDAPLdapSyntaxes 解析 RFC 4512 LdapSyntaxDescription（F2b 最小字段集：
+// oid/desc；X-NOT-HUMAN-READABLE 扩展仅标记不可读，按需求忽略）。
+func parseLDAPLdapSyntaxes(values []string) []LDAPSchemaLdapSyntax {
+	items := make([]LDAPSchemaLdapSyntax, 0, len(values))
+	for _, value := range values {
+		tokens := tokenizeLDAPSchemaValue(value)
+		if len(tokens) == 0 {
+			continue
+		}
+		items = append(items, LDAPSchemaLdapSyntax{
+			OID:         tokens[0],
+			Description: schemaTokenValue(tokens, "DESC"),
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return strings.ToLower(items[i].OID) < strings.ToLower(items[j].OID)
+	})
+	return items
 }
 
 // schemaTokenHas 判断无值关键字（如 SINGLE-VALUE）是否出现。
@@ -270,7 +351,8 @@ func schemaTokenList(tokens []string, key string) []string {
 
 func isLDAPSchemaKeyword(value string) bool {
 	switch strings.ToUpper(value) {
-	case "NAME", "DESC", "OBSOLETE", "SUP", "EQUALITY", "ORDERING", "SUBSTR", "SYNTAX", "SINGLE-VALUE", "COLLECTIVE", "NO-USER-MODIFICATION", "USAGE", "ABSTRACT", "STRUCTURAL", "AUXILIARY", "MUST", "MAY", "X-ORIGIN":
+	case "NAME", "DESC", "OBSOLETE", "SUP", "EQUALITY", "ORDERING", "SUBSTR", "SYNTAX", "SINGLE-VALUE", "COLLECTIVE", "NO-USER-MODIFICATION", "USAGE", "ABSTRACT", "STRUCTURAL", "AUXILIARY", "MUST", "MAY", "APPLIES", "X-ORIGIN":
+		// APPLIES 为 F2b matchingRuleUses 引入：NAME 列表遇到它必须截断。
 		return true
 	default:
 		return false
@@ -369,6 +451,19 @@ func cloneSchemaMetadata(m *LDAPSchemaMetadata) LDAPSchemaMetadata {
 		item.May = append([]string{}, item.May...)
 		out.ObjectClassAttributes[key] = item
 	}
+	// F2b 三类补充定义同步深拷贝（嵌套 slice 隔离）。
+	out.MatchingRules = make([]LDAPSchemaMatchingRule, len(m.MatchingRules))
+	for i, item := range m.MatchingRules {
+		item.Names = append([]string{}, item.Names...)
+		out.MatchingRules[i] = item
+	}
+	out.MatchingRuleUses = make([]LDAPSchemaMatchingRuleUse, len(m.MatchingRuleUses))
+	for i, item := range m.MatchingRuleUses {
+		item.Names = append([]string{}, item.Names...)
+		item.AttributeTypes = append([]string{}, item.AttributeTypes...)
+		out.MatchingRuleUses[i] = item
+	}
+	out.LdapSyntaxes = append([]LDAPSchemaLdapSyntax{}, m.LdapSyntaxes...)
 	return out
 }
 
@@ -402,7 +497,7 @@ func DefaultSchemaSearchSpec() SchemaSearchSpec {
 			"supportedCapabilities",
 			"supportedLDAPVersion",
 		},
-		SubschemaAttrs: []string{"attributeTypes", "objectClasses"},
+		SubschemaAttrs: []string{"attributeTypes", "objectClasses", "matchingRules", "matchingRuleUses", "ldapSyntaxes"},
 	}
 }
 

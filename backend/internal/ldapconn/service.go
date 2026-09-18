@@ -76,6 +76,11 @@ type Service struct {
 	// operations.go 的 PresetStore 契约）。nil 时 ldap/presets/* 报错。
 	Presets PresetStore
 
+	// dedicatedDialFn 是聚合型大读（K-5：ldap/search 聚合与 ldap/count）
+	// 独立短连接的拨号函数（缺省 dialProfile，与真实建连同一套语义）。抽成
+	// 字段只为单测注入 stub——真网络拨号不可进单测；领域代码勿在别处改写
+	// （与 checkDialFn 同款约束）。
+	dedicatedDialFn func(ctx context.Context, profile Profile, target connTarget, secrets bindSecrets) (*ldap.Conn, error)
 	// checkDialFn 是 ldap/check network 段的拨号函数（缺省 dialTransport，
 	// 与真实建连同一套 host/port/TLS 语义）。抽成字段只为单测注入 stub——
 	// 真网络拨号不可进单测；领域代码勿在别处改写。
@@ -88,11 +93,12 @@ type Service struct {
 // NewService 创建空连接表。
 func NewService() *Service {
 	return &Service{
-		conns:          map[string]*connEntry{},
-		searchSessions: map[string]*ldapSearchSession{},
-		SchemaCache:    NewSchemaCache(0), // 0 → schema.go 默认 10 分钟 TTL
-		checkDialFn:    dialTransport,
-		checkProbeFn:   probeBindSession,
+		conns:           map[string]*connEntry{},
+		searchSessions:  map[string]*ldapSearchSession{},
+		SchemaCache:     NewSchemaCache(0), // 0 → schema.go 默认 10 分钟 TTL
+		dedicatedDialFn: dialProfile,
+		checkDialFn:     dialTransport,
+		checkProbeFn:    probeBindSession,
 	}
 }
 
