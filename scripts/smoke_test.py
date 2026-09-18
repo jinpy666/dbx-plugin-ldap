@@ -567,13 +567,16 @@ def run_s13(client: SidecarClient) -> None:
 
 @scenario("S14", "jpegPhoto binary round-trip")
 def run_s14(client: SidecarClient) -> None:
-    """S14 binary attribute: the seeded jpegPhoto sample is written to a fresh
-    entry via entry/modify and read back via entry/get; the base64 must match
-    byte-for-byte (JSON carries bytes as latin-1-mapped code points)."""
+    """S14 binary attribute: the seeded jpegPhoto sample is uploaded to a
+    fresh entry per the binary-value protocol — values of binary-syntax
+    attributes travel base64-encoded and are decoded server-side before the
+    LDAP write (decodeBinaryProtocolValues); entry/get returns them
+    base64-encoded again (ldapEntryToType). Round-trip must be
+    byte-identical against the original bytes."""
     connect(client, make_connection("smoke-photo"))
     ensure_people_ou(client)
     photo = base64.b64decode(SMOKE_JPEG_B64)
-    value = photo.decode("latin-1")  # U+0000-U+00FF bijection over the wire
+    value = SMOKE_JPEG_B64  # 协议：二进制语法属性的值按 base64 上传
     dn = f"cn=Smoke Photo {uuid.uuid4().hex[:8]},{PEOPLE_OU}"
     rdn = dn.split(",")[0].split("=")[1]
     try:
@@ -589,7 +592,8 @@ def run_s14(client: SidecarClient) -> None:
         values = fetched.get("entry", {}).get("attributes", {}).get("jpegPhoto", [])
         if len(values) != 1:
             raise AssertionError(f"jpegPhoto read-back missing: {fetched.get('entry', {}).get('attributes')}")
-        if values[0].encode("latin-1") != photo:
+        # 读路径对二进制语法属性返回 base64 文本；解码后须与原始字节一致。
+        if base64.b64decode(values[0]) != photo:
             raise AssertionError("jpegPhoto round-trip mismatch")
     finally:
         try:

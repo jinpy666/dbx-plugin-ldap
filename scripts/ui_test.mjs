@@ -871,10 +871,11 @@ test("value copy menu writes base64 through the mock clipboard", async (page) =>
   await page.locator(".ag-row").first().dblclick();
   await page.locator(".editor-modal").waitFor();
   const row = page.locator(".attr-row").filter({ has: page.locator('textarea[aria-label="uid"]') }).first();
-  await row.locator('button[title="复制"]').click();
+  // UX-V7 右键化：行内复制按钮已移除，右键值行打开统一复制菜单（5 项）。
+  await row.click({ button: "right" });
   const menu = page.locator(".editor-modal .context-menu");
   await menu.waitFor();
-  expectEqual(await menu.locator("[role='menuitem']").count(), 3, "copy menu has three items");
+  expectEqual(await menu.locator("[role='menuitem']").count(), 5, "copy menu has five items");
   await menu.getByRole("menuitem", { name: "以 Base64 复制" }).click();
   await page.waitForFunction(() => window.dbxPlugin.clipboardWrites?.at(-1) === "Y29weS1h");
   await page.keyboard.press("Escape");
