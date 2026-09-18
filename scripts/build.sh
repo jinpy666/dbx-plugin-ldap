@@ -2,20 +2,38 @@
 # Build the LDAP plugin frontend and package a .dbxp for the current platform.
 # Frontend three-step (typecheck/test/build) is owned by this path; the Go
 # backend + manifest.json are owned by the backend path — packaging is
-# attempted only when manifest.json exists.
+# attempted only when manifest.json exists. Stale dist/ artifacts from older
+# plugin versions are pruned after packaging.
+#
+# Usage:
+#   scripts/build.sh                # typecheck + tests + build + package
+#   scripts/build.sh --skip-tests   # fast iteration: vite build + package only
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 if ! command -v pnpm >/dev/null; then
-  export PATH="$HOME/Library/pnpm:$HOME/.nvm/versions/node/v22.21.0/bin:$PATH"
+  NODE_BIN="$(ls -d "$HOME"/.nvm/versions/node/v22*/bin 2>/dev/null | sort -V | tail -1 || true)"
+  export PATH="$HOME/Library/pnpm:${NODE_BIN:+$NODE_BIN:}$PATH"
 fi
+
+SKIP_TESTS=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --skip-tests) SKIP_TESTS=1; shift ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
 
 echo "==> frontend: install + typecheck + test + build"
 if [ ! -d frontend/node_modules ]; then
-  pnpm --dir frontend install
+  pnpm --dir frontend install --frozen-lockfile
 fi
-pnpm --dir frontend typecheck
-pnpm --dir frontend test
+if [ "$SKIP_TESTS" = 1 ]; then
+  echo "--skip-tests: frontend typecheck + test skipped (artifacts are NOT verified)"
+else
+  pnpm --dir frontend typecheck
+  pnpm --dir frontend test
+fi
 pnpm --dir frontend build
 
 echo "==> package .dbxp"
@@ -61,6 +79,19 @@ else
   echo "WARN: native plugin-cli for $(uname -s)/$(uname -m) not found; falling back to the npm wrapper (its bundled SDK may conflict with backend go.mod)" >&2
   env -u DBX_PLUGIN_SDK_ROOT NO_COLOR=1 GOFLAGS="-ldflags=-X=main.version=${PLUGIN_VERSION}" dbx-plugin package .
 fi
+
+# Prune .dbxp/.artifact.json left over from older plugin versions so dist/
+# holds only the build just produced (install.sh picks the newest file).
+echo "==> pruning stale dist artifacts (keeping v${PLUGIN_VERSION})"
+shopt -s nullglob
+for f in dist/*.dbxp dist/*.artifact.json; do
+  case "$f" in
+    *"-${PLUGIN_VERSION}-"*) continue ;;
+  esac
+  rm -f "$f"
+  echo "  removed $(basename "$f")"
+done
+shopt -u nullglob
 
 echo
 echo "Artifacts:"

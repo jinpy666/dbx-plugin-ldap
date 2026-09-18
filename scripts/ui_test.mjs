@@ -228,6 +228,18 @@ test("tree filter failure retries the same keyword and restores results", async 
   expectEqual(await hit.getAttribute("role"), "treeitem", "filtered hit semantics");
 });
 
+// 编辑器弹窗兜底关闭：Esc 会被 dirty 否决拦下（产品正确行为），失败路径
+// 改走显式「取消」通道（不否决），保证遮罩不残留拦截后续用例。
+async function closeEditorIfOpen(page) {
+  if (!(await page.locator(".editor-modal").count())) return;
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(400);
+  if (await page.locator(".editor-modal").count()) {
+    await page.locator(".editor-modal footer button", { hasText: /取消|Cancel/ }).first().click().catch(() => {});
+  }
+  await page.waitForFunction(() => !document.querySelector(".editor-modal"), undefined, { timeout: 5000 }).catch(() => {});
+}
+
 async function captureReview(page, name) {
   if (!process.env.LDAP_UI_ARTIFACT_DIR) return;
   mkdirSync(process.env.LDAP_UI_ARTIFACT_DIR, { recursive: true });
@@ -252,7 +264,8 @@ test("presets follow save/remove responses and restore the updated filter", asyn
   await page.locator(".filter-source input").fill("(uid=unsaved)");
   await page.locator(".search-presets select").dispatchEvent("change");
   expectEqual(await page.locator(".qb-preview").innerText(), "(uid=user0002)", "filter restored into builder");
-  page.once("dialog", (dialog) => dialog.accept());
+  // 预设删除为两步确认（armed → 再次点击确认），无原生 confirm。
+  await page.locator(".search-presets button").last().click();
   await page.locator(".search-presets button").last().click();
   await page.waitForFunction(() => document.querySelector(".search-presets select").options.length === 1);
 });
@@ -414,7 +427,22 @@ test("RootDSE export includes explicitly requested operational metadata", async 
       };
     };
   });
+  // F12：服务器信息弹窗（分组展示 + 设为浏览基 + 弹窗内导出）。
   await page.getByRole("button", { name: /Root\s*DSE/ }).click();
+  await page.locator(".modal.panel-modal").waitFor();
+  await page.waitForFunction(() => document.querySelector(".modal.panel-modal")?.textContent?.includes("dc=demo,dc=dbx"));
+  // 连接与服务器区块：mock check/whoami 恒通过 → 状态点 + Ping 文案 + 授权
+  // 身份；fixture 的 supportedControl 命中 OID 注册表 → RFC 标题上屏。
+  await page.waitForFunction(() => Boolean(document.querySelector(".modal.panel-modal .state-dot.connected")));
+  await page.waitForFunction(() => document.querySelector(".modal.panel-modal")?.textContent?.includes("网络 1ms · 认证通过"));
+  await page.waitForFunction(() => document.querySelector(".modal.panel-modal")?.textContent?.includes("dn:cn=admin,dc=demo,dc=dbx"));
+  await page.waitForFunction(() => document.querySelector(".modal.panel-modal")?.textContent?.includes("Simple Paged Results Manipulation"));
+  // namingContexts 分组带「设为浏览基」：点击后 baseDn 联动 + 通知。
+  const setBaseButton = page.locator(".modal.panel-modal .toolbar-button", { hasText: "设为浏览基" }).first();
+  await setBaseButton.click();
+  await page.waitForFunction(() => document.querySelector(".notice")?.textContent?.includes("浏览基已设为 dc=demo,dc=dbx"));
+  // 弹窗内导出：同一"另存为"链路，内容含运行元数据。
+  await page.locator(".modal.panel-modal .toolbar-button", { hasText: "导出" }).click();
   await page.waitForFunction(() => Boolean(window.__savedExport), undefined, { timeout: 5000 });
   const saved = await page.evaluate(() => window.__savedExport);
   if (saved.suggestedName !== "root-dse.txt") {
@@ -424,6 +452,9 @@ test("RootDSE export includes explicitly requested operational metadata", async 
     throw new Error("RootDSE operational metadata missing from export");
   }
   await page.waitForFunction(() => document.querySelector(".notice")?.textContent === "已导出 root-dse-saved.txt", undefined, { timeout: 3000 });
+  // 关闭弹窗，避免遮罩拦截后续用例。
+  await page.locator(".modal.panel-modal header .icon-button").click();
+  await page.waitForFunction(() => !document.querySelector(".modal.panel-modal"), undefined, { timeout: 8000 });
 });
 
 // 搜索历史放在写操作用例之间：批量用例的 finally 清理会触发审计通知并覆盖
@@ -522,7 +553,8 @@ test("result batch select arms the bar and batch-deletes via confirm", async (pa
     expectEqual(await page.locator(".batch-bar").isVisible(), true, "batch bar armed");
     expectEqual(await page.locator(".batch-count").innerText(), "已选 2 项", "batch count copy");
     await captureReview(page, "ldap-round8-batch-bar");
-    page.once("dialog", (dialog) => dialog.accept());
+    // 批量删除为两步确认（armed → 再次点击确认），无原生 confirm。
+    await page.locator(".batch-delete").click();
     await page.locator(".batch-delete").click();
     await page.waitForFunction(() => document.querySelectorAll(".ag-row").length === 0);
   } finally {
@@ -598,6 +630,262 @@ test("MCP ui intent fills the form, runs the search and reports state", async (p
   }
 });
 
+test("schema five categories: tabs, rule details and applies-to", async (page) => {
+  try {
+    await page.getByRole("button", { name: "Schema" }).click();
+    await page.locator(".panel-modal").waitFor();
+    for (const tab of ["属性类型", "对象类", "匹配规则", "匹配规则用途", "LDAP 语法"]) {
+      await page.getByRole("tab", { name: tab, exact: true }).waitFor();
+    }
+    await page.getByRole("tab", { name: "匹配规则", exact: true }).click();
+    const ruleRow = page.locator(".schema-attribute-button", { hasText: "caseIgnoreMatch" }).first();
+    await ruleRow.waitFor();
+    await ruleRow.click();
+    try {
+      await page.waitForFunction(() => document.querySelector(".schema-detail-body")?.textContent?.includes("1.3.6.1.4.1.1466.115.121.1.15"), undefined, { timeout: 15000 });
+    } catch {
+      const detail = await page.evaluate(() => ({
+        body: document.querySelector(".schema-detail-body")?.textContent ?? null,
+        selected: [...document.querySelectorAll(".schema-attribute-row.is-selected")].map((el) => el.textContent?.trim()),
+        rows: [...document.querySelectorAll(".schema-col .schema-attribute-button")].slice(0, 6).map((el) => el.textContent?.trim()),
+      }));
+      throw new Error(`schema detail did not show syntax OID: ${JSON.stringify(detail)}`);
+    }
+    await page.getByRole("tab", { name: "匹配规则用途", exact: true }).click();
+    // 切页签会清空选中：新页签需重新点选行。
+    const useRow = page.locator(".schema-attribute-button", { hasText: "caseIgnoreMatch" }).first();
+    await useRow.waitFor();
+    await useRow.click();
+    await page.waitForFunction(() => document.querySelector(".schema-detail-body")?.textContent?.includes("cn, sn, uid"));
+  } finally {
+    // 兜底关闭，防面板残留拦截后续用例。
+    await page.locator(".panel-modal footer").getByRole("button", { name: "关闭" }).click().catch(() => {});
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForFunction(() => !document.querySelector(".panel-modal"), undefined, { timeout: 8000 }).catch(() => {});
+  }
+});
+
+test("bookmark loop: add from tree, jump from toolbar, remove from dropdown", async (page) => {
+  await page.locator(".tree-filter input").fill("");
+  const node = page.locator('.tree-node[title="ou=groups,dc=demo,dc=dbx"]').first();
+  await node.waitFor();
+  await node.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "收藏此条目" }).click();
+  await page.waitForFunction(() => document.querySelector(".notice")?.textContent?.includes("已加入书签"));
+  const starButton = page.locator('.toolbar .icon-button[aria-label="书签"]');
+  await page.waitForFunction(() => !document.querySelector('.toolbar .icon-button[aria-label="书签"]')?.disabled);
+  await starButton.click();
+  const bookmarkItem = page.locator('.context-menu--recent [role="menuitem"]').filter({ hasText: "ou=groups" }).first();
+  await bookmarkItem.waitFor();
+  await bookmarkItem.click();
+  await page.locator(".editor-modal").waitFor();
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+  await starButton.click();
+  await page.locator('.context-menu--recent button[aria-label^="移除书签："]').first().click();
+  await page.waitForFunction(() => document.querySelector(".context-menu--recent")?.textContent?.includes("暂无书签"));
+  await page.keyboard.press("Escape");
+});
+
+test("goto DN reveals and selects the tree node", async (page) => {
+  await page.locator('.toolbar .icon-button[aria-label="跳转到 DN"]').click();
+  await page.locator(".context-menu--recent form input").fill("ou=people,dc=demo,dc=dbx");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector('.tree-node[title="ou=people,dc=demo,dc=dbx"]')?.getAttribute("aria-selected") === "true");
+});
+
+test("compare dialog: match then no-match on the same entry", async (page) => {
+  const node = page.locator('.tree-node[title="ou=groups,dc=demo,dc=dbx"]').first();
+  await node.waitFor();
+  await node.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "比较条目" }).click();
+  await page.locator(".compare-modal").waitFor();
+  await expectEqual(await page.locator(".compare-dn").inputValue(), "ou=groups,dc=demo,dc=dbx", "compare dn prefilled");
+  await page.locator(".compare-attribute-input").fill("cn");
+  await page.locator(".compare-value-input").fill("groups");
+  await page.locator(".compare-modal .primary-button").click();
+  await page.waitForFunction(() => document.querySelector(".compare-modal")?.textContent?.includes("值一致"));
+  await page.locator(".compare-value-input").fill("other");
+  await page.locator(".compare-modal .primary-button").click();
+  await page.waitForFunction(() => document.querySelector(".compare-modal")?.textContent?.includes("值不一致"));
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+});
+
+test("F9 entry tabs: open two entries, switch, dirty veto", async (page) => {
+  const stage = async (label, fn, timeout = 12000) => {
+    try {
+      await fn(timeout);
+    } catch (error) {
+      const state = await page.evaluate(() => ({
+        modal: Boolean(document.querySelector(".editor-modal")),
+        picker: Boolean(document.querySelector(".dn-picker-modal")),
+        tabs: [...document.querySelectorAll(".entry-tab-shell, .entry-tab[role='tab']")].map((el) => `${el.tagName}.${el.className}::${el.textContent?.trim()}::aria-selected=${el.getAttribute("aria-selected")}`),
+        dn: document.querySelector(".entry-dn-row")?.textContent ?? null,
+        notice: document.querySelector(".notice")?.textContent ?? null,
+        rows: document.querySelectorAll(".ag-row").length,
+      }));
+      await page.screenshot({ path: `/tmp/ldap-shots/f9-${label.replace(/[^a-z0-9-]/gi, "_")}.png` }).catch(() => {});
+      throw new Error(`F9 stage [${label}] failed: ${JSON.stringify(state)} :: ${error.message}`);
+    }
+  };
+  // fixture 自备（走查前段测试会增删条目，不依赖共享数据存活）。
+  for (const [dn, attributes] of [
+    ["uid=tabs-1,ou=people,dc=demo,dc=dbx", { objectClass: ["top"], uid: ["tabs-1"] }],
+  ]) {
+    await page.evaluate(([entryDn, entryAttributes]) => window.dbxPlugin.invoke("ldap/entry/add", { dn: entryDn, attributes: entryAttributes }), [dn, attributes]);
+  }
+  try {
+    // 前置：紧凑条若折叠则展开，再切源码模式。
+    const collapsed = await page.locator(".search-advanced.is-collapsed").count();
+    if (collapsed) {
+      await page.locator(".search-form-compact .compact-toggle").click();
+    }
+    await page.locator(".filter-block").waitFor();
+    await page.locator(".search-form .mode-switch button").nth(1).click();
+    // 页签 1：结果行双击开 tabs-1。
+    await page.locator(".filter-source input").fill("(uid=tabs-1)");
+    await page.getByRole("button", { name: /搜索|Search/ }).first().click();
+    await stage("search-1-row", (t) => page.waitForFunction(() => document.querySelectorAll(".ag-row").length === 1, undefined, { timeout: t }));
+    await page.locator(".ag-row").first().dblclick();
+    await stage("editor-open", (t) => page.locator(".editor-modal").waitFor({ timeout: t }));
+    // 页签 2：弹窗内点「＋」→ DnPicker 嵌套打开 → 下钻 ou=people → 选 uid=tabs-2
+    //（编辑器打开期间目录树被遮罩挡住，「＋」是打开第二个条目的正确入口）。
+    await stage("tab-add-click", async (t) => {
+      await page.locator(".entry-tab-add").click({ timeout: t });
+    });
+    await stage("picker-open", (t) => page.locator(".dn-picker-modal").waitFor({ timeout: t }));
+    // 下钻 ou=people（1000 子条）：修复后 mock 截断返回前 500 条 + 徽标，
+    // uid=tabs-2 按字典序在前 500 内可选——端到端固化截断语义修复。
+    await stage("picker-drill", async (t) => {
+      const peopleRow = page.locator(".dn-picker-row", { has: page.locator('.dn-picker-name[title="ou=people,dc=demo,dc=dbx"]') }).first();
+      await peopleRow.locator(".dn-picker-toggle").click({ timeout: t });
+    });
+    await stage("picker-truncated-badge", async (t) => {
+      // locale 无关断言：徽标元素存在且含截断上限数字。
+      await page.waitForFunction(() => {
+        const badge = document.querySelector(".dn-picker-modal .badge");
+        return badge !== null && badge.textContent?.includes("500");
+      }, undefined, { timeout: t });
+    });
+    await stage("picker-pick", async (t) => {
+      // 选 ou=people 本身作第二页签（不下钻——其 1000 子条在前 500 截断内，
+      // 后加的 fixture 条目按插入序排在切片之外，不能依赖）。
+      await page.locator('.dn-picker-name[title="ou=people,dc=demo,dc=dbx"]').click({ timeout: t });
+    });
+    await stage("ou-people-active", (t) => page.waitForFunction(() => {
+      // 新页签 unshift 到工作集首位并激活；断言用 shell 的 is-active 类（无歧义）。
+      const shells = [...document.querySelectorAll(".entry-tab-shell")];
+      return shells[0]?.classList.contains("is-active") === true && shells[0]?.textContent?.includes("ou=people") === true;
+    }, undefined, { timeout: t }));
+    // 切回 tabs-1：DN 行随之切换。
+    await stage("switch-to-tabs-1", async (t) => {
+      await page.locator(".entry-tab[role='tab']", { hasText: "uid=tabs-1" }).click({ timeout: t });
+      await page.waitForFunction(() => document.querySelector(".entry-dn-row")?.textContent?.includes("uid=tabs-1"), undefined, { timeout: t });
+    });
+    // 脏态否决：编辑值后点 ou=people 页签 → 不切换 + 提示有未保存修改。
+    const valueInput = page.locator(".attr-row textarea").first();
+    await valueInput.fill("modified-for-tabs");
+    await stage("dirty-veto", async (t) => {
+      // 点「另一个」页签才触发否决；点当前激活页签是组件内的空操作守卫。
+      await page.locator(".entry-tab[role='tab']", { hasText: "ou=people" }).click({ timeout: t });
+      await page.waitForFunction(() => document.querySelector(".notice")?.textContent?.includes("有未保存的修改"), undefined, { timeout: t });
+      await page.waitForFunction(() => document.querySelector(".entry-dn-row")?.textContent?.includes("uid=tabs-1"), undefined, { timeout: t });
+    });
+    // 撤回修改（恢复 fixture 原值）再切换成功。
+    await valueInput.fill("tabs-1");
+    await stage("switch-after-revert", async (t) => {
+      await page.locator(".entry-tab[role='tab']", { hasText: "ou=people" }).click({ timeout: t });
+      await page.waitForFunction(() => document.querySelector(".entry-dn-row")?.textContent?.includes("ou=people,dc=demo,dc=dbx"), undefined, { timeout: t });
+    });
+  } finally {
+    // 失败路径兜底：编辑器可能处于脏态（Esc 会被正确否决），走显式「取消」通道。
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(400);
+    if (await page.locator(".editor-modal").count()) {
+      await page.locator(".editor-modal footer button", { hasText: /取消|Cancel/ }).first().click().catch(() => {});
+    }
+    await page.waitForFunction(() => !document.querySelector(".editor-modal"), undefined, { timeout: 5000 }).catch(() => {});
+    for (const dn of ["uid=tabs-1,ou=people,dc=demo,dc=dbx"]) {
+      await page.evaluate((entryDn) => window.dbxPlugin.invoke("ldap/entry/delete", { dn: entryDn }).catch(() => {}), dn);
+    }
+  }
+});
+
+test("batch modify applies an attribute to selected rows", async (page) => {
+  // 前置：紧凑条若折叠则展开，再切源码模式（.filter-source input 仅源码态可见）。
+  const collapsed = await page.locator(".search-advanced.is-collapsed").count();
+  if (collapsed) {
+    await page.locator(".search-form-compact .compact-toggle").click();
+  }
+  await page.locator(".filter-block").waitFor();
+  await page.locator(".search-form .mode-switch button").nth(1).click();
+
+  const search = page.locator(".filter-source input");  for (const [dn, attributes] of [
+    ["ou=walk-batch,dc=demo,dc=dbx", { objectClass: ["top"], ou: ["walk-batch"] }],
+    ["uid=bm-1,ou=walk-batch,dc=demo,dc=dbx", { objectClass: ["top"], uid: ["bm-1"] }],
+    ["uid=bm-2,ou=walk-batch,dc=demo,dc=dbx", { objectClass: ["top"], uid: ["bm-2"] }],
+  ]) {
+    await page.evaluate(([entryDn, entryAttributes]) => window.dbxPlugin.invoke("ldap/entry/add", { dn: entryDn, attributes: entryAttributes }), [dn, attributes]);
+  }
+  try {
+  const search = page.locator(".filter-source input");
+  await search.fill("(uid=bm-*)");
+  await page.getByRole("button", { name: /搜索|Search/ }).first().click();
+  await page.waitForFunction(() => document.querySelectorAll(".ag-row").length === 2);
+  const checkboxes = page.locator(".ag-row .ag-checkbox-input");
+  await checkboxes.nth(0).check();
+  await checkboxes.nth(1).check();
+  await page.locator(".batch-modify").click();
+  await page.locator(".batch-modify-modal").waitFor();
+  await page.locator(".batch-modify-modal .attribute-input").fill("description");
+  await page.locator(".batch-modify-modal .values-input").fill("walkthrough");
+  await page.locator(".batch-modify-modal .primary-button").click();
+  await page.waitForFunction(() => document.querySelector(".notice")?.textContent?.trim() === "批量修改完成：成功 2，失败 0");
+  const stored = await page.evaluate(() => window.dbxPlugin.invoke("ldap/entry/get", { dn: "uid=bm-1,ou=walk-batch,dc=demo,dc=dbx" }));
+  expectEqual(stored.entry.attributes.description[0], "walkthrough", "batch modify wrote the attribute");
+  } finally {
+    await closeEditorIfOpen(page);
+    for (const dn of ["uid=bm-1,ou=walk-batch,dc=demo,dc=dbx", "uid=bm-2,ou=walk-batch,dc=demo,dc=dbx", "ou=walk-batch,dc=demo,dc=dbx"]) {
+      await page.evaluate((entryDn) => window.dbxPlugin.invoke("ldap/entry/delete", { dn: entryDn }).catch(() => {}), dn);
+    }
+  }
+});
+
+test("value copy menu writes base64 through the mock clipboard", async (page) => {
+  // 前置：紧凑条若折叠则展开，再切源码模式（.filter-source input 仅源码态可见）。
+  const collapsed = await page.locator(".search-advanced.is-collapsed").count();
+  if (collapsed) {
+    await page.locator(".search-form-compact .compact-toggle").click();
+  }
+  await page.locator(".filter-block").waitFor();
+  await page.locator(".search-form .mode-switch button").nth(1).click();
+
+  const search = page.locator(".filter-source input");  await page.evaluate(() => window.dbxPlugin.invoke("ldap/entry/add", { dn: "ou=walk-copy,dc=demo,dc=dbx", attributes: { objectClass: ["top"], ou: ["walk-copy"] } }));
+  await page.evaluate(() => window.dbxPlugin.invoke("ldap/entry/add", { dn: "uid=copy-a,ou=walk-copy,dc=demo,dc=dbx", attributes: { objectClass: ["top"], uid: ["copy-a"] } }));
+  try {
+  const search = page.locator(".filter-source input");
+  await search.fill("(uid=copy-a)");
+  await page.getByRole("button", { name: /搜索|Search/ }).first().click();
+  await page.waitForFunction(() => document.querySelectorAll(".ag-row").length === 1);
+  await page.locator(".ag-row").first().dblclick();
+  await page.locator(".editor-modal").waitFor();
+  const row = page.locator(".attr-row").filter({ has: page.locator('textarea[aria-label="uid"]') }).first();
+  await row.locator('button[title="复制"]').click();
+  const menu = page.locator(".editor-modal .context-menu");
+  await menu.waitFor();
+  expectEqual(await menu.locator("[role='menuitem']").count(), 3, "copy menu has three items");
+  await menu.getByRole("menuitem", { name: "以 Base64 复制" }).click();
+  await page.waitForFunction(() => window.dbxPlugin.clipboardWrites?.at(-1) === "Y29weS1h");
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+  } finally {
+    await closeEditorIfOpen(page);
+    await page.evaluate(() => window.dbxPlugin.invoke("ldap/entry/delete", { dn: "uid=copy-a,ou=walk-copy,dc=demo,dc=dbx" }).catch(() => {}));
+    await page.evaluate(() => window.dbxPlugin.invoke("ldap/entry/delete", { dn: "ou=walk-copy,dc=demo,dc=dbx" }).catch(() => {}));
+  }
+});
+
 // -- main ----------------------------------------------------------------------
 
 const playwright = await loadPlaywrightCore();
@@ -621,6 +909,7 @@ try {
       await fn(page);
       console.log(`  ✓ ${name}`);
     } catch (cause) {
+      await page.screenshot({ path: `/tmp/ldap-shots/fail-${name.replace(/[^a-z0-9]+/gi, "_").slice(0, 40)}.png` }).catch(() => {});
       failures += 1;
       console.error(`  ✗ ${name}\n    ${cause instanceof Error ? cause.message : cause}`);
     }

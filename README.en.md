@@ -41,7 +41,9 @@ schema inspection, and MCP automation in a single, auditable workflow.
   filter, attributes, and size limit land on the form in one step; bind and
   connection options are dropped in favour of the saved connection and guards.
 - View, create, edit, rename, and delete directory entries.
-- RootDSE, schema, and attribute metadata inspection.
+- RootDSE, schema, and attribute metadata inspection; the server info dialog
+  adds connection status, ping, TLS mode, and RFC descriptions for
+  control/extension OIDs.
 - LDIF and CSV export.
 - Authentication matrix: anonymous, unauthenticated, simple, Kerberos/GSSAPI,
   NTLM, NTLM hash, DIGEST-MD5, and SASL External.
@@ -96,7 +98,9 @@ monorepo nor a host worktree is required.
 
 ```bash
 scripts/test.sh        # form contract + frontend three-step + go vet/test + package + smoke (SKIPs without container environments)
-scripts/build.sh       # frontend build + sidecar build + .dbxp packaging (artifacts in dist/)
+scripts/build.sh       # frontend build + sidecar build + .dbxp packaging (artifacts in dist/; stale artifacts pruned, --skip-tests for fast iteration)
+scripts/install.sh     # install the newest .dbxp into DBX via the official installer and drop old versions (--reinstall / --no-restart / --keep-old)
+scripts/clean.sh       # prune stale dist/ artifacts, backend/bin and __pycache__ (--all clears current artifacts too)
 ```
 
 Or run layers individually:

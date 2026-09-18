@@ -476,3 +476,37 @@ ModifyDnDialog / DeleteEntryDialog 遮罩已接入 `decideBackdropClose` 共享�
 5 条抽查项无回退；单测基线 23 文件 292 用例全绿。六轮累计：P0 × 0、P1 × 3、P2 × 25、观察项 13，
 全部 P0/P1/P2 均已收口。后续 UI 扫描仅在宿主契约变更（`scripts/host-sync.sh` 同步）或插件前端
 大改时按需重开，建议优先复验 P2-24 的真机多连接场景。
+
+---
+
+## 三、第 2 轮架构/性能/隐藏缺陷审计（2026-09-18，三路并发审计 agent + 浏览器视觉审查）
+
+> 审计方式：架构/性能/隐藏缺陷三个只读 agent 并行 + playwright 截图视觉审查（9 张，
+> 亮/暗/窄/宽），对标 ADS 分层与事件总线。修复由 7 个并发 agent 落地（文件所有权
+> 互斥），另有一轮遗留项收尾（Esc 栈/schema 单例/后端聚合读独立连接/树查找索引/
+> 容器 smoke）。以下为已修复项摘要（全部有测试与走查覆盖）：
+
+**P0（2 项）**
+- 批量写循环不感知连接切换（切换后剩余操作发往新连接）→ 循环守卫 + 按捕获连接发射。
+- 批量删除/移动每条触发一次完整搜索重放（N>16 撞后端会话上限）→ wire 层 150ms 防抖合并为单次重放。
+
+**P1（9 项）**：rdnOf/parentOf 裸 indexOf 转义逗号截断（改 splitFirstDnRdn/joinRdnAndParent）、
+entryDetailCache 无上限（LRU 50）、游标排空 O(n²) 重渲染（累积+节流提交+行 VM memo）、
+编辑器每击键全量 LDIF 序列化（deep watch 删除）、搜索历史跨连接泄漏（键按连接派生）、
+堆叠弹窗焦点陷阱错容器（modal.ts 动态容器解析）、ImportEntryDialog 在途无关闭否决、
+window.confirm 依赖 webview 拦截风险（批量删除/预设删除改两步确认）、password 分流绕过
+valueKinds 注册表（回归注册表）。
+
+**P2/打磨（13 项）**：nodeIsCurrent 全树 DFS→O(1)、监听器 setTimeout 竞态、ag-grid 按需
+模块注册（包体 -174KB/-11.4%）、audit ok toast 不再覆盖领域通知、openEntryRefresh 死代码、
+只读门禁 fail-open 保持上次值、列头 headerTooltip、树过滤 placeholder 截断、Schema 明细
+空态文案、值复制三图标合并下拉、CompareDialog 校验时机、弹窗底部死区、工具栏图标分组。
+
+**性能专项**：后端聚合 Search/Count 改走独立短连接（消除 WithConn 队头阻塞，回退共享路径）；
+schema 缓存单例化（同连接同窗口 4 次拉取 → 1 次）；revealDn 逐级 O(1) 索引 + 续载合并；
+referenceTabs 上限 10；堆叠 Esc 实例栈（最后打开者独占）。
+
+**容器级验证（新增）**：Compare/WhoAmI/PasswdModify 对真实 OpenLDAP 容器 6/6 PASS
+（含 read_only 拒绝与审计无密码泄漏断言），接入 test.sh（无 Docker 环境自动 SKIP）。
+
+**视觉审查未修复项**：无（8 项全部落地）。

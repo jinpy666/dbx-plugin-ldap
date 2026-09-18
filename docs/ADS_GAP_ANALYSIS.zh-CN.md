@@ -4,6 +4,8 @@
 > Schema Browser / Search / Import-Export / Batch Operations）。
 > 状态标记：✅ 已有 ｜ 🔶 部分（有差距）｜ ❌ 缺失。
 > 优先级：P0 = 下一轮就做；P1 = 近期；P2 = 远期/按需。
+> 质量加固（2026-09-18）：架构/性能/隐藏缺陷三路审计 18 项修复 + 容器级扩展操作
+> smoke 6/6，见 UI_SCAN_FINDINGS 第 2 轮章节与 ADS_FEATURE_MATRIX。
 > 本文件是 **ADS 侧**追赶路线唯一对账表（PLA 对标见
 > `PLA_GAP_ANALYSIS.zh-CN.md`，两表并轨同一 M5/M6/M7 框架，M6 扩容以
 > IMPL_PLAN §9 更新后的表述为准）；落地一项更新一项（状态 + 落地记录链接）。

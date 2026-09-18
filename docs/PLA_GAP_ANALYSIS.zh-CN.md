@@ -137,7 +137,16 @@
 
 > **状态：已实施**（M6 任务 N3，2026-09-06：`lib/binaryValue.ts` +
 > `BinaryValueEditor` 接入 EntryEditorDialog + 37 单测/组件测试 +
-> smoke S14 + 七语）。
+> smoke S14 + 七语）。**传输保真补丁**（2026-09-18）：go-ldap
+> `attr.Values` 对原始字节做 `string()` 后经 JSON 会把非 UTF-8 字节替换为
+> U+FFFD，真实二进制值（如 msExchSafeSendersHash 哈希、真字节 jpegPhoto）
+> 读回即坏、上传则把 base64 文本当值静默写入目录。现读路径二进制属性
+> （schema 语法 OID/名字绑定，密码名排除）统一 base64 编码、普通属性仅对
+> 非法 UTF-8 单值兜底，写路径把二进制属性 base64 值解码回原始字节；
+> BinaryValueEditor 增加单值下载（Blob，按嗅探扩展名命名），与上传互为镜像。
+> 同批 UI 降噪：hex 视图去掉 ASCII 侧栏（二进制字节的 ASCII 投影只产出
+> 乱码），objectGUID/objectSid 卡片直接显示解码后的 UUID / S-1-… 文本
+>（ADS getDisplayValue 行为），不再渲染 hex。
 
 - **现状**：二进制值以 textarea 原样（base64）呈现。
 - **目标**：EntryEditor 二进制语法属性（jpegPhoto `1.3.6.1.4.1.1466.115.121.1.28`、

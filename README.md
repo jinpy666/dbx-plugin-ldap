@@ -38,7 +38,8 @@ LDAP Studio 是 DBX 的 LDAP 目录工作台（插件 id `io.dbx.ldap`）：打�
 - 直接粘贴 `ldapsearch` 命令导入搜索条件：Base DN、范围、过滤器、属性和数量
   上限一键落表；绑定/连接参数自动忽略，始终沿用已保存连接与护栏。
 - 目录条目的查看、新增、编辑、重命名和删除。
-- RootDSE、Schema 和属性元数据检查。
+- RootDSE、Schema 和属性元数据检查；服务器信息弹窗附带连接状态、Ping、
+  TLS 模式与控件/扩展 OID 的 RFC 说明。
 - LDIF 和 CSV 导出。
 - 认证矩阵：anonymous、unauthenticated、simple、Kerberos/GSSAPI、NTLM、
   NTLM 哈希、DIGEST-MD5 和 SASL External。
@@ -83,7 +84,9 @@ backend/bin/dbx-plugin-ldap --mcp
 
 ```bash
 scripts/test.sh        # 连接表单校验 + 前端三件套 + go vet/test + 打包 + smoke（无容器环境自动 SKIP）
-scripts/build.sh       # 前端构建 + sidecar 构建 + .dbxp 打包（产物在 dist/）
+scripts/build.sh       # 前端构建 + sidecar 构建 + .dbxp 打包（产物在 dist/，打包后自动清理旧版本产物；--skip-tests 跳过校验）
+scripts/install.sh     # 用官方安装器将最新 .dbxp 装入 DBX 并清理旧版本（--reinstall / --no-restart / --keep-old）
+scripts/clean.sh       # 清理 dist/ 旧版本产物、backend/bin 与 __pycache__（--all 连当前产物一起清）
 ```
 
 也可以分层执行：

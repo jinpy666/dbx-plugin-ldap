@@ -1418,3 +1418,55 @@ MCP 专项收口轮：第七轮代码之后在全新重建的 OpenLDAP 容器上
   容器组合下无回归，第七轮记录的容器段数据（M1–M20 全 PASS）在本轮
   全新容器上复现成立。本插件无独立性能脚本，不做基线采集（digest/翻页
   延迟由 M15/M17/M19 断言覆盖正确性面）。
+
+## 第九轮（2026-09-18）集中实施轮：ADS 功能矩阵 F1-F12 收口 + 三路审计加固 + 性能专项
+
+**① 功能矩阵 F1-F12 全部落地**（对照 `docs/ADS_FEATURE_MATRIX.zh-CN.md`）：
+
+- F9 条目多开页签为最小形态：弹窗内页签条 + 脏态否决切换 + 工作集维护；
+- F12 服务器信息弹窗：分组展示 / OID 复制 / 设为浏览基 / 导出；「连接与
+  服务器」区块（statuses 状态点 / check Ping / TLS 配置徽标 / whoami 绑定
+  身份 / 建连与最近使用 / 服务器+协议摘要）、控件与扩展 OID 的 RFC 说明表
+  （`lib/oidDescriptions.ts`，未收录只显原值）、check 结果文案抽公共
+  `lib/ldapCheck.ts`、组标题与导出迁 i18n（7 locale）、切连接时关闭弹窗。
+
+**② 质量加固：三路审计（架构 / 性能 / 隐藏缺陷）18 项修复**：P0 两项打头
+（批量写循环连接切换守卫、批量重放风暴防抖合并），另含 DN 转义工具统一、
+`entryDetailCache` LRU 化、游标排空节流、堆叠弹窗焦点/Escape 栈、mock 搜索
+语义对齐等；逐项细节见 `docs/UI_SCAN_FINDINGS.zh-CN.md` 第 2 轮章节与
+`docs/ADS_FEATURE_MATRIX.zh-CN.md`。
+
+**③ 性能**：后端聚合 Search/Count 改独立短连接，消除 `WithConn` 队头阻塞；
+ag-grid 按需注册，包体 **-174KB**；schema 缓存单例化（4 实例并 1）。
+
+**验证水位**
+
+| 套件 | 结果 |
+|---|---|
+| vitest | **1116+ 用例全绿** |
+| ui_test 走查 | **35 例** |
+| Compare/WhoAmI/PasswdModify 真实容器 smoke | **6/6** |
+
+**已知遗留**：(1) DnPicker 大 OU 截断语义（修复进行中）；(2) F9 页签草稿
+保留（需架构裁决）；(3) dirty 行级 computed（ROI 低暂缓）。
+
+## 第十轮（2026-09-18）只读连接全面加固：UI 层写入口收口
+
+后端 `ensureLDAPWriteAllowed`（add / modify / delete+子树 / modifyDN / passwdModify
+五路写门禁）与 MCP 写工具过滤此前已落地；本轮把「连接只读」在 UI 层收口到全部
+剩余写入口，做到只读时编辑、删除、移动、批量操作、新增、导入提交全部禁用：
+
+| 文件 | 变更 |
+|---|---|
+| `frontend/src/components/ResultTable.vue` | 新增 `canWrite` prop（默认 true，向后兼容）：批量删除/移动/修改三按钮禁用 + title 只读提示（复用 `editor.readonlyHint`）；`confirmBatchDelete`/`batchMoveSelection`/`batchModifySelection` 函数层同步拦截 |
+| `frontend/src/App.vue` | 新增 `guardWrite()` 统一写守卫：`openAddChild`/`onWizardCreate`/`askDelete`/`confirmDelete`/`askRename`/`confirmRename`/`onBatchDelete`/`onBatchMove`/`onBatchModify`/`onBatchMoveConfirm`/`onBatchModifyConfirm` 全部先过门禁（只读时 notify 提示），兜住快捷路径与「弹窗开着时连接翻转只读」竞态；`canWrite` 透传 ResultTable / NewEntryWizard |
+| `frontend/src/components/NewEntryWizard.vue` | 新增 `canWrite` prop：并入 `canSubmit`（提交禁用）+ footer 只读提示，与 ImportEntryDialog 同语义 |
+| 顺手修复（分支遗留 typecheck 阻塞） | `lib/i18n.ts` es 区重复 `search.reset/resetDone` 键去重（其一混入葡语文案）；`SearchForm.spec.ts` 不存在的 `.nth()` 改 `findAll(...)[0]`，value 断言改属性读取 |
+
+写路径纵深防御现状：UI 入口禁用（DnTree 菜单/编辑器/向导/导入/结果表）→
+App 侧 `guardWrite()` → 后端 `ensureLDAPWriteAllowed`（最终防线，拒绝并出
+write-policy/denied 审计）；mockDbxHost `?ro=1` 同语义拒绝写。
+
+**验证水位**：vitest **1138 用例全绿**（含 ResultTable 批量只读 2 例、向导
+只读 1 例新增）、`vue-tsc --noEmit` 通过、后端 `gofmt`/`go vet`/`go test`
+全绿（后端本轮零改动）。

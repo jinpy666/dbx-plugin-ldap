@@ -59,6 +59,16 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_*.py'
 echo "==> smoke (OpenLDAP container auto-SKIP; unimplemented methods SKIP)"
 python3 scripts/smoke_test.py
 
+echo "==> extended-ops smoke (compare/whoami/passwdModify; 容器不可用自动 SKIP)"
+# Container-level verification of the extended operations (F3: RFC 4511
+# Compare / RFC 4532 WhoAmI / RFC 3062 PasswordModify); ships its own compose
+# orchestration and SKIPs the whole suite when Docker is missing or the image
+# pull fails.
+if [ -f backend/go.mod ] && command -v go >/dev/null 2>&1; then
+  (cd backend && CGO_ENABLED=0 go build -trimpath -o bin/dbx-plugin-ldap .)
+fi
+python3 scripts/smoke_extended_ops_test.py
+
 echo "==> MCP smoke (sidecar auto-built; container cases auto-SKIP)"
 if [ -f backend/go.mod ] && command -v go >/dev/null 2>&1; then
   (cd backend && CGO_ENABLED=0 go build -trimpath -o bin/dbx-plugin-ldap .)
