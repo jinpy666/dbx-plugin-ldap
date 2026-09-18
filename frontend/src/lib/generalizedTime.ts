@@ -95,3 +95,84 @@ export function toDatetimeLocalValue(date: Date): string {
     `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
   );
 }
+
+// -- 墙上时钟（timezone-aware picker）-----------------------------------------
+// 选择器语义：显示原值自身的墙上时钟（所见即存储，不做时区换算），时区由
+// 独立后缀承载（"Z" | "±HHMM" | ""），写回 = 墙上时钟 + 后缀。
+
+export interface GeneralizedTimeWall {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  /** "Z" | "±HHMM" | ""（无后缀容错形态，写回时原样保留）。 */
+  zone: string;
+}
+
+/** 解析 GeneralizedTime 的墙上时钟与时区后缀（不换算时刻）；非法/越界返回 null。 */
+export function parseGeneralizedTimeWall(value: string): GeneralizedTimeWall | null {
+  const text = String(value ?? "").trim();
+  const match = SHAPE_RE.exec(text);
+  if (!match) return null;
+  const [, year, month, day, hour = "00", minute = "00", second = "00", , zone = ""] = match;
+  // 日历有效性校验与 parseGeneralizedTime 同款：拿「未加偏移的 UTC 字段」反查。
+  const wallMs = Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second));
+  const wall = new Date(wallMs);
+  if (
+    wall.getUTCFullYear() !== Number(year) ||
+    wall.getUTCMonth() !== Number(month) - 1 ||
+    wall.getUTCDate() !== Number(day) ||
+    wall.getUTCHours() !== Number(hour) ||
+    wall.getUTCMinutes() !== Number(minute)
+  ) {
+    return null;
+  }
+  return {
+    year: Number(year),
+    month: Number(month),
+    day: Number(day),
+    hour: Number(hour),
+    minute: Number(minute),
+    second: Number(second),
+    zone,
+  };
+}
+
+/** 墙上时钟 + 时区后缀 → GeneralizedTime 串（全字段、秒精度）。 */
+export function formatGeneralizedTimeWall(wall: GeneralizedTimeWall): string {
+  const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+  return (
+    `${pad(wall.year, 4)}${pad(wall.month)}${pad(wall.day)}` +
+    `${pad(wall.hour)}${pad(wall.minute)}${pad(wall.second)}${wall.zone}`
+  );
+}
+
+/** datetime-local 值 → 墙上时钟字段（无时区语义）；非法/越界返回 null。 */
+export function parseDatetimeLocalWall(value: string): Omit<GeneralizedTimeWall, "zone"> | null {
+  const text = String(value ?? "").trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(text);
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second = "00"] = match;
+  const numbers = { year: Number(year), month: Number(month), day: Number(day), hour: Number(hour), minute: Number(minute), second: Number(second) };
+  const wallMs = Date.UTC(numbers.year, numbers.month - 1, numbers.day, numbers.hour, numbers.minute, numbers.second);
+  const wall = new Date(wallMs);
+  if (
+    wall.getUTCFullYear() !== numbers.year ||
+    wall.getUTCMonth() !== numbers.month - 1 ||
+    wall.getUTCDate() !== numbers.day
+  ) {
+    return null;
+  }
+  return numbers;
+}
+
+/** 浏览器本地时区的 ±HHMM 后缀（供时区选择器的「本地」选项）。 */
+export function localTimeZoneSuffix(): string {
+  const totalMinutes = -new Date().getTimezoneOffset();
+  const sign = totalMinutes < 0 ? "-" : "+";
+  const abs = Math.abs(totalMinutes);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${sign}${pad(Math.trunc(abs / 60))}${pad(abs % 60)}`;
+}

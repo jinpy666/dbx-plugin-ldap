@@ -3,10 +3,14 @@
 import { describe, expect, it } from "vitest";
 import {
   formatGeneralizedTime,
+  formatGeneralizedTimeWall,
   generalTimeDisplay,
   isGeneralizedTimeShape,
+  localTimeZoneSuffix,
   parseDatetimeLocalValue,
+  parseDatetimeLocalWall,
   parseGeneralizedTime,
+  parseGeneralizedTimeWall,
   toDatetimeLocalValue,
 } from "./generalizedTime";
 
@@ -96,5 +100,35 @@ describe("datetime-local conversions", () => {
   it("rejects garbage datetime-local input", () => {
     expect(parseDatetimeLocalValue("nope")).toBeNull();
     expect(parseDatetimeLocalValue("2026-13-02T03:04")).toBeNull();
+  });
+});
+
+describe("wall-clock + zone helpers (timezone-aware picker)", () => {
+  it("splits wall clock and zone without converting the instant", () => {
+    const wall = parseGeneralizedTimeWall("20260102030405+0800")!;
+    expect(wall).toMatchObject({ year: 2026, month: 1, day: 2, hour: 3, minute: 4, second: 5, zone: "+0800" });
+    expect(parseGeneralizedTimeWall("20260102030405")!.zone).toBe("");
+  });
+
+  it("rejects invalid calendars and garbage", () => {
+    expect(parseGeneralizedTimeWall("20260230030405Z")).toBeNull();
+    expect(parseGeneralizedTimeWall("nope")).toBeNull();
+  });
+
+  it("reformats wall + zone back to a full GeneralizedTime string", () => {
+    const wall = parseGeneralizedTimeWall("20260102030405+0800")!;
+    expect(formatGeneralizedTimeWall({ ...wall, zone: "Z" })).toBe("20260102030405Z");
+    expect(formatGeneralizedTimeWall({ ...wall, zone: "" })).toBe("20260102030405");
+  });
+
+  it("parses datetime-local walls at field level with seconds defaulting to 0", () => {
+    expect(parseDatetimeLocalWall("2026-01-02T03:04:07")).toMatchObject({ hour: 3, minute: 4, second: 7 });
+    expect(parseDatetimeLocalWall("2026-01-02T03:04")).toMatchObject({ second: 0 });
+    expect(parseDatetimeLocalWall("2026-02-30T03:04")).toBeNull();
+    expect(parseDatetimeLocalWall("nope")).toBeNull();
+  });
+
+  it("formats the browser-local zone as ±HHMM", () => {
+    expect(localTimeZoneSuffix()).toMatch(/^[+-]\d{4}$/u);
   });
 });
