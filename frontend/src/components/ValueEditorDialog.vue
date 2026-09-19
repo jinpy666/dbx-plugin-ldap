@@ -80,7 +80,7 @@ useModalA11y(
       <div class="value-editor-body">
         <DatetimeValueEditor v-if="kind === 'datetime' || kind === 'filetime'" :kind="kind" v-model="draft" :disabled="disabled" />
         <DnValueEditor v-else-if="kind === 'dn'" v-model="draft" :disabled="disabled" :base-dn="baseDn" @open-reference="emit('openReference', $event)" />
-        <BinaryValueEditor v-else-if="kind === 'binary'" :attribute-name="attributeName ?? ''" :model-value="binaryValues" :disabled="disabled" @update:model-value="draft = $event.join('\n')" />
+        <BinaryValueEditor v-else-if="kind === 'binary'" :attribute-name="attributeName ?? ''" :model-value="binaryValues" :disabled="disabled" @update:model-value="draft = $event.join('\n')" @notify="emit('notify', $event)" />
         <PasswordAttributeEditor
           v-else-if="kind === 'password'"
           v-model="draft"

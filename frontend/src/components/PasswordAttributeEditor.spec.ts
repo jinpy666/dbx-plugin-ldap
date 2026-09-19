@@ -24,6 +24,7 @@ vi.mock("../lib/passwordHash", async (importOriginal) => {
 
 import PasswordAttributeEditor from "./PasswordAttributeEditor.vue";
 import { hashPassword, parsePasswordHash } from "../lib/passwordHash";
+import { t } from "../lib/i18n";
 
 const passwdModifyMock = vi.mocked(ldapApi.entryPasswdModify);
 const hashMock = vi.mocked(hashPassword);
@@ -299,5 +300,74 @@ describe("PasswordAttributeEditor extended operation (RFC 3062)", () => {
     await applyAndWait(wrapper);
     expect(passwdModifyMock).not.toHaveBeenCalled();
     expect(wrapper.emitted("update:modelValue")).toHaveLength(1);
+  });
+});
+
+describe("PasswordAttributeEditor dialog UX (密码编辑器友好化)", () => {
+  const CONFIRM_INPUT = ".password-editor .password-confirm-input";
+  const STRENGTH_LABEL = ".password-strength";
+  const LENGTH_SELECT = ".password-editor .password-length";
+
+  it("blocks apply while the confirmation does not match and shows an inline error", async () => {
+    const wrapper = track();
+    await wrapper.find(PLAIN_INPUT).setValue("abc12345!@#");
+    const confirmInput = wrapper.find(CONFIRM_INPUT);
+    await confirmInput.setValue("different-value");
+    expect((wrapper.find(APPLY_BUTTON).element as HTMLButtonElement).disabled).toBe(true);
+    expect(wrapper.find(".password-confirm-error").exists()).toBe(true);
+    await confirmInput.setValue("abc12345!@#");
+    expect((wrapper.find(APPLY_BUTTON).element as HTMLButtonElement).disabled).toBe(false);
+    expect(wrapper.find(".password-confirm-error").exists()).toBe(false);
+  });
+
+  it("keeps apply available when the confirmation is left empty (optional guard)", async () => {
+    const wrapper = track();
+    await wrapper.find(PLAIN_INPUT).setValue("abc12345!@#");
+    expect((wrapper.find(APPLY_BUTTON).element as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("clears the confirmation together with the new password after a successful apply", async () => {
+    const wrapper = track();
+    await wrapper.find(PLAIN_INPUT).setValue("abc12345!@#");
+    await wrapper.find(CONFIRM_INPUT).setValue("abc12345!@#");
+    await applyAndWait(wrapper);
+    expect((wrapper.find(CONFIRM_INPUT).element as HTMLInputElement).value).toBe("");
+  });
+
+  it("rates the password strength live without blocking", async () => {
+    const wrapper = track();
+    expect(wrapper.find(STRENGTH_LABEL).exists()).toBe(false);
+    await wrapper.find(PLAIN_INPUT).setValue("abc");
+    const strength = wrapper.find(STRENGTH_LABEL);
+    expect(strength.exists()).toBe(true);
+    expect(strength.classes()).toContain("password-strength--weak");
+    await wrapper.find(PLAIN_INPUT).setValue("Abcdefg1!@#$XYZ");
+    expect(wrapper.find(STRENGTH_LABEL).classes()).toContain("password-strength--strong");
+  });
+
+  it("offers selectable generation lengths applied to the random generator", async () => {
+    const wrapper = track();
+    const lengthSelect = wrapper.find(LENGTH_SELECT);
+    expect(lengthSelect.exists()).toBe(true);
+    expect((lengthSelect.element as HTMLSelectElement).value).toBe("16");
+    await lengthSelect.setValue("20");
+    await wrapper.find(GENERATE_BUTTON).trigger("click");
+    expect((wrapper.find(PLAIN_INPUT).element as HTMLInputElement).value).toHaveLength(20);
+  });
+
+  it("labels the apply button per mode (extended op vs local hash)", async () => {
+    const wrapper = track({ dn: "uid=bob,dc=demo,dc=dbx" });
+    expect(wrapper.find(APPLY_BUTTON).text()).toBe(t("ldap.passwordEditor.apply"));
+    await wrapper.find(EXTENDED_TOGGLE).setValue(true);
+    expect(wrapper.find(APPLY_BUTTON).text()).toBe(t("ldap.passwordEditor.applyExtended"));
+  });
+
+  it("renders scheme mentions without leaking i18n placeholder braces", () => {
+    const cleartext = t("ldap.passwordEditor.cleartextWarning");
+    expect(cleartext).toContain("CLEARTEXT");
+    expect(cleartext).not.toContain("{CLEARTEXT}");
+    const unknown = t("ldap.passwordEditor.existingUnknown");
+    expect(unknown).toContain("MD5");
+    expect(unknown).not.toContain("{MD5}");
   });
 });

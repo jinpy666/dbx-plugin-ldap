@@ -1421,8 +1421,10 @@ function onAssociationRelation(dn: string, attribute?: string) {
   padding: 6px 10px;
   background: var(--background);
   color: var(--foreground);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  /* 只读展示恒为单行省略（二进制 base64 可达数千字符）：完整值看悬停
+     title，编辑走弹窗；空值靠 min-height 保持框体。 */
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .value-edit-button {
   flex: none;

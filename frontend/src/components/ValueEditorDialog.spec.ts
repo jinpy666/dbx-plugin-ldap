@@ -59,4 +59,11 @@ describe("ValueEditorDialog", () => {
     expect(wrapper.find("[role='dialog']").attributes("aria-label")).toBe("DN");
     expect(wrapper.text()).toContain("manager");
   });
+
+  it("relays the binary editor's notify events (copy decoded, upload errors)", async () => {
+    const wrapper = mountDialog({ open: true, kind: "binary", attributeName: "objectGUID", modelValue: "abc" });
+    wrapper.findComponent({ name: "BinaryValueEditor" }).vm.$emit("notify", "已复制");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.emitted("notify")?.[0]).toEqual(["已复制"]);
+  });
 });

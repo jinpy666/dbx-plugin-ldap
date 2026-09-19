@@ -100,9 +100,11 @@ describe("BinaryValueEditor", () => {
     const decoded = wrapper.find(".binary-card .binary-decoded");
     expect(decoded.exists()).toBe(true);
     expect(decoded.text()).toBe("2f4e606c-621f-4cb6-b7e4-3dfdf660a08f");
-    // 有权威解码文本时不再渲染 hex 乱码，也没有视图切换按钮：仅下载 + 删除。
+    // 有权威解码文本时不再渲染 hex 乱码，也没有视图切换按钮：
+    // 复制解码值 + 下载 + 删除。
     expect(hexViews(wrapper)).toHaveLength(0);
-    expect(cards(wrapper)[0].findAll("button")).toHaveLength(2);
+    expect(cards(wrapper)[0].findAll("button")).toHaveLength(3);
+    expect(wrapper.find(".binary-copy").exists()).toBe(true);
     expect(wrapper.find(".binary-download").exists()).toBe(true);
     expect(wrapper.find(".binary-delete").exists()).toBe(true);
   });
@@ -246,5 +248,57 @@ describe("BinaryValueEditor", () => {
     const wrapper = trackEditor({ attributeName: "jpegPhoto", modelValue: [] });
     expect(wrapper.find(".binary-empty").text()).toBe(t("ldap.binary.empty"));
     expect(wrapper.find('input[type="file"]').exists()).toBe(true);
+  });
+});
+
+describe("BinaryValueEditor dialog polish (弹窗友好化)", () => {
+  // ValueEditorDialog 里卡片 footer 若用 <footer> 元素会命中全局 .modal footer
+  // 样式（灰底 + 负 margin + 右对齐），是上传按钮错位的根因：必须是 div。
+  it("renders the card action row as a div, never a footer element", () => {
+    const wrapper = trackEditor({ attributeName: "jpegPhoto", modelValue: [jpegBase64] });
+    expect(wrapper.find(".binary-actions").element.tagName).toBe("DIV");
+    expect(wrapper.find("footer").exists()).toBe(false);
+  });
+
+  it("copies the decoded value to the clipboard and reports via notify", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    (window as unknown as { dbxPlugin?: unknown }).dbxPlugin = { clipboard: { writeText } };
+    document.execCommand = () => false;
+    try {
+      const guidBytes = new Uint8Array([0x6c, 0x60, 0x4e, 0x2f, 0x1f, 0x62, 0xb6, 0x4c, 0xb7, 0xe4, 0x3d, 0xfd, 0xf6, 0x60, 0xa0, 0x8f]);
+      const wrapper = trackEditor({ attributeName: "objectGUID", modelValue: [bytesToBase64(guidBytes)] });
+      const card = cards(wrapper)[0];
+      await card.find(".binary-copy").trigger("click");
+      await flushPromises();
+      expect(writeText).toHaveBeenCalledWith(card.find(".binary-decoded").text());
+      expect(wrapper.emitted("notify")?.[0]).toEqual([t("copied")]);
+    } finally {
+      delete (window as unknown as { dbxPlugin?: undefined }).dbxPlugin;
+    }
+  });
+
+  it("shows the byte size on each card", () => {
+    const wrapper = trackEditor({ attributeName: "cn", modelValue: [unknownBase64, jpegBase64] });
+    const sizes = wrapper.findAll(".binary-size");
+    expect(sizes).toHaveLength(2);
+    expect(sizes[0].text()).toBe(t("ldap.binary.sizeBytes", { count: 8 }));
+    expect(sizes[1].text()).toBe(t("ldap.binary.sizeBytes", { count: JPEG_BYTES.length }));
+  });
+
+  it("highlights the upload area on dragover and accepts dropped files", async () => {
+    const wrapper = trackEditor({ attributeName: "jpegPhoto", modelValue: [pemBase64] });
+    const area = wrapper.find(".binary-upload");
+    expect(area.classes()).not.toContain("binary-upload-dragover");
+    await area.trigger("dragover");
+    expect(area.classes()).toContain("binary-upload-dragover");
+    await area.trigger("dragleave");
+    expect(area.classes()).not.toContain("binary-upload-dragover");
+    // 拖入文件与点击选择走同一接受管道：FileReader → base64 追加。
+    const file = new File([JPEG_BYTES], "dropped.jpg", { type: "image/jpeg" });
+    await area.trigger("drop", { dataTransfer: { files: [file] } });
+    for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushPromises();
+    expect(wrapper.emitted("update:modelValue")?.[0]).toEqual([[pemBase64, jpegBase64]]);
+    expect(area.classes()).not.toContain("binary-upload-dragover");
   });
 });

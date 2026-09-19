@@ -48,6 +48,21 @@ const showPlain = ref(false);
 const applying = ref(false);
 // 最近一次新密码是否来自随机生成：只有该路径才把明文交给父层提示。
 const wasGenerated = ref(false);
+// 确认新密码（防呆，ADS 同款）：留空跳过校验，非空则必须一致才能应用。
+const confirmPlain = ref("");
+const confirmMismatch = computed(() => confirmPlain.value !== "" && confirmPlain.value !== newPlain.value);
+// 随机生成长度可选（无歧义字符集）。
+const generateLength = ref(16);
+
+// 强度粗评（不阻断）：长度 + 字符类别（小写/大写/数字/符号）。
+const strength = computed<{ level: "weak" | "fair" | "strong"; label: string } | null>(() => {
+  const plain = newPlain.value;
+  if (!plain) return null;
+  const classes = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((pattern) => pattern.test(plain)).length;
+  if (plain.length >= 12 && classes >= 3) return { level: "strong", label: t("ldap.passwordEditor.strengthStrong") };
+  if (plain.length >= 8 && classes >= 2) return { level: "fair", label: t("ldap.passwordEditor.strengthFair") };
+  return { level: "weak", label: t("ldap.passwordEditor.strengthWeak") };
+});
 
 // RFC 3062 扩展操作（F3）：默认关闭（沿用本地哈希 + entry/modify 路径）；
 // identity / 旧密码为可选字段，留空不随请求发送。
@@ -61,7 +76,7 @@ const extendedAvailable = computed(() => Boolean(props.dn) && !props.disabled);
 const extendedActive = computed(() => extendedAvailable.value && useExtended.value);
 
 const inputType = computed(() => (showPlain.value ? "text" : "password"));
-const canApply = computed(() => !props.disabled && !applying.value && newPlain.value !== "");
+const canApply = computed(() => !props.disabled && !applying.value && newPlain.value !== "" && !confirmMismatch.value);
 
 // 已有值识别：空值不提示；不认识的 scheme 前缀（{MD5}/{CRYPT}…）明确告警
 // 而非静默当作明文。data-scheme 供测试与父层嗅探，不含任何值内容。
@@ -72,10 +87,10 @@ const existingNote = computed(() => {
   return existing.value.scheme === "{CLEARTEXT}" ? t("ldap.passwordEditor.cleartextWarning") : "";
 });
 
-// 随机生成：填入输入框并切换明文回显，让管理员确认一次性明文后再提交。
+// 随机生成：按所选长度填入输入框并切换明文回显，让管理员确认一次性明文后再提交。
 const generate = () => {
   if (props.disabled) return;
-  newPlain.value = generateRandomPassword(16);
+  newPlain.value = generateRandomPassword(generateLength.value);
   showPlain.value = true;
   wasGenerated.value = true;
 };
@@ -105,6 +120,7 @@ async function applyHashed() {
     emit("update:modelValue", hashed);
     if (wasGenerated.value) emit("plainGenerated", plain);
     newPlain.value = "";
+    confirmPlain.value = "";
     showPlain.value = false;
     wasGenerated.value = false;
   } catch {
@@ -139,6 +155,7 @@ async function applyExtended() {
     identityDraft.value = "";
     oldPlain.value = "";
     newPlain.value = "";
+    confirmPlain.value = "";
     showPlain.value = false;
     wasGenerated.value = false;
   } catch (cause) {
@@ -181,6 +198,20 @@ async function applyExtended() {
           <EyeOff v-if="showPlain" aria-hidden="true" /><Eye v-else aria-hidden="true" />
         </button>
       </span>
+      <span v-if="strength" class="password-strength" :class="`password-strength--${strength.level}`">{{ strength.label }}</span>
+    </label>
+    <label class="field">
+      <span class="muted">{{ t("ldap.passwordEditor.confirmLabel") }}</span>
+      <input
+        v-model="confirmPlain"
+        type="password"
+        class="password-confirm-input"
+        autocomplete="new-password"
+        spellcheck="false"
+        :disabled="disabled"
+        @keyup.enter="apply"
+      />
+      <span v-if="confirmMismatch" class="form-error password-confirm-error" role="alert">{{ t("ldap.passwordEditor.confirmMismatch") }}</span>
     </label>
     <!-- RFC 3062 扩展操作切换（F3）：写路径，仅可写且已接线 DN 时出现；
          默认关闭，开启后追加目标身份 / 旧密码两个可选字段。 -->
@@ -200,11 +231,19 @@ async function applyExtended() {
       </label>
     </div>
     <span class="password-actions">
+      <label class="password-length-field">
+        <span class="muted">{{ t("ldap.passwordEditor.generateLength") }}</span>
+        <select v-model="generateLength" class="password-length" :disabled="disabled">
+          <option :value="12">12</option>
+          <option :value="16">16</option>
+          <option :value="20">20</option>
+        </select>
+      </label>
       <button type="button" :disabled="disabled" @click="generate">
         <RefreshCw aria-hidden="true" />{{ t("ldap.passwordEditor.generate") }}
       </button>
       <button type="button" class="primary-button" :disabled="!canApply" @click="apply">
-        {{ applying ? "…" : t("ldap.passwordEditor.apply") }}
+        {{ applying ? "…" : (extendedActive ? t("ldap.passwordEditor.applyExtended") : t("ldap.passwordEditor.apply")) }}
       </button>
     </span>
     <p v-if="modelValue && existing && !existingNote" class="hint">
@@ -215,6 +254,58 @@ async function applyExtended() {
 </template>
 
 <style scoped>
+/* 对话框级布局（值编辑器弹窗内）：字段全宽、纵向节奏统一——此前按内联行
+   设计，进弹窗后挤成一小列且输入框宽窄不一。 */
+.password-editor {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+.password-editor .field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.password-editor input[type="text"],
+.password-editor input[type="password"],
+.password-editor select {
+  width: 100%;
+  box-sizing: border-box;
+}
+/* 复选框（RFC 3062 切换）不吃全宽规则：否则拉满整行、把说明文字挤开。 */
+.password-editor input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+/* 明文切换按钮收进输入框右侧，替代悬空在外的独立图标。 */
+.password-input-row {
+  position: relative;
+  display: block;
+}
+.password-input-row input {
+  padding-right: 32px;
+}
+.password-input-row .icon-button {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+}
+/* 强度粗评（不阻断）：弱=琥珀（与值类型警告同约定），强=主题色。 */
+.password-strength {
+  font-size: 11px;
+}
+.password-strength--weak {
+  color: #d97706;
+}
+.password-strength--fair {
+  color: var(--muted-foreground);
+}
+.password-strength--strong {
+  color: var(--primary);
+}
 /* RFC 3062 扩展操作切换行（F3）：横向 checkbox + 说明文字，区别于
    .field 默认的纵向「标签在上、控件在下」。 */
 .password-extended-toggle {
@@ -228,5 +319,37 @@ async function applyExtended() {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+/* 操作行：生成长度选择 + 随机生成 + 主按钮（按模式显示文案）。
+   随机生成与其他次要按钮同款边框样式，避免裸文字观感。 */
+.password-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.password-length-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.password-length {
+  width: auto;
+  min-width: 72px;
+}
+.password-actions button:not(.primary-button) {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 11px;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+}
+.password-actions button:not(.primary-button):hover:not(:disabled) {
+  background: var(--accent);
 }
 </style>
