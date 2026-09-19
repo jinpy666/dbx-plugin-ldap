@@ -405,6 +405,7 @@ func (s *Service) SnapshotStatuses() []LDAPConnectionStatus {
 			ConnectionID: entry.profile.ID,
 			Name:         entry.profile.Name,
 			URL:          entry.profile.URL,
+			BaseDN:       entry.profile.BaseDN,
 			Status:       statusForContract(entry.status),
 			ReadOnly:     entry.profile.ReadOnly,
 			ConnectedAt:  entry.connectedAt,

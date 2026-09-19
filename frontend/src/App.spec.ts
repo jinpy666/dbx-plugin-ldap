@@ -30,14 +30,19 @@ const searchStub = defineComponent({
   },
 });
 
-async function mountWithHost(legacy = false, both = false, connectionPatch: Record<string, unknown> = {}) {
+async function mountWithHost(
+  legacy = false,
+  both = false,
+  connectionPatch: Record<string, unknown> = {},
+  invokeImpl?: (method: string, params?: Record<string, unknown>) => Promise<unknown>,
+) {
   let receiveContext: ((next: Record<string, unknown>) => void) | undefined;
   let receiveEvent: ((event: DbxPluginEvent) => void) | undefined;
   const offContext = vi.fn();
   const offEvent = vi.fn();
   const subscribe = vi.fn((listener) => { receiveContext = listener; return offContext; });
   const legacySubscribe = legacy ? subscribe : vi.fn(() => () => undefined);
-  const invoke = vi.fn(async (_method: string, _params?: Record<string, unknown>): Promise<unknown> => ({ statuses: [], entries: [], count: 0, truncated: false }));
+  const invoke = vi.fn(invokeImpl ?? (async (_method: string, _params?: Record<string, unknown>): Promise<unknown> => ({ statuses: [], entries: [], count: 0, truncated: false })));
   window.dbxPlugin = {
     ready: Promise.resolve(context("first", connectionPatch)),
     request: vi.fn(async () => context("first")),
@@ -100,6 +105,32 @@ describe("App request feedback and recovery", () => {
     await mountWithHost(false, false, { port: 636, external_config: { tls_mode: "ldaps", auth_type: "simple" } });
     expect(wrapper!.find(".identity .identity-protocol").text()).toBe("LDAPS · Simple");
     expect(wrapper!.find(".toolbar-actions .identity-protocol").exists()).toBe(false);
+  });
+
+  it("falls back to the sidecar-reported baseDn when host context omits it (issue #2)", async () => {
+    // DBX 旧版工作台 context 不带 external_config.base_dn：sidecar 连接表
+    // 仍持有显式配置，statuses 兜底且优先于 RootDSE/主机名推断。
+    const host = await mountWithHost(false, false, { baseDn: "" }, async (method) => {
+      if (method === "ldap/connections/statuses") {
+        return { statuses: [{ connectionId: "first", baseDn: "O=users" }] };
+      }
+      return { statuses: [], entries: [], count: 0, truncated: false };
+    });
+    await flushPromises();
+    expect(wrapper!.findComponent(searchStub).props("baseDn")).toBe("O=users");
+    expect(host.invoke.mock.calls.some(([method]) => method === "ldap/connections/statuses")).toBe(true);
+    expect(wrapper!.text()).not.toContain("No base DN configured on the connection");
+  });
+
+  it("keeps the missing base DN hint when every fallback is exhausted", async () => {
+    // IP 主机（主机名推断不可用）+ 无 namingContexts + statuses 无值。
+    await mountWithHost(false, false, { host: "10.0.0.5", baseDn: "" }, async (method) => {
+      if (method === "ldap/rootDse") return { attributes: {} };
+      return { statuses: [], entries: [], count: 0, truncated: false };
+    });
+    await flushPromises();
+    expect(wrapper!.findComponent(searchStub).props("baseDn")).toBe("");
+    expect(wrapper!.text()).toContain("No base DN configured on the connection");
   });
 
   it("automatically drains every cursor page after rendering the first page", async () => {

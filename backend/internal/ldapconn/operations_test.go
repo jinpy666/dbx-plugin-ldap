@@ -244,19 +244,33 @@ func TestGetEntryAndRootDSEPolicy(t *testing.T) {
 func TestConnectionStatuses(t *testing.T) {
 	svc, _ := newAuditService()
 	connectProfile(t, svc, "s1", nil)
+	connectProfile(t, svc, "s2", map[string]any{"base_dn": "O=users"})
 	statuses, err := svc.ConnectionStatuses()
 	if err != nil {
 		t.Fatalf("ConnectionStatuses err = %v", err)
 	}
-	if len(statuses) != 1 {
+	if len(statuses) != 2 {
 		t.Fatalf("statuses = %+v", statuses)
 	}
-	st := statuses[0]
+	byID := map[string]LDAPConnectionStatus{}
+	for _, st := range statuses {
+		byID[st.ConnectionID] = st
+	}
+	st := byID["s1"]
 	if st.ConnectionID != "s1" || st.Status != "idle" {
 		t.Errorf("status = %+v", st)
 	}
+	// 未配置 base_dn 的连接不透出该字段（omitempty）。
+	if st.BaseDN != "" {
+		t.Errorf("unconfigured baseDn = %q", st.BaseDN)
+	}
+	// 已配置 base_dn 的连接透出（issue #2：DBX 旧版工作台 context 缺
+	// external_config.base_dn 时前端以此兜底）。
+	if got := byID["s2"].BaseDN; got != "O=users" {
+		t.Errorf("configured baseDn = %q, want O=users", got)
+	}
 	// 凭据不出现
-	raw := strings.Join([]string{st.Name, st.URL, st.Error}, "|")
+	raw := strings.Join([]string{st.Name, st.URL, st.Error, byID["s2"].BaseDN}, "|")
 	if strings.Contains(raw, "s3cret") {
 		t.Errorf("status carries secret: %+v", st)
 	}

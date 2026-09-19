@@ -75,6 +75,8 @@ export interface LdapConnectionStatus {
   connectionId: string;
   /** 后端 LDAPConnectionStatus.Status（契约三态：connected | idle | error）。 */
   status: "connected" | "idle" | "error";
+  /** 连接显式配置的 base_dn（lifecycle external_config），旧 sidecar 可能缺省。 */
+  baseDn?: string;
   /** 策略层只读门禁（表单 read_only ∥ 宿主标准 read_only），旧 sidecar 可能缺省。 */
   readOnly?: boolean;
   lastError?: string;

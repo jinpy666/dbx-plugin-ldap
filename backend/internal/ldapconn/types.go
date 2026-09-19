@@ -429,6 +429,9 @@ type LDAPConnectionStatus struct {
 	Name         string `json:"name"`
 	URL          string `json:"url"`
 	Status       string `json:"status"` // connected | idle | error
+	// BaseDN 透出 lifecycle external_config.base_dn 的显式配置（非机密）：
+	// DBX 旧版工作台 context 可能缺该字段，前端以此兜底（issue #2）。
+	BaseDN string `json:"baseDn,omitempty"`
 	// ReadOnly 透出策略层只读门禁（表单 read_only ∥ 宿主 read_only），
 	// 供前端禁用条目写操作。
 	ReadOnly    bool   `json:"readOnly,omitempty"`

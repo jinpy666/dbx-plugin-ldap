@@ -899,18 +899,28 @@ function syncConnectionContext() {
 const protocolBadgeText = computed(() => protocolBadge(connection.value));
 const serverBadge = computed(() => serverBadgeLabel(wizardSchemaCache.serverInfo.value));
 
-// 连接未配置 base_dn 时的兜底定位（tiny-rdm baseDn.js 语义）：
-// RootDSE namingContexts（AD 取 defaultNamingContext）→ 主机名推断
-// （corp.int.kn → dc=corp,dc=int,dc=kn）。两路都失败则保留空值，
+// 连接未配置 base_dn 时的兜底定位：sidecar 连接表里的显式配置（lifecycle
+// external_config.base_dn，issue #2：DBX 旧版工作台 context 可能缺该字段）
+// → RootDSE namingContexts（AD 取 defaultNamingContext）→ 主机名推断
+// （corp.int.kn → dc=corp,dc=int,dc=kn）。三路都失败则保留空值，
 // 由目录树提示用户补配。显式配置永远优先；解析成功后提示实际生效值。
 async function resolveAutoBaseDn() {
   if (baseDn.value) return;
   let resolved = "";
   try {
-    const result = await ldapApi.rootDse(["namingContexts", "defaultNamingContext"]);
-    resolved = pickBaseDnFromRootDse(result.attributes || {});
+    const statuses = await ldapApi.connectionStatuses();
+    const mine = (statuses.statuses || []).find((row) => row.connectionId === connectionId.value);
+    resolved = String(mine?.baseDn || "").trim();
   } catch {
-    // RootDSE 不可读（如配置了 allowed_base_dns）：退回主机名推断。
+    // statuses 不可用（旧 sidecar/瞬断）：继续 RootDSE 兜底。
+  }
+  if (!resolved) {
+    try {
+      const result = await ldapApi.rootDse(["namingContexts", "defaultNamingContext"]);
+      resolved = pickBaseDnFromRootDse(result.attributes || {});
+    } catch {
+      // RootDSE 不可读（如配置了 allowed_base_dns）：退回主机名推断。
+    }
   }
   if (!resolved) {
     resolved = inferBaseDnFromProfile({ url: connection.value.host, host: connection.value.host });

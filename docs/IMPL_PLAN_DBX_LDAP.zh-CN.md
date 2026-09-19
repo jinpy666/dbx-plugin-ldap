@@ -141,7 +141,7 @@ DN 白名单约束（§6）。方法未注册返回 -32601。
 | `ldap/entry/delete` | DeleteEntry(:606) | `dn`、`recursive?`（缺省 false 单条语义；true 删整棵子树：优先 Tree Delete 控件 `1.2.840.113556.1.4.805`，服务端不支持（unavailableCriticalExtension/unavailable/unwillingToPerform）回退自底向上逐条删除，条目上限 1000 超限报错不删；写白名单只校验目标 DN） | `{success:true}`；recursive 审计聚合为一条 `subtree_delete`（含 `deletedCount`） |
 | `ldap/entry/childrenCount` | —（N1 新增：删除确认子条目计数） | `dn` | `{count, truncated?}`（scope=one、filter `(objectClass=*)`、上限 5000，风格同 `ldap/count`）；白名单约束同读操作 |
 | `ldap/entry/modifyDn` | ModifyDN(:641) | `dn`、`newRdn`、`newSuperior?`（界面“新父 DN”）、`deleteOldRdn` | `{success:true}`；新旧 DN 均过写白名单 |
-| `ldap/connections/statuses` | ConnectionStatuses(:695) | — | `{statuses:[{connectionId, status:connected/idle/error, readOnly?, lastError?, lastUsedAt}]}` |
+| `ldap/connections/statuses` | ConnectionStatuses(:695) | — | `{statuses:[{connectionId, status:connected/idle/error, baseDn?, readOnly?, lastError?, lastUsedAt}]}`（baseDn = lifecycle 显式配置，issue #2 前端兜底） |
 | `ldap/presets/list` | LDAPSearchPreset（sidecar store） | — | `{presets:[...]}`；本地 `presets.json`，不含凭据 |
 | `ldap/presets/save` | LDAPSearchPreset | `preset:{id,name,baseDn?,filter?,scope?,attributes?,sizeLimit?}`；id 空则生成，name 必填 | `{success:true,preset}`；按 id 更新。仅持久化过滤器串，前端应用时重建条件树；不存 `conditions` |
 | `ldap/presets/remove` | LDAPSearchPreset | `id` | `{success:true}`；id 不存在报业务错误，不返回整表 |
