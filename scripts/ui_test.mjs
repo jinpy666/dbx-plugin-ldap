@@ -774,9 +774,11 @@ test("F9 entry tabs: open two entries, switch, dirty veto", async (page) => {
       await page.locator('.dn-picker-name[title="ou=people,dc=demo,dc=dbx"]').click({ timeout: t });
     });
     await stage("ou-people-active", (t) => page.waitForFunction(() => {
-      // 新页签 unshift 到工作集首位并激活；断言用 shell 的 is-active 类（无歧义）。
+      // 新页签按打开次序追加到工作集尾部并激活（激活已有页签不重排，
+      // 见 lib/openTabs）；断言用 shell 的 is-active 类（无歧义）。
       const shells = [...document.querySelectorAll(".entry-tab-shell")];
-      return shells[0]?.classList.contains("is-active") === true && shells[0]?.textContent?.includes("ou=people") === true;
+      const tail = shells[shells.length - 1];
+      return tail?.classList.contains("is-active") === true && tail?.textContent?.includes("ou=people") === true;
     }, undefined, { timeout: t }));
     // 切回 tabs-1：DN 行随之切换。
     await stage("switch-to-tabs-1", async (t) => {

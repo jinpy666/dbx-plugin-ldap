@@ -11,6 +11,7 @@ import { DBX_POPOVER, resolveAppearance, type DbxPluginAppearanceInput } from ".
 import { isDbxPluginTheme, onHostThemeChange, themeToAppearance } from "./lib/hostTheme";
 import { setWorkbenchLocale, t, workbenchLocale } from "./lib/i18n";
 import { getLdapConnectionId, ldapApi, setLdapConnectionId, type LdapEntry, type LdapSearchRequest } from "./lib/api";
+import { appendOpenTab } from "./lib/openTabs";
 import { inferBaseDnFromProfile, pickBaseDnFromRootDse } from "./lib/baseDn";
 import { joinRdnAndParent, splitFirstDnRdn } from "./lib/dn";
 import { escapeLdapFilterValue } from "./lib/ldapFilter";
@@ -373,13 +374,15 @@ const schemaOpen = ref(false);
 const rootDseOpen = ref(false);
 // 条目多开工作集（F9，对标 ADS MultiTabEntryEditor 的最小形态）：页签 = 已打开
 // 条目快速切换入口（内存态），脏态守卫在编辑器组件内（脏时 switchTab 不发出）。
+// 顺序按打开次序稳定排列：激活已有页签不重排（点击跳动的根因即每次激活都把
+// DN 插到最前），新开追加尾部，超限淘汰最早的——见 lib/openTabs。
 const openTabs = ref<string[]>([]);
 const tabDirty = ref(false);
 const OPEN_TABS_MAX = 6;
 watch([editorOpen, editorRequestedDn], ([open, dn]) => {
   tabDirty.value = false;
   if (open && dn) {
-    openTabs.value = [dn, ...openTabs.value.filter((item) => item.toLowerCase() !== dn.toLowerCase())].slice(0, OPEN_TABS_MAX);
+    openTabs.value = appendOpenTab(openTabs.value, dn, OPEN_TABS_MAX);
   }
 });
 function onSwitchTab(dn: string) {
