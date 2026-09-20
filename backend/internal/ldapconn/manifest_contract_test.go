@@ -227,10 +227,11 @@ func TestManifestAuthTypeVisibilityMatrix(t *testing.T) {
 	// 可见性由下方 tls_mode 条件场景单独守卫。
 	common := []string{
 		"display_name", "host", "port", "tls_mode", "base_dn", "auth_type",
-		"timeout_secs", "read_only",
+		"timeout_secs", "dial_timeout_secs", "read_only",
 		"allowed_base_dns", "allowed_write_base_dns", "blocked_attributes",
 	}
-	tlsFields := []string{"tls_verify", "tls_ca_path", "tls_server_name"}
+	tlsFields := []string{"tls_verify", "tls_ca_path", "tls_server_name",
+		"tls_client_cert_path", "tls_client_key_path"}
 	simpleCommon := append(append([]string{}, common...), "bind_dn", "username", "bind_password")
 	cases := []struct {
 		name  string

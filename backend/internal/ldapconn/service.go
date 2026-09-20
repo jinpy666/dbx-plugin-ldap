@@ -135,6 +135,9 @@ func NewProfileFromLifecycle(params *lifecycle.Params) (Profile, bindSecrets, er
 	}
 	profile.TLSCAPath = params.ConfigString("tls_ca_path")
 	profile.TLSServerName = params.ConfigString("tls_server_name")
+	// mTLS 客户端证书路径（tls_mode ∈ starttls|ldaps 时表单可见）。
+	profile.TLSClientCertPath = params.ConfigString("tls_client_cert_path")
+	profile.TLSClientKeyPath = params.ConfigString("tls_client_key_path")
 	profile.SASLHost = params.ConfigString("sasl_host")
 	profile.SASLQoP = params.ConfigString("sasl_qop")
 	profile.SASLMutualAuth = params.ConfigBool("sasl_mutual_auth")
@@ -150,6 +153,8 @@ func NewProfileFromLifecycle(params *lifecycle.Params) (Profile, bindSecrets, er
 		Krb5ConfPath:   params.ConfigString("krb5_conf_path"),
 	}
 	profile.TimeoutSeconds = params.ConfigInt("timeout_secs")
+	// 拨号窗口独立档（dial/read 两档超时）：0/缺省 = 回落 timeout_secs。
+	profile.DialTimeoutSeconds = params.ConfigInt("dial_timeout_secs")
 	// 只读门禁收敛：连接表单 read_only（插件特定配置项）∥ 宿主标准 read_only
 	// （ConnectionConfig 通用连接设置）。
 	profile.ReadOnly = params.ConfigBool("read_only") || params.Connection.ReadOnly

@@ -78,6 +78,10 @@ type Profile struct {
 	TLSCAPath   string `json:"tlsCaPath,omitempty"`
 	// TLSServerName 缺省派生为 connection.host（L-A dial 层负责兜底）。
 	TLSServerName string `json:"tlsServerName,omitempty"`
+	// mTLS 客户端证书（PEM 文件路径，用户本机提供，插件侧只读）。两者都空 =
+	// 不使用客户端证书（现行为）；只填其一时拨号期报错（ldapTLSConfig）。
+	TLSClientCertPath string `json:"tlsClientCertPath,omitempty"`
+	TLSClientKeyPath  string `json:"tlsClientKeyPath,omitempty"`
 	// Kerberos 仅在 auth_type=kerberos 时由 lifecycle 填充（M3）。
 	Kerberos *LDAPKerberosConfig `json:"kerberos,omitempty"`
 	// SASLHost 覆盖 DIGEST-MD5 的 SASL host（缺省用 URL 逻辑主机，
@@ -89,8 +93,12 @@ type Profile struct {
 	// SASLMutualAuth：GSSAPI mutual 认证开关（缺省 false，tiny-rdm 同）。
 	SASLMutualAuth bool `json:"saslMutualAuth,omitempty"`
 	// TimeoutSeconds 缺省 30（lifecycle 构造时兜底）。
-	TimeoutSeconds int  `json:"timeoutSeconds,omitempty"`
-	ReadOnly       bool `json:"readOnly"`
+	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
+	// DialTimeoutSeconds 拨号窗口（TCP 建立 + StartTLS 升级）独立档：
+	// 0/未设置 = 回落 TimeoutSeconds（向后兼容），> 0 才生效（ldapDialTimeout）。
+	// 只约束拨号，不改 LDAP 消息读超时（SetTimeout 仍用 TimeoutSeconds）。
+	DialTimeoutSeconds int  `json:"dialTimeoutSeconds,omitempty"`
+	ReadOnly           bool `json:"readOnly"`
 
 	// DN 白名单与屏蔽属性策略（§6）。空 = 不限。
 	AllowedBaseDNs      []string `json:"allowedBaseDns,omitempty"`
@@ -115,6 +123,8 @@ func NormalizeProfile(p Profile) Profile {
 	p.AuthzID = strings.TrimSpace(p.AuthzID)
 	p.TLSCAPath = strings.TrimSpace(p.TLSCAPath)
 	p.TLSServerName = strings.TrimSpace(p.TLSServerName)
+	p.TLSClientCertPath = strings.TrimSpace(p.TLSClientCertPath)
+	p.TLSClientKeyPath = strings.TrimSpace(p.TLSClientKeyPath)
 	p.SASLHost = strings.TrimSpace(p.SASLHost)
 	p.SASLQoP = strings.ToLower(strings.TrimSpace(p.SASLQoP))
 	if p.Kerberos != nil {

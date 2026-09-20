@@ -83,8 +83,9 @@ function state(overrides) {
   };
 }
 
-// -- TLS/encryption matrix: tls_verify and tls_server_name follow tls_mode,
-//    and the CA path only appears once certificate verification is on. ------
+// -- TLS/encryption matrix: tls_verify, tls_server_name and the mTLS client
+//    cert/key paths follow tls_mode, and the CA path only appears once
+//    certificate verification is on. --------------------------------------
 const tlsModes = options("tls_mode");
 for (const tls_mode of tlsModes) {
   for (const tls_verify of [false, true]) {
@@ -92,9 +93,13 @@ for (const tls_mode of tlsModes) {
     const tls = tls_mode !== "none";
     current.visible("tls_verify", tls);
     current.visible("tls_server_name", tls);
+    current.visible("tls_client_cert_path", tls);
+    current.visible("tls_client_key_path", tls);
     current.visible("tls_ca_path", tls && tls_verify);
     current.required("tls_verify", false);
     current.required("tls_ca_path", false);
+    current.required("tls_client_cert_path", false);
+    current.required("tls_client_key_path", false);
   }
 }
 

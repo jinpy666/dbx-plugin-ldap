@@ -19,7 +19,7 @@
 | StartTLS | ✅ | ✅ tls_mode=starttls | ✅ | — |
 | LDAPI (Unix socket) | ❌（ADS 无） | ✅ ldapi://（smoke_ldapi_test） | ✅ | 超越项，保持 |
 | 连接测试（只测网络连通） | ✅ Check Network Parameter | ✅ `ldap/check`（network 全新短拨号测延迟 ∥ bind 会话探活两级，无副作用）+ 连接面板每行检查（本轮） | ✅ | — |
-| 网络超时/读超时 | ✅ | 🔶 单一 timeout_secs（缺省 30） | 🔶 | P2：拆 dial/read 两档 |
+| 网络超时/读超时 | ✅ | ✅ timeout_secs（读/操作档，缺省 30）+ dial_timeout_secs（拨号档，0 = 回落读档；本轮） | ✅ | — |
 | 引用（referral）跟随策略 | ✅ follow/ignore/manage | ❌ | ❌ | P1：go-ldap ReferralEnabled + 配置项 |
 | 别名处理（browse/search 解引用） | ✅ 分开设置 | 🔶 搜索有 derefAliases，浏览树无 | 🔶 | P2 |
 
@@ -30,7 +30,7 @@
 | 证书校验开关 | ✅（truststore / 自定义 CA / 不校验） | ✅ tls_verify + tls_ca_path | ✅ | — |
 | 自定义 CA 证书 | ✅ | ✅ tls_ca_path | ✅ | — |
 | SNI/服务器名覆盖 | 🔶（跟随 URL） | ✅ tls_server_name | ✅ | — |
-| 客户端证书（mTLS） | ✅ | ❌ | ❌ | P2：Go tls.ClientCerts + 表单字段 |
+| 客户端证书（mTLS） | ✅ | ✅ tls_client_cert_path + tls_client_key_path（PEM 路径，starttls/ldaps 联动显隐；本轮） | ✅ | — |
 | 加密关闭时隐藏证书设置 | ✅ | 🔶 本轮补：manifest tls_* 字段随 tls_mode 联动显隐 | ✅（本轮） | — |
 
 ## 3. 认证
@@ -138,5 +138,6 @@
 - **M6（扩容后，与 PLA 对账表 N1–N4 并轨）**：LDIF 导入；结果批量操作；
   新条目 objectClass 模板（N4）；二进制属性查看器 + 上传（N3）；
   子树删除（N1）；密码哈希辅助（N2）。任务分解见 PLA 对账表 §7（L6-x）。
-- **M7（按需）**：mTLS 客户端证书；CRAM-MD5；referral 策略；服务器端排序；
-  digest realm；DSML。
+- **M7（按需）**：CRAM-MD5；referral 策略；服务器端排序；
+  digest realm；DSML。（mTLS 客户端证书与 dial/read 两档超时已于本轮提前落地，
+  见 §1/§2。）
