@@ -43,6 +43,8 @@ function defaultSearchModel(baseDn = props.baseDn): SearchFormModel {
     pageSize: "500",
     typesOnly: false,
     derefAliases: "never",
+    sortBy: "",
+    sortOrder: "asc",
   };
 }
 
@@ -824,6 +826,12 @@ const derefOptions = computed(() => [
   { value: "finding" as const, label: t("search.derefFinding") },
   { value: "always" as const, label: t("search.derefAlways") },
 ]);
+
+// RFC 2891 服务器端排序方向选项（升/降；属性名留空 = 不请求排序）。
+const sortOrderOptions = computed(() => [
+  { value: "asc" as const, label: t("search.sortAsc") },
+  { value: "desc" as const, label: t("search.sortDesc") },
+]);
 </script>
 
 <template>
@@ -1032,6 +1040,17 @@ const derefOptions = computed(() => [
         <span>{{ t("search.deref") }}</span>
         <select v-model="draft.derefAliases" :disabled="disabled">
           <option v-for="option in derefOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+        </select>
+      </label>
+      <!-- RFC 2891 服务器端排序：属性留空 = 不请求排序；紧凑条折叠形态下不展开显示。 -->
+      <label class="field" :title="t('search.sortByHint')">
+        <span>{{ t("search.sortBy") }}</span>
+        <input v-model="draft.sortBy" type="text" :disabled="disabled" spellcheck="false" :placeholder="t('search.sortByHint')" />
+      </label>
+      <label class="field" :title="t('search.sortByHint')">
+        <span>{{ t("search.sortOrder") }}</span>
+        <select v-model="draft.sortOrder" :disabled="disabled">
+          <option v-for="option in sortOrderOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
         </select>
       </label>
     </div>

@@ -300,3 +300,32 @@ describe("SearchForm validation feedback (fresh review)", () => {
     wrapper.unmount();
   });
 });
+
+// RFC 2891 服务器端排序（GAP §5）：高级区排序属性 + 方向字段（紧凑条折叠形态
+// 下不展开显示，因此只在展开后的 .search-extra 内出现）。
+describe("SearchForm server-side sort fields", () => {
+  it("defaults to unsorted and emits no sort fields until an attribute is set", async () => {
+    const wrapper = await mountForm();
+    await wrapper.find(".qb-attr").setValue("uid");
+    await wrapper.find(".qb-value").setValue("admin");
+    await wrapper.find("form").trigger("submit");
+    const payload = wrapper.emitted("run")![0][0] as Record<string, unknown>;
+    expect(payload.sortBy).toBe("");
+    expect(payload.sortOrder).toBe("asc");
+    wrapper.unmount();
+  });
+
+  it("emits sortBy/sortOrder with the search request", async () => {
+    const wrapper = await mountForm();
+    await wrapper.find(".qb-attr").setValue("uid");
+    await wrapper.find(".qb-value").setValue("admin");
+    const extraInputs = wrapper.findAll(".search-extra input");
+    // 高级区输入序：attributes / sizeLimit / pageSize / sortBy（尾部新增）。
+    await extraInputs[extraInputs.length - 1].setValue("sn");
+    await wrapper.findAll(".search-extra select").at(-1)!.setValue("desc");
+    await wrapper.find("form").trigger("submit");
+    expect(wrapper.emitted("run")).toHaveLength(1);
+    expect(wrapper.emitted("run")![0][0]).toMatchObject({ sortBy: "sn", sortOrder: "desc" });
+    wrapper.unmount();
+  });
+});

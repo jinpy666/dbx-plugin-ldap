@@ -4,7 +4,7 @@
 // buildTreeKeywordFilter / searchTreeFilterRemote），组件按 DBX 插件形态重实现。
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Clipboard, Copy, Download, Eye, GitCompare, Pencil, Plus, RefreshCw, Search, Star, Trash2, Users, X } from "@lucide/vue";
-import { getLdapConnectionId, ldapApi, type LdapEntry, type LdapSearchPage, type LdapSearchSessionResult } from "../lib/api";
+import { getLdapConnectionId, ldapApi, type LdapDerefAliases, type LdapEntry, type LdapSearchPage, type LdapSearchSessionResult } from "../lib/api";
 import { buildTreeKeywordFilter } from "../lib/ldapFilter";
 import { friendlyLdapError } from "../lib/ldapErrors";
 import { splitFirstDnRdn } from "../lib/dn";
@@ -158,6 +158,23 @@ function currentConnectionId(): string {
   return props.connectionId || getLdapConnectionId();
 }
 
+// -- 树浏览解引用（GAP §1「别名处理」P2）---------------------------------------
+// 子节点列举（ldap/search/start，scope=one）的 derefAliases 选项；缺省 never
+// 与历史行为逐字节一致（零配置无行为变化）。切换后整树按新解引用重建——
+// 已展开节点的游标/子列表都是旧语义的产物，混排会造成父子关系错乱。
+const treeDerefAliases = ref<LdapDerefAliases>("never");
+
+const treeDerefOptions = computed(() => [
+  { value: "never" as LdapDerefAliases, label: t("search.derefNever") },
+  { value: "searching" as LdapDerefAliases, label: t("search.derefSearching") },
+  { value: "finding" as LdapDerefAliases, label: t("search.derefFinding") },
+  { value: "always" as LdapDerefAliases, label: t("search.derefAlways") },
+]);
+
+function onTreeDerefChange() {
+  void refresh();
+}
+
 function nodeSessionKey(node: Pick<DnTreeNode, "dn">): string {
   return node.dn.toLowerCase();
 }
@@ -235,7 +252,7 @@ function childSearchRequest(dn: string) {
     scope: "one" as const,
     attributes: TREE_ATTRIBUTES,
     pageSize: TREE_FETCH_PAGE,
-    derefAliases: "never" as const,
+    derefAliases: treeDerefAliases.value,
   };
 }
 
@@ -713,6 +730,16 @@ onBeforeUnmount(onMountedCleanup);
     <header class="panel-header">
       <span class="panel-title"><Search class="icon-neutral" aria-hidden="true" />{{ t("tree.title") }}</span>
       <span class="actions">
+        <select
+          v-model="treeDerefAliases"
+          class="deref-select"
+          :aria-label="t('tree.deref')"
+          :title="t('tree.deref')"
+          :disabled="disabled || !hasBaseDn"
+          @change.stop="onTreeDerefChange"
+        >
+          <option v-for="option in treeDerefOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+        </select>
         <button class="icon-button" :title="t('refresh')" :aria-label="t('refresh')" :disabled="disabled || !hasBaseDn || (hasFilter ? filterLoading : loadingRoot)" @click.stop="refresh">
           <RefreshCw :class="{ spinning: hasFilter ? filterLoading : loadingRoot }" aria-hidden="true" />
         </button>
@@ -834,3 +861,22 @@ onBeforeUnmount(onMountedCleanup);
     />
   </section>
 </template>
+
+<style scoped>
+/* 树工具栏解引用下拉（GAP §1）：紧凑条形态贴合 panel-header 34px 高度，
+   选项文案复用 search.deref* 既有词条（never/searching/finding/always）。 */
+.deref-select {
+  height: 24px;
+  min-width: 0;
+  max-width: 92px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 11px;
+  outline: none;
+  background: color-mix(in srgb, var(--background) 95%, var(--foreground));
+  color: var(--foreground);
+}
+.deref-select:focus { border-color: color-mix(in srgb, var(--primary) 70%, var(--border)); }
+.deref-select[disabled] { opacity: 0.42; }
+</style>

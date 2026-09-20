@@ -53,6 +53,8 @@ async function loadChildren(node: PickerNode) {
   node.loading = true;
   loadError.value = "";
   try {
+    // TODO(GAP §1 余量)：浏览树已提供解引用下拉，此选择器弹层沿用缺省
+    // never（零配置不变）；如需跟随树设置，在此透传 derefAliases 即可。
     const result = await ldapApi.search({ baseDn: node.dn, scope: "one", filter: "(objectClass=*)", attributes: ["dn"], sizeLimit: TREE_FETCH_PAGE });
     node.children = result.entries.map(toNode);
     // 后端 truncated 标志优先；无标志时以数量兜底，仅确超上限（>上限，恰好

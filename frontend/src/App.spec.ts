@@ -84,7 +84,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const searchModel = { baseDn: "dc=first", filter: "(uid=alice)", scope: "sub", attributes: "", sizeLimit: "500", pageSize: "500", typesOnly: false, derefAliases: "never" };
+const searchModel = { baseDn: "dc=first", filter: "(uid=alice)", scope: "sub", attributes: "", sizeLimit: "500", pageSize: "500", typesOnly: false, derefAliases: "never", sortBy: "", sortOrder: "asc" as const };
 const resultsPane = () => wrapper!.findComponent({ name: "ResultTable" });
 const editor = () => wrapper!.findComponent({ name: "EntryEditorDialog" });
 const recentButton = () => wrapper!.findAll("button[aria-label]").find((button) => button.attributes("aria-label")?.toLowerCase().includes("recent"))!;

@@ -415,3 +415,25 @@ describe("DnTree revealDn 树内定位", () => {
     expect(wrapper.findAll(".tree-node").map((row) => row.attributes("title"))).toEqual([baseDn, parentDn]);
   });
 });
+
+// 树浏览解引用（GAP §1「别名处理」）：子节点列举请求携带 derefAliases，缺省
+// never 与历史行为一致；切换后整树按新解引用重建（游标作废、重新发起）。
+describe("DnTree 浏览树解引用", () => {
+  it("缺省 never：子节点列举请求零配置行为不变", async () => {
+    searchStart.mockResolvedValueOnce({ searchId: "root", entries: [{ dn: "ou=people," + baseDn, attributes: {} }], hasMore: false });
+    await wrapper.vm.refresh();
+    await flushPromises();
+    expect(searchStart).toHaveBeenCalledWith(expect.objectContaining({ derefAliases: "never" }));
+  });
+
+  it("切换解引用选项 → 整树重建并按新值发起请求", async () => {
+    searchStart.mockResolvedValue({ searchId: "root", entries: [], hasMore: false });
+    await wrapper.vm.refresh();
+    await flushPromises();
+
+    await wrapper.find(".deref-select").setValue("searching");
+    await flushPromises();
+    const lastCall = searchStart.mock.calls.at(-1)![0];
+    expect(lastCall).toMatchObject({ baseDn, derefAliases: "searching" });
+  });
+});

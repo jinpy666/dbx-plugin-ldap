@@ -21,7 +21,7 @@
 | 连接测试（只测网络连通） | ✅ Check Network Parameter | ✅ `ldap/check`（network 全新短拨号测延迟 ∥ bind 会话探活两级，无副作用）+ 连接面板每行检查（本轮） | ✅ | — |
 | 网络超时/读超时 | ✅ | 🔶 单一 timeout_secs（缺省 30） | 🔶 | P2：拆 dial/read 两档 |
 | 引用（referral）跟随策略 | ✅ follow/ignore/manage | ❌ | ❌ | P1：go-ldap ReferralEnabled + 配置项 |
-| 别名处理（browse/search 解引用） | ✅ 分开设置 | 🔶 搜索有 derefAliases，浏览树无 | 🔶 | P2 |
+| 别名处理（browse/search 解引用） | ✅ 分开设置 | ✅ 搜索有 derefAliases；浏览树工具栏解引用下拉（子节点列举请求 derefAliases 透传，缺省 never 零配置无行为变化；DN Picker 弹层沿用 never，余量留 TODO）（本轮） | ✅ | — |
 
 ## 2. 加密与证书
 
@@ -70,7 +70,7 @@
 | 保存的搜索（Saved Searches） | ✅ 文件夹管理 | ✅ 预设（结构化条件 + 过滤器串，sidecar 持久化） | ✅ | P2：预设分组/排序 |
 | 搜索历史 | ✅ | ✅ 本地最近 10 条（成功才入队、去重、localStorage 持久化，下拉应用不自动运行；本轮） | ✅ | — |
 | 分页搜索（Paged Results 控件） | ✅ | ✅ pageSize | ✅ | — |
-| 服务器端排序控件 | ✅ | ❌（客户端列排序） | ❌ | P2 |
+| 服务器端排序控件（RFC 2891） | ✅ | ✅ 搜索表单高级区排序属性 + 方向（sortBy/sortOrder），后端注入 RFC 2891 排序控件（非分页/分页/会话链路每页携带，与 RFC 2696 cookie 共存）；服务器未按请求排序时优雅降级（sortResult 状态码透出 + 一次性提示，结果照常返回；go-ldap v3.4.13 解码器缺陷致非零码暂多透出为 0，见 backend/internal/ldapconn/sort.go 注释）（本轮） | ✅ | — |
 | 搜索范围 base/one/sub | ✅ | ✅ | ✅ | — |
 | 结果批量操作（删除/移动） | ✅ Batch Operations Wizard | ✅ 多选批量删除（确认 + 逐条非递归）+ 批量移动（保留 RDN、目标父 DN 校验；失败计数明示）（本轮收齐） | ✅ | — |
 
@@ -138,5 +138,4 @@
 - **M6（扩容后，与 PLA 对账表 N1–N4 并轨）**：LDIF 导入；结果批量操作；
   新条目 objectClass 模板（N4）；二进制属性查看器 + 上传（N3）；
   子树删除（N1）；密码哈希辅助（N2）。任务分解见 PLA 对账表 §7（L6-x）。
-- **M7（按需）**：mTLS 客户端证书；CRAM-MD5；referral 策略；服务器端排序；
-  digest realm；DSML。
+- **M7（按需）**：mTLS 客户端证书；CRAM-MD5；referral 策略；~~服务器端排序~~（RFC 2891 已落地，见 §5 本轮）；digest realm；DSML。

@@ -190,6 +190,8 @@ const {
   clearBanner,
   onSnapshot: (payload) => reportSnapshot(payload),
   onHistory: (model) => searchRef.value?.recordSearch?.(model),
+  // RFC 2891 排序降级一次性提示：服务器回非零 SortResult 时复用顶部通知条。
+  onNotice: (message) => showNotice(message),
 });
 
 // -- 条目详情 / 关联视图 / 最近条目（lib 组合式） ---------------------------------

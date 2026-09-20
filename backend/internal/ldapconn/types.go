@@ -160,7 +160,9 @@ type LDAPEntry struct {
 	Attributes map[string][]string `json:"attributes"`
 }
 
-// LDAPSearchRequest 对应 ldap/search（§5.2）。
+// LDAPSearchRequest 对应 ldap/search（§5.2）。SortBy/SortOrder 是可选的
+// RFC 2891 服务器端排序：sortBy 空缺省不请求排序；sortOrder ∈ asc|desc
+// （大小写/空白不敏感，除 desc 外一律升序；sortBy 为空时忽略）。
 type LDAPSearchRequest struct {
 	ConnectionID string   `json:"connectionId"`
 	BaseDN       string   `json:"baseDn,omitempty"`
@@ -171,15 +173,20 @@ type LDAPSearchRequest struct {
 	PageSize     int      `json:"pageSize,omitempty"`
 	TypesOnly    bool     `json:"typesOnly,omitempty"`
 	DerefAliases string   `json:"derefAliases,omitempty"`
+	SortBy       string   `json:"sortBy,omitempty"`
+	SortOrder    string   `json:"sortOrder,omitempty"`
 }
 
-// LDAPSearchResult 对应 ldap/search 返回。
+// LDAPSearchResult 对应 ldap/search 返回。SortResult 是服务器 RFC 2891
+// SortResult 控件状态码透出：0/缺省 = 排序成功；非 0 = 服务器未按请求
+// 排序（优雅降级——条目照常返回，由前端一次性提示，不作为错误）。
 type LDAPSearchResult struct {
-	Entries   []LDAPEntry `json:"entries"`
-	Count     int         `json:"count"`
-	Truncated bool        `json:"truncated"`
-	BaseDN    string      `json:"baseDn,omitempty"`
-	Filter    string      `json:"filter,omitempty"`
+	Entries    []LDAPEntry `json:"entries"`
+	Count      int         `json:"count"`
+	Truncated  bool        `json:"truncated"`
+	BaseDN     string      `json:"baseDn,omitempty"`
+	Filter     string      `json:"filter,omitempty"`
+	SortResult int         `json:"sortResult,omitempty"`
 }
 
 // LDAPSearchSessionRequest 对应 ldap/search/start。字段与 ldap/search 一致，
@@ -200,15 +207,17 @@ type LDAPSearchSessionCancelRequest struct {
 }
 
 // LDAPSearchSessionResult 是 start/next 的增量页响应。Count 仅为当前页条数，
-// 不是昂贵的全量计数；hasMore=false 时该 searchId 自动释放。
+// 不是昂贵的全量计数；hasMore=false 时该 searchId 自动释放。SortResult 语义
+// 同 LDAPSearchResult（RFC 2891 排序降级状态码，非 0 = 未按请求排序）。
 type LDAPSearchSessionResult struct {
-	SearchID  string      `json:"searchId,omitempty"`
-	Entries   []LDAPEntry `json:"entries"`
-	Count     int         `json:"count"`
-	HasMore   bool        `json:"hasMore"`
-	Truncated bool        `json:"truncated,omitempty"`
-	BaseDN    string      `json:"baseDn,omitempty"`
-	Filter    string      `json:"filter,omitempty"`
+	SearchID   string      `json:"searchId,omitempty"`
+	Entries    []LDAPEntry `json:"entries"`
+	Count      int         `json:"count"`
+	HasMore    bool        `json:"hasMore"`
+	Truncated  bool        `json:"truncated,omitempty"`
+	BaseDN     string      `json:"baseDn,omitempty"`
+	Filter     string      `json:"filter,omitempty"`
+	SortResult int         `json:"sortResult,omitempty"`
 }
 
 // LDAPGetEntryRequest 对应 ldap/entry/get。
