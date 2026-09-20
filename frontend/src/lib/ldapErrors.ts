@@ -17,6 +17,9 @@ const RULES: ReadonlyArray<{ pattern: RegExp; key: string }> = [
     // TLS 优先于 network：证书类错误也带 connection/handshake 字样
     { pattern: /certificate|x509|unknown authority|tls.*handshake/i, key: "err.tls" },
     { pattern: /result code 49|invalid credentials/i, key: "err.invalidCredentials" },
+    // 结果码 10（Referral）：机器可读前缀或 go-ldap 原文均可命中；放在通用
+    // network/timeout 规则之前，保证 referral 优先归类。
+    { pattern: /ldap-code=10|result code 10|\breferral\b/i, key: "err.referral" },
     { pattern: /result code 32|no such object/i, key: "err.noSuchObject" },
     { pattern: /result code 34|invalid dn syntax/i, key: "err.invalidDn" },
     { pattern: /result code 20|attribute or value exists/i, key: "err.attributeExists" },
@@ -42,12 +45,15 @@ const RULES: ReadonlyArray<{ pattern: RegExp; key: string }> = [
 export interface LdapErrorMeta {
     resultCode?: number;
     matchedDn?: string;
+    /** 结果码 10 的引用 URI（bizError 前缀最多携带 5 条）。 */
+    referrals?: string[];
 }
 
 // 后端契约前缀（backend/main.go bizError 注入）：[ldap-code=<十进制>]（必有）、
 // " [ldap-matched=<DN>]"（仅 DN 非空时）。DN 内不含 "]"；空值视为无。
 const CODE_PREFIX = /\[ldap-code=(\d+)\]/;
 const MATCHED_PREFIX = /\[ldap-matched=([^\]]+)\]/;
+const REFERRAL_PREFIX = /\[ldap-referral=([^\]]+)\]/;
 
 // parseLdapErrorMeta 解析后端注入的 [ldap-code=..]/[ldap-matched=..] 前缀，
 // 无前缀（或空 matchedDn）时返回不含对应字段的对象。
@@ -58,6 +64,11 @@ export const parseLdapErrorMeta = (message: string): LdapErrorMeta => {
     if (code) meta.resultCode = Number(code[1]);
     const matched = MATCHED_PREFIX.exec(raw);
     if (matched) meta.matchedDn = matched[1];
+    const referral = REFERRAL_PREFIX.exec(raw);
+    if (referral) {
+        const uris = referral[1].split("|").map((uri) => uri.trim()).filter(Boolean);
+        if (uris.length > 0) meta.referrals = uris;
+    }
     return meta;
 };
 

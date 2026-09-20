@@ -378,6 +378,30 @@ describe("nested groups", () => {
     expect(buildNodeFilter(tree)).toBe("(!(|(cn=a)(uid=b)))");
   });
 
+  it("applies group NOT structurally when the inner filter is already negated", () => {
+    // A group whose only child is a NOT clause must produce a second, real
+    // negation — NOT(the group) is not the same predicate as its inner filter.
+    const tree = createBuilderGroup({
+      join: "and",
+      negate: true,
+      children: [{ ...createBuilderClause({ attribute: "uid", op: "startsWith", value: "jd" }), negate: true }],
+    });
+    expect(buildNodeFilter(tree)).toBe("(!(!(uid=jd*)))");
+  });
+
+  it("keeps a stray negate flag on notEquals clauses redundant (revived data)", () => {
+    // notEquals encodes one negation by itself; an extra negate flag (legacy
+    // persisted presets) must not stack a second `!`.
+    const clause = { ...createBuilderClause({ attribute: "cn", op: "notEquals", value: "x" }), negate: true };
+    expect(buildNodeFilter(clause)).toBe("(!(cn=x))");
+  });
+
+  it("preserves double negation on groups through parse → build round trip", () => {
+    const parsed = parseFilterStructure("(!(!(|(cn=a)(uid=b))))");
+    expect(parsed?.kind).toBe("group");
+    expect(buildNodeFilter(parsed)).toBe("(!(!(|(cn=a)(uid=b))))");
+  });
+
   it("collects per-clause validation errors with node ids", () => {
     const clause = createBuilderClause({ attribute: "cn", op: "equals", value: "" });
     const tree = createBuilderGroup({ children: [createBuilderClause({ op: "equals", value: "x" }), clause] });

@@ -1,6 +1,7 @@
 import { computed, ref } from "vue";
-import { ldapApi, type LdapEntry, type LdapSearchRequest } from "./api";
+import { ldapApi, type LdapEntry, type LdapSearchRequest, type LdapSortOrder } from "./api";
 import { friendlyLdapError } from "./ldapErrors";
+import { t } from "./i18n";
 import type { UiIntentSummary } from "../../../shared/frontend/uiIntent";
 
 /**
@@ -17,6 +18,10 @@ export interface SearchFormModel {
   pageSize: string;
   typesOnly: boolean;
   derefAliases: "never" | "searching" | "finding" | "always";
+  /** RFC 2891 服务器端排序属性（空 = 不请求排序，后端不注入排序控件）。 */
+  sortBy: string;
+  /** 排序方向；仅 sortBy 非空时随请求下发。 */
+  sortOrder: LdapSortOrder;
 }
 
 export type SearchIntentSummary = UiIntentSummary;
@@ -29,18 +34,23 @@ export interface UseSearchSessionOptions {
   onSnapshot: (payload: Record<string, unknown>) => void;
   /** 搜索成功才入历史（SearchForm.recordSearch 的本地历史）。 */
   onHistory: (model: SearchFormModel) => void;
+  /** 可选一次性通知（RFC 2891 排序降级提示；缺省不弹，旧调用方无感）。 */
+  onNotice?: (message: string) => void;
 }
 
 /** 结果摘要：count + 前 5 行（每 cell 截 120 字符，DN 定位字段不截断）。 */
 const INTENT_CELL_WIDTH = 120;
 
 export function useSearchSession(options: UseSearchSessionOptions) {
-  const { getConnectionId, clearBanner, onSnapshot, onHistory } = options;
+  const { getConnectionId, clearBanner, onSnapshot, onHistory, onNotice } = options;
 
   const searchModel = ref<SearchFormModel>();
   const results = ref<LdapEntry[]>([]);
   const resultCount = ref(0);
   const resultTruncated = ref(false);
+  // 延续引用 URI（referral report 语义）：后端每页响应都带会话级累计列表，
+  // 这里以最新响应为准（referral 不追随，仅提示目录树延伸到其他服务器）。
+  const resultReferrals = ref<string[]>([]);
   // `resultCount` is an exact total only when the LDAP search cursor is exhausted.
   // Until then it deliberately means "entries loaded", never an invented total.
   const resultsComplete = ref(true);
@@ -100,6 +110,7 @@ export function useSearchSession(options: UseSearchSessionOptions) {
         const page = await ldapApi.searchNext(session.id, session.connectionId);
         if (request !== searchRequestSeq || activeSearchSession?.id !== session.id) return;
         pending.push(...(Array.isArray(page.entries) ? page.entries : []));
+        if (Array.isArray(page.referrals)) resultReferrals.value = page.referrals;
         resultsComplete.value = page.hasMore !== true;
         if (resultsComplete.value) {
           activeSearchSession = undefined;
@@ -133,6 +144,9 @@ export function useSearchSession(options: UseSearchSessionOptions) {
       .map((entry) => entry.trim())
       .filter(Boolean);
     const requestedPageSize = positiveInt(model.pageSize) ?? 500;
+    // RFC 2891 服务器端排序：sortBy 空缺省不发排序字段（后端不注入排序控件）；
+    // sortOrder 仅在排序生效时随请求下发（asc|desc）。
+    const sortBy = model.sortBy.trim();
     return {
       baseDn: model.baseDn.trim() || undefined,
       filter: model.filter.trim() || "(objectClass=*)",
@@ -145,6 +159,7 @@ export function useSearchSession(options: UseSearchSessionOptions) {
       pageSize: requestedPageSize,
       typesOnly: model.typesOnly,
       derefAliases: model.derefAliases,
+      ...(sortBy ? { sortBy, sortOrder: model.sortOrder } : {}),
     };
   }
 
@@ -161,6 +176,7 @@ export function useSearchSession(options: UseSearchSessionOptions) {
     clearBanner();
     results.value = [];
     resultCount.value = 0;
+    resultReferrals.value = [];
     resultsComplete.value = false;
     try {
       const requestParams = toRequest(model);
@@ -172,10 +188,16 @@ export function useSearchSession(options: UseSearchSessionOptions) {
       hasSearched.value = true;
       results.value = Array.isArray(result.entries) ? result.entries : [];
       resultCount.value = results.value.length;
+      resultReferrals.value = Array.isArray(result.referrals) ? result.referrals : [];
       resultTruncated.value = false;
       resultsComplete.value = result.hasMore !== true;
       resultAtLimit.value = requestParams.sizeLimit !== undefined && resultCount.value === requestParams.sizeLimit;
       lastSizeLimit.value = requestParams.sizeLimit;
+      // RFC 2891 优雅降级一次性提示：服务器回非零 SortResult 时结果未按请求
+      // 排序（属性不支持/服务器拒绝），条目照常展示，只提示不报错。0/缺省
+      // 字段（旧 sidecar）不触发。
+      const sortResult = typeof result.sortResult === "number" ? result.sortResult : 0;
+      if (sortResult !== 0) onNotice?.(t("result.sortDegraded", { code: sortResult }));
       activeSearchSession = !resultsComplete.value && result.searchId ? { id: result.searchId, connectionId: requestedConnectionId } : undefined;
       // 搜索成功才入历史（失败/竞态不记）：recordSearch 是 SearchForm 暴露的
       // 本地历史入队（去重 + localStorage），与 presets 的 sidecar 持久化互补。
@@ -240,6 +262,7 @@ export function useSearchSession(options: UseSearchSessionOptions) {
     loadMoreErrorDetail.value = "";
     results.value = [];
     resultCount.value = 0;
+    resultReferrals.value = [];
     resultTruncated.value = false;
     resultsComplete.value = true;
     resultAtLimit.value = false;
@@ -257,6 +280,7 @@ export function useSearchSession(options: UseSearchSessionOptions) {
     results,
     resultCount,
     resultTruncated,
+    resultReferrals,
     resultsComplete,
     searching,
     loadingMore,

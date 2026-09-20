@@ -56,7 +56,7 @@ const DbxAgGridStub = defineComponent({
   },
 });
 
-function mountTable(props: { entries: LdapEntry[]; count: number; truncated?: boolean; searched?: boolean; atLimit?: boolean; sizeLimit?: number; loading?: boolean; error?: string; disabled?: boolean; complete?: boolean; loadingMore?: boolean; loadMoreError?: string; loadMoreErrorDetail?: string }) {
+function mountTable(props: { entries: LdapEntry[]; count: number; truncated?: boolean; searched?: boolean; atLimit?: boolean; sizeLimit?: number; loading?: boolean; error?: string; disabled?: boolean; complete?: boolean; loadingMore?: boolean; loadMoreError?: string; loadMoreErrorDetail?: string; referrals?: string[] }) {
   return mount(ResultTable, {
     props: { truncated: false, ...props },
     global: { stubs: { DbxAgGrid: DbxAgGridStub } },
@@ -113,6 +113,35 @@ describe("ResultTable empty states (P2-3)", () => {
   it("does not show the at-limit badge when results are below the limit", () => {
     const wrapper = mountTable({ entries: [entry], count: 12 });
     expect(wrapper.find(".truncated-badge").exists()).toBe(false);
+  });
+});
+
+describe("ResultTable referral hint (referral report, ADS manage)", () => {
+  it("shows a hint bar with the referral count and URI tooltip when referrals are returned", () => {
+    const wrapper = mountTable({
+      entries: [entry],
+      count: 1,
+      referrals: ["ldap://a.example/dc=demo,dc=dbx", "ldap://b.example/dc=demo,dc=dbx"],
+    });
+    const hint = wrapper.find('[data-qa="result-referrals"]');
+    expect(hint.exists()).toBe(true);
+    expect(hint.text()).toContain("2");
+    expect(hint.attributes("title")).toContain("ldap://a.example/dc=demo,dc=dbx");
+    expect(hint.attributes("title")).toContain("ldap://b.example/dc=demo,dc=dbx");
+  });
+
+  it("caps the tooltip list at five URIs (mirrors the backend error prefix cap)", () => {
+    const uris = Array.from({ length: 7 }, (_, index) => `ldap://s${index}.example/dc=x`);
+    const wrapper = mountTable({ entries: [entry], count: 1, referrals: uris });
+    const hint = wrapper.find('[data-qa="result-referrals"]');
+    expect(hint.text()).toContain("7");
+    expect(hint.attributes("title")).toContain("ldap://s4.example/dc=x");
+    expect(hint.attributes("title")).not.toContain("ldap://s5.example/dc=x");
+  });
+
+  it("hides the hint when no referrals are returned", () => {
+    const wrapper = mountTable({ entries: [entry], count: 1 });
+    expect(wrapper.find('[data-qa="result-referrals"]').exists()).toBe(false);
   });
 });
 

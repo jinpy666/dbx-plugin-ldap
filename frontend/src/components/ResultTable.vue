@@ -36,6 +36,9 @@ const props = withDefaults(defineProps<{
   /** 连接可写门禁（表单 read_only ∥ 宿主 read_only）：false 时禁用批量
    * 删除/移动/修改三个写入口（App 侧守卫兜底，后端 policy 最终拒绝）。 */
   canWrite?: boolean;
+  /** 延续引用 URI（referral report 语义，referral 不追随）：非空时结果表
+   * 顶部提示条展示（ADS manage 行为的轻量对位）。 */
+  referrals?: string[];
 }>(), {
   complete: true,
   canWrite: true,
@@ -164,6 +167,9 @@ onBeforeUnmount(disarmBatchDelete);
 
 const hasEntries = computed(() => props.entries.length > 0);
 const complete = computed(() => props.complete);
+/** referral 提示：标题列出前 5 条 URI（与后端错误前缀封顶一致），溢出省略。 */
+const referralHint = computed(() => (props.referrals ?? []).slice(0, 5).join("\n"));
+const referralCount = computed(() => props.referrals?.length ?? 0);
 </script>
 
 <template>
@@ -182,6 +188,9 @@ const complete = computed(() => props.complete);
         <button v-if="hasEntries" :disabled="disabled || !complete" :title="complete ? t('result.exportJson') : t('result.exportIncomplete')" @click="emit('export', 'json')"><FileJson aria-hidden="true" /></button>
       </span>
     </div>
+    <p v-if="!loading && !error && referralCount > 0" class="referral-hint" :title="referralHint" data-qa="result-referrals">
+      {{ t("result.referrals", { count: referralCount }) }}
+    </p>
     <div v-if="loading" class="empty" role="status">{{ t("search.running") }}</div>
     <div v-else-if="error" class="empty request-error" role="alert">
       <p :title="errorDetail || error">{{ error }}</p>

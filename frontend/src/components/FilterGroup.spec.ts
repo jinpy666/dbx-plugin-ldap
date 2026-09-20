@@ -74,4 +74,65 @@ describe("FilterGroup", () => {
     expect(group.children[0].kind === "clause" && group.children[0].attribute).toBe("uid");
     expect(wrapper.find(".qb-attr-dropdown").exists()).toBe(false);
   });
+
+  it("toggles NOT on a clause row and reflects the active state", async () => {
+    const { wrapper, group } = mountGroup();
+    const notButton = wrapper.find(".qb-not");
+    expect(notButton.classes()).not.toContain("is-active");
+    await notButton.trigger("click");
+    expect(group.children[0]).toMatchObject({ kind: "clause", negate: true });
+    expect(wrapper.find(".qb-not").classes()).toContain("is-active");
+    await wrapper.find(".qb-not").trigger("click");
+    expect(group.children[0].kind === "clause" && group.children[0].negate).toBeFalsy();
+  });
+
+  it("shows ≠ rows as negated and downgrades them to equals on the first NOT click", async () => {
+    const { wrapper, group } = mountGroup();
+    await wrapper.find("select").setValue("notEquals");
+    expect(wrapper.find(".qb-not").classes()).toContain("is-active");
+    await wrapper.find(".qb-not").trigger("click");
+    expect(group.children[0]).toMatchObject({ kind: "clause", op: "equals" });
+    expect(group.children[0].kind === "clause" && group.children[0].negate).toBeFalsy();
+    expect(wrapper.find(".qb-not").classes()).not.toContain("is-active");
+  });
+
+  it("clears the NOT toggle when ≠ is selected from the operator dropdown", async () => {
+    const { wrapper, group } = mountGroup([createBuilderClause({ attribute: "cn", op: "equals", value: "x", negate: true })]);
+    expect(wrapper.find(".qb-not").classes()).toContain("is-active");
+    await wrapper.find("select").setValue("notEquals");
+    expect(group.children[0]).toMatchObject({ kind: "clause", op: "notEquals" });
+    expect(group.children[0].kind === "clause" && group.children[0].negate).toBeFalsy();
+  });
+
+  it("toggles NOT on the group head and disables it with the disabled gate", async () => {
+    const group: BuilderGroup = createBuilderGroup({ children: [createBuilderClause()] });
+    const wrapper = mount(FilterGroup, { props: { group, depth: 0, listId: "d" } });
+    const headButtons = wrapper.findAll(".qb-group-head .qb-join button");
+    const groupNot = headButtons[headButtons.length - 1];
+    expect(groupNot.text()).toBe("NOT");
+    await groupNot.trigger("click");
+    expect(group.negate).toBe(true);
+    expect(groupNot.classes()).toContain("is-active");
+    await groupNot.trigger("click");
+    expect(group.negate).toBeUndefined();
+  });
+
+  it("renders the clause NOT button as the leading grid cell", () => {
+    const group: BuilderGroup = createBuilderGroup({
+      children: [
+        createBuilderClause({ attribute: "cn", op: "equals", value: "x" }),
+        createBuilderGroup({ join: "or", children: [createBuilderClause()] }),
+      ],
+    });
+    const wrapper = mount(FilterGroup, { props: { group, depth: 0, listId: "d" } });
+    // Root renders 2 nodes; the nested group contributes its own clause node.
+    const nodes = wrapper.findAll(".qb-node");
+    expect(nodes).toHaveLength(3);
+    // Clause rows lead with the NOT toggle; nested-group rows start with the
+    // group itself (group NOT lives in the group head instead).
+    const clauseFirst = nodes[0].element.firstElementChild as HTMLElement;
+    expect(clauseFirst.classList.contains("qb-not")).toBe(true);
+    const groupFirst = nodes[1].element.firstElementChild as HTMLElement;
+    expect(groupFirst.classList.contains("qb-group")).toBe(true);
+  });
 });

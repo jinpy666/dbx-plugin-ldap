@@ -16,16 +16,19 @@ const model: SearchFormModel = {
   pageSize: "500",
   typesOnly: false,
   derefAliases: "never",
+  sortBy: "",
+  sortOrder: "asc",
 };
 
 const entry = (n: number) => ({ dn: `cn=e${n},dc=demo`, attributes: {} });
 
-function createSession() {
+function createSession(overrides: Partial<Parameters<typeof useSearchSession>[0]> = {}) {
   return useSearchSession({
     getConnectionId: () => "conn-1",
     clearBanner: () => {},
     onSnapshot: () => {},
     onHistory: () => {},
+    ...overrides,
   });
 }
 
@@ -91,5 +94,104 @@ describe("useSearchSession cursor drain commits", () => {
     await flushPromises();
     expect(session.results.value.map((row) => row.dn)).toEqual([entry(1).dn, entry(2).dn]);
     expect(session.resultsComplete.value).toBe(true);
+  });
+});
+
+describe("useSearchSession referral surfacing (referral report)", () => {
+  it("keeps the cumulative referral list from the start response", async () => {
+    vi.spyOn(ldapApi, "searchStart").mockResolvedValue({
+      searchId: "sr1",
+      entries: [entry(1)],
+      hasMore: false,
+      referrals: ["ldap://a.example/dc=demo"],
+    });
+    const session = createSession();
+    await session.runSearch(model);
+    await flushPromises();
+    expect(session.resultReferrals.value).toEqual(["ldap://a.example/dc=demo"]);
+  });
+
+  it("replaces the referral list with the latest cumulative page value", async () => {
+    vi.spyOn(ldapApi, "searchStart").mockResolvedValue({
+      searchId: "sr2",
+      entries: [entry(1)],
+      hasMore: true,
+      referrals: ["ldap://a.example/dc=demo"],
+    });
+    vi.spyOn(ldapApi, "searchNext").mockImplementation(async () => ({
+      entries: [entry(2)],
+      hasMore: false,
+      referrals: ["ldap://a.example/dc=demo", "ldap://b.example/dc=demo"],
+    }));
+    const session = createSession();
+    await session.runSearch(model);
+    await flushPromises();
+    expect(session.resultReferrals.value).toEqual(["ldap://a.example/dc=demo", "ldap://b.example/dc=demo"]);
+  });
+
+  it("clears referrals on reset and between searches", async () => {
+    vi.spyOn(ldapApi, "searchStart").mockResolvedValue({
+      searchId: "sr3",
+      entries: [entry(1)],
+      hasMore: false,
+      referrals: ["ldap://a.example/dc=demo"],
+    });
+    const session = createSession();
+    await session.runSearch(model);
+    await flushPromises();
+    session.reset();
+    expect(session.resultReferrals.value).toEqual([]);
+    await session.runSearch(model);
+    await flushPromises();
+    expect(session.resultReferrals.value).toEqual(["ldap://a.example/dc=demo"]);
+  });
+});
+
+// RFC 2891 服务器端排序（GAP §5）：请求透传 + 降级一次性提示。
+describe("useSearchSession server-side sort", () => {
+  it("passes sortBy/sortOrder to the search request only when sorting is requested", async () => {
+    const start = vi.spyOn(ldapApi, "searchStart").mockResolvedValue({ searchId: "s1", entries: [], hasMore: false });
+    const session = createSession();
+
+    await session.runSearch({ ...model, sortBy: " cn ", sortOrder: "desc" });
+    await flushPromises();
+    expect(start.mock.lastCall![0]).toMatchObject({ sortBy: "cn", sortOrder: "desc" });
+
+    // 空白属性 = 不请求排序：不发 sortBy/sortOrder 字段（后端不注入控件）。
+    start.mockClear();
+    await session.runSearch(model);
+    await flushPromises();
+    const request = start.mock.lastCall![0];
+    expect("sortBy" in request).toBe(false);
+    expect("sortOrder" in request).toBe(false);
+  });
+
+  it("notifies once when the server reports a non-zero SortResult", async () => {
+    const notices: string[] = [];
+    vi.spyOn(ldapApi, "searchStart").mockResolvedValue({ searchId: "s1", entries: [entry(1)], hasMore: false, sortResult: 18 });
+    vi.spyOn(ldapApi, "searchNext").mockResolvedValue({ entries: [], hasMore: false });
+    const session = createSession({ onNotice: (message) => notices.push(message) });
+    await session.runSearch({ ...model, sortBy: "cn" });
+    await flushPromises();
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("18");
+    // 降级不中断：条目照常展示。
+    expect(session.results.value.map((row) => row.dn)).toEqual([entry(1).dn]);
+    expect(session.searchError.value).toBe("");
+  });
+
+  it("stays silent for a successful sort or a legacy sidecar without the field", async () => {
+    const notices: string[] = [];
+    vi.spyOn(ldapApi, "searchStart").mockResolvedValue({ searchId: "s1", entries: [entry(1)], hasMore: false, sortResult: 0 });
+    vi.spyOn(ldapApi, "searchNext").mockResolvedValue({ entries: [], hasMore: false });
+    const session = createSession({ onNotice: (message) => notices.push(message) });
+    await session.runSearch({ ...model, sortBy: "cn" });
+    await flushPromises();
+
+    // 旧 sidecar：响应缺 sortResult 字段 → 同样不提示。
+    vi.spyOn(ldapApi, "searchStart").mockResolvedValue({ searchId: "s2", entries: [entry(2)], hasMore: false });
+    await session.runSearch({ ...model, sortBy: "cn" });
+    await flushPromises();
+    expect(notices).toHaveLength(0);
   });
 });

@@ -53,6 +53,9 @@ async function loadChildren(node: PickerNode) {
   node.loading = true;
   loadError.value = "";
   try {
+    // 解引用按设计沿用缺省 never：本弹层是 DN 查找辅助（选中结果写回 DN
+    // 值），别名跟随对"找节点"无收益，且与树解引用状态相隔三层组件不值得
+    // 耦合；GAP §1 行按此口径闭环。
     const result = await ldapApi.search({ baseDn: node.dn, scope: "one", filter: "(objectClass=*)", attributes: ["dn"], sizeLimit: TREE_FETCH_PAGE });
     node.children = result.entries.map(toNode);
     // 后端 truncated 标志优先；无标志时以数量兜底，仅确超上限（>上限，恰好

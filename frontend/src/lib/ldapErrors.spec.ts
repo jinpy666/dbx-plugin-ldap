@@ -94,3 +94,30 @@ describe("friendlyLdapError 对结果码 68 / 带前缀消息的行为", () => {
         expect(friendlyLdapError(raw)).toBe(raw);
     });
 });
+
+describe("referral (code 10) contract", () => {
+    it("parses the [ldap-referral=..] prefix into a URI list (bizError contract)", () => {
+        const meta = parseLdapErrorMeta(
+            '[ldap-code=10] [ldap-referral=ldap://a.example/dc=x|ldaps://b.example/dc=x] LDAP Result Code 10 "Referral": ...',
+        );
+        expect(meta.resultCode).toBe(10);
+        expect(meta.referrals).toEqual(["ldap://a.example/dc=x", "ldaps://b.example/dc=x"]);
+    });
+
+    it("omits referrals when the prefix is absent or empty", () => {
+        expect(parseLdapErrorMeta("[ldap-code=10] plain referral failure").referrals).toBeUndefined();
+        expect(parseLdapErrorMeta("[ldap-code=10] [ldap-referral=| | ] x").referrals).toBeUndefined();
+        expect(parseLdapErrorMeta("[ldap-code=68] unrelated").referrals).toBeUndefined();
+    });
+
+    it("maps code-10 messages to the friendly referral text", () => {
+        const mapped = friendlyLdapError('[ldap-code=10] [ldap-referral=ldap://a.example/dc=x] LDAP Result Code 10 "Referral": ...');
+        expect(mapped).not.toBe("");
+        expect(mapped).not.toContain("Result Code");
+    });
+
+    it("keeps the referral rule ahead of the generic network/timeout rules", () => {
+        const message = "ldap search: referral chase deadline exceeded";
+        expect(friendlyLdapError(message)).toBe(friendlyLdapError('[ldap-code=10] referral'));
+    });
+});

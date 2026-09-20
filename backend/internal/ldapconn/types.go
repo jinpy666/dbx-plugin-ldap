@@ -78,6 +78,10 @@ type Profile struct {
 	TLSCAPath   string `json:"tlsCaPath,omitempty"`
 	// TLSServerName 缺省派生为 connection.host（L-A dial 层负责兜底）。
 	TLSServerName string `json:"tlsServerName,omitempty"`
+	// mTLS 客户端证书（PEM 文件路径，用户本机提供，插件侧只读）。两者都空 =
+	// 不使用客户端证书（现行为）；只填其一时拨号期报错（ldapTLSConfig）。
+	TLSClientCertPath string `json:"tlsClientCertPath,omitempty"`
+	TLSClientKeyPath  string `json:"tlsClientKeyPath,omitempty"`
 	// Kerberos 仅在 auth_type=kerberos 时由 lifecycle 填充（M3）。
 	Kerberos *LDAPKerberosConfig `json:"kerberos,omitempty"`
 	// SASLHost 覆盖 DIGEST-MD5 的 SASL host（缺省用 URL 逻辑主机，
@@ -89,8 +93,12 @@ type Profile struct {
 	// SASLMutualAuth：GSSAPI mutual 认证开关（缺省 false，tiny-rdm 同）。
 	SASLMutualAuth bool `json:"saslMutualAuth,omitempty"`
 	// TimeoutSeconds 缺省 30（lifecycle 构造时兜底）。
-	TimeoutSeconds int  `json:"timeoutSeconds,omitempty"`
-	ReadOnly       bool `json:"readOnly"`
+	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
+	// DialTimeoutSeconds 拨号窗口（TCP 建立 + StartTLS 升级）独立档：
+	// 0/未设置 = 回落 TimeoutSeconds（向后兼容），> 0 才生效（ldapDialTimeout）。
+	// 只约束拨号，不改 LDAP 消息读超时（SetTimeout 仍用 TimeoutSeconds）。
+	DialTimeoutSeconds int  `json:"dialTimeoutSeconds,omitempty"`
+	ReadOnly           bool `json:"readOnly"`
 
 	// DN 白名单与屏蔽属性策略（§6）。空 = 不限。
 	AllowedBaseDNs      []string `json:"allowedBaseDns,omitempty"`
@@ -115,6 +123,8 @@ func NormalizeProfile(p Profile) Profile {
 	p.AuthzID = strings.TrimSpace(p.AuthzID)
 	p.TLSCAPath = strings.TrimSpace(p.TLSCAPath)
 	p.TLSServerName = strings.TrimSpace(p.TLSServerName)
+	p.TLSClientCertPath = strings.TrimSpace(p.TLSClientCertPath)
+	p.TLSClientKeyPath = strings.TrimSpace(p.TLSClientKeyPath)
 	p.SASLHost = strings.TrimSpace(p.SASLHost)
 	p.SASLQoP = strings.ToLower(strings.TrimSpace(p.SASLQoP))
 	if p.Kerberos != nil {
@@ -160,7 +170,9 @@ type LDAPEntry struct {
 	Attributes map[string][]string `json:"attributes"`
 }
 
-// LDAPSearchRequest 对应 ldap/search（§5.2）。
+// LDAPSearchRequest 对应 ldap/search（§5.2）。SortBy/SortOrder 是可选的
+// RFC 2891 服务器端排序：sortBy 空缺省不请求排序；sortOrder ∈ asc|desc
+// （大小写/空白不敏感，除 desc 外一律升序；sortBy 为空时忽略）。
 type LDAPSearchRequest struct {
 	ConnectionID string   `json:"connectionId"`
 	BaseDN       string   `json:"baseDn,omitempty"`
@@ -171,15 +183,25 @@ type LDAPSearchRequest struct {
 	PageSize     int      `json:"pageSize,omitempty"`
 	TypesOnly    bool     `json:"typesOnly,omitempty"`
 	DerefAliases string   `json:"derefAliases,omitempty"`
+	SortBy       string   `json:"sortBy,omitempty"`
+	SortOrder    string   `json:"sortOrder,omitempty"`
 }
 
-// LDAPSearchResult 对应 ldap/search 返回。
+// LDAPSearchResult 对应 ldap/search 返回。SortResult 是服务器 RFC 2891
+// SortResult 控件状态码透出：0/缺省 = 排序成功；非 0 = 服务器未按请求
+// 排序（优雅降级——条目照常返回，由前端一次性提示，不作为错误）。
+// Referrals 是服务器返回的延续
+// 引用 URI（LDAPResultReferral / SearchResultReference，referral report
+// 语义：只透出给调用方，不做自动追随——自动追都要向引用目标主机转发凭据，
+// 与本插件的 DN 白名单/安全策略冲突，见 ADS_GAP_ANALYSIS §1）。
 type LDAPSearchResult struct {
-	Entries   []LDAPEntry `json:"entries"`
-	Count     int         `json:"count"`
-	Truncated bool        `json:"truncated"`
-	BaseDN    string      `json:"baseDn,omitempty"`
-	Filter    string      `json:"filter,omitempty"`
+	Entries    []LDAPEntry `json:"entries"`
+	Count      int         `json:"count"`
+	Truncated  bool        `json:"truncated"`
+	BaseDN     string      `json:"baseDn,omitempty"`
+	Filter     string      `json:"filter,omitempty"`
+	Referrals  []string    `json:"referrals,omitempty"`
+	SortResult int         `json:"sortResult,omitempty"`
 }
 
 // LDAPSearchSessionRequest 对应 ldap/search/start。字段与 ldap/search 一致，
@@ -200,15 +222,20 @@ type LDAPSearchSessionCancelRequest struct {
 }
 
 // LDAPSearchSessionResult 是 start/next 的增量页响应。Count 仅为当前页条数，
-// 不是昂贵的全量计数；hasMore=false 时该 searchId 自动释放。
+// 不是昂贵的全量计数；hasMore=false 时该 searchId 自动释放。SortResult 语义
+// 同 LDAPSearchResult（RFC 2891 排序降级状态码，非 0 = 未按请求排序）。
 type LDAPSearchSessionResult struct {
-	SearchID  string      `json:"searchId,omitempty"`
-	Entries   []LDAPEntry `json:"entries"`
-	Count     int         `json:"count"`
-	HasMore   bool        `json:"hasMore"`
-	Truncated bool        `json:"truncated,omitempty"`
-	BaseDN    string      `json:"baseDn,omitempty"`
-	Filter    string      `json:"filter,omitempty"`
+	SearchID   string      `json:"searchId,omitempty"`
+	Entries    []LDAPEntry `json:"entries"`
+	Count      int         `json:"count"`
+	HasMore    bool        `json:"hasMore"`
+	Truncated  bool        `json:"truncated,omitempty"`
+	BaseDN     string      `json:"baseDn,omitempty"`
+	Filter     string      `json:"filter,omitempty"`
+	SortResult int         `json:"sortResult,omitempty"`
+	// Referrals 为会话级累计（封顶 maxReportedReferrals）：每个响应都带
+	// 全量累计列表，调用方直接以最新响应为准即可。
+	Referrals []string `json:"referrals,omitempty"`
 }
 
 // LDAPGetEntryRequest 对应 ldap/entry/get。

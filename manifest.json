@@ -133,6 +133,36 @@
           }
         },
         {
+          "key": "tls_client_cert_path",
+          "label": "TLS client certificate path",
+          "type": "text",
+          "description": "Optional PEM client certificate for mutual TLS (mTLS). Fill in both the certificate and key paths together; empty disables client certificates.",
+          "default": "",
+          "binding": "config",
+          "visible_when": {
+            "field": "tls_mode",
+            "one_of": [
+              "starttls",
+              "ldaps"
+            ]
+          }
+        },
+        {
+          "key": "tls_client_key_path",
+          "label": "TLS client key path",
+          "type": "text",
+          "description": "PEM private key matching the client certificate. Fill in both the certificate and key paths together; the key file stays on the DBX machine and is read only.",
+          "default": "",
+          "binding": "config",
+          "visible_when": {
+            "field": "tls_mode",
+            "one_of": [
+              "starttls",
+              "ldaps"
+            ]
+          }
+        },
+        {
           "key": "base_dn",
           "label": "Base DN",
           "type": "text",
@@ -497,6 +527,14 @@
           "binding": "config"
         },
         {
+          "key": "dial_timeout_secs",
+          "label": "Dial timeout (seconds)",
+          "type": "number",
+          "description": "TCP connection establishment timeout (dial phase, including the TLS handshake). Empty or 0 falls back to the timeout above; a positive value applies to dialing only and never changes operation timeouts.",
+          "default": 0,
+          "binding": "config"
+        },
+        {
           "key": "read_only",
           "label": "Read-only",
           "type": "boolean",
@@ -592,6 +630,14 @@
               "label": "TLS 服务器名",
               "description": "留空时默认使用 URL 中的主机名。"
             },
+            "tls_client_cert_path": {
+              "label": "TLS 客户端证书路径",
+              "description": "可选，双向 TLS（mTLS）的 PEM 客户端证书文件；证书与私钥路径须同时填写，留空不使用客户端证书。"
+            },
+            "tls_client_key_path": {
+              "label": "TLS 客户端私钥路径",
+              "description": "与客户端证书配套的 PEM 私钥文件；须与证书路径同时填写。私钥文件保留在 DBX 所在机器上，仅读取。"
+            },
             "krb_credential_type": {
               "label": "Kerberos 凭据类型",
               "options": {
@@ -645,6 +691,10 @@
             },
             "timeout_secs": {
               "label": "超时（秒）"
+            },
+            "dial_timeout_secs": {
+              "label": "拨号超时（秒）",
+              "description": "仅约束 TCP 连接建立（拨号阶段，含 TLS 握手）；留空或 0 沿用上方超时（秒），正整数只影响拨号，不改变操作超时。"
             },
             "read_only": {
               "label": "只读模式"
@@ -739,6 +789,14 @@
               "label": "TLS 伺服器名稱",
               "description": "留空時預設使用 URL 中的主機名稱。"
             },
+            "tls_client_cert_path": {
+              "label": "TLS 用戶端憑證路徑",
+              "description": "選填，雙向 TLS（mTLS）的 PEM 用戶端憑證檔案；憑證與私鑰路徑須同時填寫，留空不使用用戶端憑證。"
+            },
+            "tls_client_key_path": {
+              "label": "TLS 用戶端私鑰路徑",
+              "description": "與用戶端憑證配套的 PEM 私鑰檔案；須與憑證路徑同時填寫。私鑰檔案保留在 DBX 所在機器上，僅讀取。"
+            },
             "krb_credential_type": {
               "label": "Kerberos 憑證類型",
               "options": {
@@ -792,6 +850,10 @@
             },
             "timeout_secs": {
               "label": "逾時（秒）"
+            },
+            "dial_timeout_secs": {
+              "label": "撥號逾時（秒）",
+              "description": "僅約束 TCP 連線建立（撥號階段，含 TLS 交握）；留空或 0 沿用上方逾時（秒），正整數只影響撥號，不改變操作逾時。"
             },
             "read_only": {
               "label": "唯讀模式"
@@ -885,6 +947,14 @@
             "tls_server_name": {
               "label": "TLS server name"
             },
+            "tls_client_cert_path": {
+              "label": "TLS client certificate path",
+              "description": "Optional PEM client certificate for mutual TLS (mTLS). Fill in both the certificate and key paths together; empty disables client certificates."
+            },
+            "tls_client_key_path": {
+              "label": "TLS client key path",
+              "description": "PEM private key matching the client certificate. Fill in both the certificate and key paths together; the key file stays on the DBX machine and is read only."
+            },
             "krb_credential_type": {
               "label": "Kerberos credential type",
               "options": {
@@ -937,6 +1007,10 @@
             },
             "timeout_secs": {
               "label": "Timeout (seconds)"
+            },
+            "dial_timeout_secs": {
+              "label": "Dial timeout (seconds)",
+              "description": "TCP connection establishment timeout (dial phase, including the TLS handshake). Empty or 0 falls back to the timeout above; a positive value applies to dialing only and never changes operation timeouts."
             },
             "read_only": {
               "label": "Read-only"
@@ -1027,6 +1101,14 @@
               "label": "Nombre del servidor TLS",
               "description": "Si se deja vacío, se usa el host de la URL."
             },
+            "tls_client_cert_path": {
+              "label": "Ruta del certificado de cliente TLS",
+              "description": "Certificado de cliente PEM opcional para TLS mutuo (mTLS). Rellene la ruta del certificado y de la clave juntas; vacío desactiva los certificados de cliente."
+            },
+            "tls_client_key_path": {
+              "label": "Ruta de la clave de cliente TLS",
+              "description": "Clave privada PEM correspondiente al certificado de cliente. Rellene ambas rutas juntas; el archivo de clave permanece en la máquina DBX y es de solo lectura."
+            },
             "krb_credential_type": {
               "label": "Tipo de credencial Kerberos",
               "options": {
@@ -1080,6 +1162,10 @@
             },
             "timeout_secs": {
               "label": "Tiempo de espera (segundos)"
+            },
+            "dial_timeout_secs": {
+              "label": "Tiempo de espera de conexión (segundos)",
+              "description": "Solo limita el establecimiento de la conexión TCP (fase de conexión, incluido el protocolo de enlace TLS). Vacío o 0 usa el tiempo de espera de arriba; un valor positivo afecta solo a la conexión y nunca cambia los tiempos de espera de las operaciones."
             },
             "read_only": {
               "label": "Solo lectura"
@@ -1174,6 +1260,14 @@
               "label": "Nome server TLS",
               "description": "Se vuoto, viene usato l'host nell'URL."
             },
+            "tls_client_cert_path": {
+              "label": "Percorso del certificato client TLS",
+              "description": "Certificato client PEM facoltativo per TLS reciproco (mTLS). Compilare insieme i percorsi del certificato e della chiave; vuoto disabilita i certificati client."
+            },
+            "tls_client_key_path": {
+              "label": "Percorso della chiave client TLS",
+              "description": "Chiave privata PEM corrispondente al certificato client. Compilare entrambi i percorsi insieme; il file della chiave resta sulla macchina DBX ed è in sola lettura."
+            },
             "krb_credential_type": {
               "label": "Tipo di credenziale Kerberos",
               "options": {
@@ -1227,6 +1321,10 @@
             },
             "timeout_secs": {
               "label": "Timeout (secondi)"
+            },
+            "dial_timeout_secs": {
+              "label": "Timeout di connessione (secondi)",
+              "description": "Limita solo la stabilizzazione della connessione TCP (fase di connessione, incluso l'handshake TLS). Vuoto o 0 usa il timeout sopra; un valore positivo riguarda solo la connessione e non modifica mai i timeout delle operazioni."
             },
             "read_only": {
               "label": "Sola lettura"
@@ -1321,6 +1419,14 @@
               "label": "TLS サーバー名",
               "description": "空欄の場合は URL 内のホスト名が既定で使われます。"
             },
+            "tls_client_cert_path": {
+              "label": "TLS クライアント証明書のパス",
+              "description": "相互 TLS（mTLS）用の任意の PEM クライアント証明書ファイルです。証明書と秘密鍵のパスは両方一緒に指定し、空欄の場合はクライアント証明書を使用しません。"
+            },
+            "tls_client_key_path": {
+              "label": "TLS クライアント秘密鍵のパス",
+              "description": "クライアント証明書に対応する PEM 秘密鍵ファイルです。証明書のパスと両方一緒に指定します。秘密鍵ファイルは DBX マシン上に置かれ、読み取り専用です。"
+            },
             "krb_credential_type": {
               "label": "Kerberos 認証情報タイプ",
               "options": {
@@ -1374,6 +1480,10 @@
             },
             "timeout_secs": {
               "label": "タイムアウト（秒）"
+            },
+            "dial_timeout_secs": {
+              "label": "接続タイムアウト（秒）",
+              "description": "TCP 接続の確立（接続フェーズ、TLS ハンドシェイクを含む）のみに適用されます。空欄または 0 は上のタイムアウトを使用し、正の値は接続にのみ影響し、操作タイムアウトは変わりません。"
             },
             "read_only": {
               "label": "読み取り専用"
@@ -1468,6 +1578,14 @@
               "label": "Nome do servidor TLS",
               "description": "Se vazio, usa o host da URL por padrão."
             },
+            "tls_client_cert_path": {
+              "label": "Caminho do certificado de cliente TLS",
+              "description": "Certificado de cliente PEM opcional para TLS mútuo (mTLS). Preencha os caminhos do certificado e da chave juntos; vazio desativa certificados de cliente."
+            },
+            "tls_client_key_path": {
+              "label": "Caminho da chave de cliente TLS",
+              "description": "Chave privada PEM correspondente ao certificado de cliente. Preencha os dois caminhos juntos; o arquivo da chave permanece na máquina DBX e é somente leitura."
+            },
             "krb_credential_type": {
               "label": "Tipo de credencial Kerberos",
               "options": {
@@ -1521,6 +1639,10 @@
             },
             "timeout_secs": {
               "label": "Tempo limite (segundos)"
+            },
+            "dial_timeout_secs": {
+              "label": "Tempo limite de conexão (segundos)",
+              "description": "Limita apenas o estabelecimento da conexão TCP (fase de conexão, incluindo o handshake TLS). Vazio ou 0 usa o tempo limite acima; um valor positivo afeta somente a conexão e nunca altera os tempos limite das operações."
             },
             "read_only": {
               "label": "Somente leitura"
