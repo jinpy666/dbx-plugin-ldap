@@ -68,6 +68,22 @@ describe("DnPickerDialog", () => {
     expect(wrapper.emitted("select")![0]).toEqual(["ou=people,dc=demo,dc=dbx"]);
   });
 
+  it("emits select when clicking the row outside the name button (整行可点)", async () => {
+    searchMock.mockResolvedValue({ entries: [entry("ou=people,dc=demo,dc=dbx")], count: 1, truncated: false });
+    const wrapper = await track();
+    const row = rowByLabel(wrapper, "ou=people");
+    // 模拟点到行内按钮之外的空白区域：事件目标为 li 自身。
+    await row.trigger("click");
+    expect(wrapper.emitted("select")![0]).toEqual(["ou=people,dc=demo,dc=dbx"]);
+  });
+
+  it("does not select when only expanding via the toggle button", async () => {
+    searchMock.mockResolvedValue({ entries: [entry("ou=people,dc=demo,dc=dbx")], count: 1, truncated: false });
+    const wrapper = await track();
+    await rowByLabel(wrapper, "ou=people").find(".dn-picker-toggle").trigger("click");
+    expect(wrapper.emitted("select")).toBeUndefined();
+  });
+
   it("shows the truncation badge when the backend reports truncation", async () => {
     searchMock.mockResolvedValue({ entries: Array.from({ length: 20 }, (_, i) => entry(`cn=u${i},dc=demo,dc=dbx`)), count: 20, truncated: true });
     const wrapper = await track();

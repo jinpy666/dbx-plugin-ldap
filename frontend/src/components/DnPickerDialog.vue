@@ -125,17 +125,17 @@ const rowIndent = (depth: number) => ({ paddingLeft: `${depth * 16 + 8}px` });
       <template v-else>
         <p v-if="loadError" class="form-error" role="alert">{{ loadError }}</p>
         <ul class="dn-picker-tree" role="tree">
-          <li v-for="row of rows" :key="row.node.dn" class="dn-picker-row" :style="rowIndent(row.depth)" role="treeitem" :aria-expanded="row.node.expanded || undefined">
+          <li v-for="row of rows" :key="row.node.dn" class="dn-picker-row" :style="rowIndent(row.depth)" role="treeitem" :aria-expanded="row.node.expanded || undefined" @click="select(row.node)">
             <button
               class="icon-button dn-picker-toggle"
               :aria-label="row.node.expanded ? t('tree.collapse') : t('tree.expand')"
-              @click="toggle(row.node)"
+              @click.stop="toggle(row.node)"
             >
               <span v-if="row.node.loading" class="dn-picker-spinner">…</span>
               <ChevronDown v-else-if="row.node.expanded" />
               <ChevronRight v-else />
             </button>
-            <button class="dn-picker-name mono" :title="row.node.dn" :aria-label="`${t('ldap.dnPicker.select')}: ${row.node.dn}`" @click="select(row.node)">
+            <button class="dn-picker-name mono" :title="row.node.dn" :aria-label="`${t('ldap.dnPicker.select')}: ${row.node.dn}`" @click.stop="select(row.node)">
               {{ row.node.label }}
             </button>
             <span v-if="row.node.truncated" class="badge">{{ t("ldap.dnPicker.truncated", { limit: TREE_FETCH_PAGE }) }}</span>
@@ -169,6 +169,7 @@ const rowIndent = (depth: number) => ({ paddingLeft: `${depth * 16 + 8}px` });
   align-items: center;
   gap: 4px;
   min-height: 28px;
+  cursor: pointer;
 }
 .dn-picker-toggle {
   flex: none;

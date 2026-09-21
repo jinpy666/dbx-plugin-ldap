@@ -1679,3 +1679,31 @@ dbc59c0）与主树未提交合并成果的审阅提交。
 **对用户的处置建议**：修复安装后重新打开 LDAP-DEV(docker)——若仍提示
 「绑定密码为空」，在连接设置里重存一次密码即可（宿主库中该连接的密钥
 `plugin_connection.bind_password` 经只读核对存在且健康，重启后大概率直接恢复）。
+
+## 第十六轮（2026-09-21）修复轮：列表行整行可点（UI 走查用户反馈）
+
+**现象**：Schema 弹窗内点选列表项必须点中文字，点行空白处无响应（用户反馈
+附截图：associatedDomain 行选中态横跨整行、热区却只有名称文字）。
+
+**全 UI 清查**（所有列表/下拉/页签/行的点击目标 vs 视觉行范围）：
+
+| 组件 | 结论 |
+| --- | --- |
+| SchemaPanel 属性类型/匹配规则/用途/语法 四页签 | **缺陷**：点击只挂在内层 `padding:0` 的行内按钮上；li 有 hover 高亮 + cursor:default，视觉整行可选、实际仅文字可点 |
+| DnPickerDialog | **半缺陷**：名称按钮 flex:1 基本铺满，但行尾 badge/空白区不可点；展开按钮与选中共用行但语义未隔离 |
+| TreeBranch / AssociationPanel / 历史下拉 / qb-attr-option / objectClass 选择器 / 右键菜单 / 关联页签 | 已是整行（width:100%/flex 铺满）或显式按钮，无需改 |
+| SearchForm 预设/范围/解引用 | 原生 select，无此问题 |
+| ConnectionsPanel / RootDSE 行 | 显式逐行操作按钮（check/whoami/设为浏览基），非可点选列表，维持 |
+
+**修复**：
+
+- `SchemaPanel.vue`：四个页签的选中点击提升到 `<li>`（对齐 objectClasses
+  页签既有写法），名称按钮 `@click.stop` 防双触发；
+- `style.css`：`.schema-attribute-row` cursor:pointer；`.schema-attribute-button`
+  `display:block; width:100%`（键盘可达性保留在按钮上）；
+- `DnPickerDialog.vue`：行级点击选中（badge/空白区也响应），toggle 展开
+  `@click.stop` 不再误触发选中，行 cursor:pointer。
+
+**验证**：vitest **1227 用例全绿**（+5：Schema li 行选中×2、按钮单次触发×1、
+匹配规则行选中×1、DnPicker 整行选中 + toggle 不误选×2 中计 5）；`vue-tsc`
+通过；ui_test.mjs 走查对 `.schema-attribute-button` 的既有选择器不受影响。

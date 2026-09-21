@@ -275,6 +275,25 @@ describe("SchemaPanel details pane", () => {
     // 反向引用：person 被 inetOrgPerson 的 SUP 引用。
     expect(details).toContain("inetOrgPerson");
   });
+
+  // 整行可点（UI 走查修复）：点行空白处（li 本身）也要能选中，而非只能点中名称文字。
+  it("selects an attributeType when clicking the row li instead of the name button", async () => {
+    const wrapper = trackPanel({ open: true });
+    await flushPromises();
+    const row = columns(wrapper)[0].findAll("li").find((li) => li.text() === "employeeNumber")!;
+    await row.trigger("click");
+    expect(detailsPane(wrapper).text()).toContain("1.2.7");
+    expect(row.classes()).toContain("is-selected");
+  });
+
+  it("does not double-apply when the row's own button is clicked", async () => {
+    const wrapper = trackPanel({ open: true });
+    await flushPromises();
+    const button = columns(wrapper)[0].findAll("button").find((item) => item.text() === "employeeNumber")!;
+    await button.trigger("click");
+    // 选择是幂等赋值：按钮 .stop 后只走按钮处理器，行处理器不再叠加触发。
+    expect(wrapper.findAll(".schema-attribute-row.is-selected")).toHaveLength(1);
+  });
 });
 
 // -- 五分类页签（F2b）：三类补充定义的页签可见性、列表选中交互与明细卡。
@@ -296,6 +315,16 @@ describe("SchemaPanel five-category tabs (F2b)", () => {
     const wrapper = trackPanel({ open: true });
     await flushPromises();
     expect(tabs(wrapper).map((tab) => tab.text())).toEqual(["属性类型", "对象类", "匹配规则", "匹配规则用途", "LDAP 语法"]);
+  });
+
+  it("selects a matching rule by clicking the row li outside the name button", async () => {
+    const wrapper = trackPanel({ open: true });
+    await flushPromises();
+    await activateTab(wrapper, "匹配规则");
+    const row = columns(wrapper)[0].findAll("li.schema-attribute-row").find((li) => li.text() === "caseIgnoreMatch")!;
+    await row.trigger("click");
+    expect(row.classes()).toContain("is-selected");
+    expect(detailsPane(wrapper).text()).toContain("1.3.6.1.4.1.1466.115.121.1.15");
   });
 
   it("hides the three extra tabs when the sidecar omits them (旧 sidecar 兼容)", async () => {
