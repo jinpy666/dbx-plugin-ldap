@@ -1646,3 +1646,36 @@ PROTOCOL.zh-CN.md 共享契约字段表（sortBy/sortOrder/sortResult/referrals/
 dialTimeoutSeconds/tls_client_cert_path/tls_client_key_path）、两分支
 （codex/ldap/transport-hardening @ e408407、codex/ldap/search-sort-deref @
 dbc59c0）与主树未提交合并成果的审阅提交。
+
+## 第十五轮（2026-09-21）修复轮：206 空密码被误报为「属性或值已存在」
+
+**现象**：本地打开 LDAP-DEV(docker) 连接弹「属性或值已存在」（code 20 文案）。
+
+**定位**（worktree 探针复刻 UI 打开序列 + 宿主库只读核对）：
+
+1. 打开链路本身全为只读（connect/statuses/check/schema/rootDse/树列举/
+   count/whoami），密钥键名 `bind_password` 下探针全序列 OK；
+2. 真实报错来自懒绑定：宿主未送达密钥时绑定密码为空，go-ldap 客户端侧
+   返回 **206**（`ErrorEmptyPassword`，bind.go）；
+3. 前端 `friendlyLdapError` 的文本正则 `result code 20` 是 `Result Code 206`
+   的**前缀**，206 被误判为 20 → 误显示「属性或值已存在」。同类碰撞影响
+   所有数字码（20×200/4×40/8×80…），且既有 spec 因断言过弱（只断言不含
+   原文）而未拦截。
+
+**修复**（`frontend/src/lib/ldapErrors.ts` + i18n 七语）：
+
+- code-first：`[ldap-code=NNN]` 前缀存在时按 `CODE_RULES` 精确码表命中
+  （新增 4/8/10/11/19/20/21/32/34/49/53/68/200/206 全表），杜绝前缀碰撞；
+- 文本正则全部加 `(?!\d)` 锚定，仅作无码消息的兜底；
+- TLS 证书规则保持全局最高优先（带码的 x509 错误仍归证书文案）；
+- 新增 **206 → `err.emptyPassword`** 七语文案：明示「绑定密码为空——请重新
+  保存密码后再连接」，不再误导为属性冲突。
+
+**验证**：vitest **1222 用例全绿**（ldapErrors +4 例：206 独立文案、
+20/200/206 三向互异、带码 TLS 仍优先、无码原文锚定）；`vue-tsc` 通过；
+重建重装 v0.1.88 后实装桥 digest 复验 OK；空密码探针确认后端 206 原样
+透出、前端映射切换为新文案。
+
+**对用户的处置建议**：修复安装后重新打开 LDAP-DEV(docker)——若仍提示
+「绑定密码为空」，在连接设置里重存一次密码即可（宿主库中该连接的密钥
+`plugin_connection.bind_password` 经只读核对存在且健康，重启后大概率直接恢复）。

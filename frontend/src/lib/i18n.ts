@@ -186,6 +186,7 @@ export const messages = {
     copyFailed: "Copy failed",
     err: {
       invalidCredentials: "Sign-in failed: the username or password is incorrect",
+      emptyPassword: "Bind password is empty — the connection reached the server without credentials. Re-save the password in the connection settings, then connect again",
       referral: "The server referred this operation to another directory server (referral) — the plugin reports referral URIs instead of following them automatically",
       noSuchObject: "Entry not found: the Base DN may be wrong or the entry was deleted",
       invalidDn: "Invalid DN syntax: check the format (e.g. dc=example,dc=com)",
@@ -761,6 +762,7 @@ export const messages = {
     copyFailed: "复制失败",
     err: {
       invalidCredentials: "认证失败：用户名或密码不正确",
+      emptyPassword: "绑定密码为空——连接未携带凭据就发起了绑定。请在连接设置中重新保存密码后再连接",
       referral: "服务器把该操作转交给了另一台目录服务器（referral）——插件只透出引用地址，不自动追随",
       noSuchObject: "条目不存在：Base DN 可能有误，或条目已被删除",
       invalidDn: "DN 语法无效：请检查格式（如 dc=example,dc=com）",
@@ -1336,6 +1338,7 @@ export const messages = {
     copyFailed: "複製失敗",
     err: {
       invalidCredentials: "認證失敗：使用者名稱或密碼不正確",
+      emptyPassword: "繫結密碼為空——連線未攜帶憑據就發起了繫結。請在連線設定中重新儲存密碼後再連線",
       referral: "伺服器把該操作轉交給了另一台目錄伺服器（referral）——外掛只透出引用位址，不自動追隨",
       noSuchObject: "條目不存在：Base DN 可能有誤，或條目已被刪除",
       invalidDn: "DN 語法無效：請檢查格式（如 dc=example,dc=com）",
@@ -1911,6 +1914,7 @@ export const messages = {
     copyFailed: "Error al copiar",
     err: {
       invalidCredentials: "Error de autenticación: usuario o contraseña incorrectos",
+      emptyPassword: "La contraseña de enlace está vacía: la conexión llegó al servidor sin credenciales. Vuelva a guardar la contraseña en la configuración de conexión e inténtelo de nuevo",
       referral: "El servidor derivó la operación a otro servidor de directorio (referral): el complemento muestra las URI de referencia sin seguirlas automáticamente",
       noSuchObject: "Entrada no encontrada: el DN base puede ser incorrecto o la entrada fue eliminada",
       invalidDn: "Sintaxis de DN no válida: revisa el formato (p. ej. dc=example,dc=com)",
@@ -2486,6 +2490,7 @@ export const messages = {
     copyFailed: "Copia non riuscita",
     err: {
       invalidCredentials: "Autenticazione non riuscita: nome utente o password non corretti",
+      emptyPassword: "Password di bind vuota: la connessione ha raggiunto il server senza credenziali. Salvare di nuovo la password nelle impostazioni di connessione e riconnettersi",
       referral: "Il server ha girato l'operazione a un altro server di directory (referral): il plug-in riporta le URI di riferimento senza seguirle automaticamente",
       noSuchObject: "Voce non trovata: il DN base potrebbe essere errato o la voce è stata eliminata",
       invalidDn: "Sintassi DN non valida: controlla il formato (es. dc=example,dc=com)",
@@ -3061,6 +3066,7 @@ export const messages = {
     copyFailed: "コピーに失敗しました",
     err: {
       invalidCredentials: "認証に失敗しました：ユーザー名またはパスワードが正しくありません",
+      emptyPassword: "バインドパスワードが空です——接続は資格情報なしでバインドを試みました。接続設定でパスワードを保存し直してから再接続してください",
       referral: "サーバーはこの操作を別のディレクトリサーバーへ委譲しました（referral）。プラグインは参照 URI を表示するだけで自動追従しません",
       noSuchObject: "エントリが見つかりません：Base DN が誤っているか、削除された可能性があります",
       invalidDn: "DN の構文が無効です：形式を確認してください（例：dc=example,dc=com）",
@@ -3636,6 +3642,7 @@ export const messages = {
     copyFailed: "Falha ao copiar",
     err: {
       invalidCredentials: "Falha na autenticação: usuário ou senha incorretos",
+      emptyPassword: "Senha de bind vazia — a conexão chegou ao servidor sem credenciais. Salve a senha novamente nas configurações de conexão e reconecte",
       referral: "O servidor encaminhou a operação para outro servidor de diretório (referral) — o plug-in relata as URIs de referência em vez de segui-las automaticamente",
       noSuchObject: "Entrada não encontrada: o DN base pode estar errado ou a entrada foi excluída",
       invalidDn: "Sintaxe de DN inválida: verifique o formato (ex.: dc=example,dc=com)",
