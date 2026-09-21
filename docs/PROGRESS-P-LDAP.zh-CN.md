@@ -1470,3 +1470,240 @@ write-policy/denied 审计）；mockDbxHost `?ro=1` 同语义拒绝写。
 **验证水位**：vitest **1138 用例全绿**（含 ResultTable 批量只读 2 例、向导
 只读 1 例新增）、`vue-tsc --noEmit` 通过、后端 `gofmt`/`go vet`/`go test`
 全绿（后端本轮零改动）。
+
+## 第十一轮（2026-09-20）ADS 对标续轮：NOT 组 UI 收口（GAP §5 最后一个 P1 前端项）
+
+矩阵 F1–F12 已 100% 落地（第九轮），本轮按 GAP 表继续追赶剩余 P1：**构建器
+NOT 组开关**。模型层此前已备齐（`BuilderClause/BuilderGroup.negate`、解析回填、
+revive 持久化），本轮只补 UI 暴露与否定语义边界：
+
+| 文件 | 变更 |
+| --- | --- |
+| `frontend/src/components/FilterGroup.vue` | 条件行前置 **NOT** 切换按钮 + 组头 AND/OR 旁 **NOT** 切换（`is-active` 态）；≠ 行显示为已取反；≠ 与 NOT 互斥归一（点 NOT 把 ≠ 降级为 =、选 ≠ 清除 negate），杜绝双重否定被 buildNegatedFilter 透传成静默无效 |
+| `frontend/src/lib/ldapFilter.ts` | `buildNodeFilter` 改**结构化否定**（恒包裹、不透传）：组内单个已否定子节点不再被 passthrough 吞掉；`notEquals + negate`（revive 旧数据）保持单次否定兼容旧输出。parser `!` 分支补两条规则：NOT(≠) 精确展开为 =；对已带 negate 的子节点改用包裹 and 组（flag spread 会丢外层否定、破坏往返） |
+| `frontend/src/style.css` | `.qb-node` 网格加前置 auto 列；`.qb-not` 药丸样式（active 态随 --primary 令牌） |
+| `frontend/src/lib/i18n.ts` | 七语补 `search.builderNot`（取反（NOT）/ Negate (NOT) / Negar / Nega / 否定） |
+| specs | FilterGroup.spec +5（行级/组级开关、≠ 互斥归一、网格首列、disabled 门禁沿用既有例）；ldapFilter.spec +3（单否定子节点的组级结构化否定、notEquals+negate 兼容、`(!(!(|…)))` 往返保留） |
+
+**修复的隐缺陷**：解析端对 `(!(!(...)))` 双重否定形状此前用 flag spread 复用
+同一节点，`parse → build` 往返会把外层否定静默吞掉（组级与子句级各一处）；
+本轮后双重否定以包裹组显式保留、构建器可视化呈现，树过滤等旧路径不受影响
+（buildNegatedFilter 透传语义仅保留给 legacy notEq 查询模型，契约不变）。
+
+**验证水位**：vitest **1201 用例全绿**（FilterGroup/ldapFilter/i18n/SearchForm
+等 5 套件 183 例先行通过）、`vue-tsc --noEmit` 通过、`pnpm build` 成功
+（`ui/` 生成物按契约还原给 integrator）、`scripts/validate_repo.py` PASS、
+connection-forms verify（ldap 18 组合）PASS、scripts unittest 8 例 OK。
+后端本轮零改动；ui_test.mjs 走查选择器（.qb-preview/.qb-attr/.qb-node select）
+不受影响，本轮未跑容器走查。
+
+**剩余 P1/P2**（GAP 表）：referral 跟随策略（P1，后端）；dial/read 双档超时、
+浏览树解引用、mTLS 客户端证书、digest realm、CRAM-MD5、服务器端排序（均 P2）。
+
+## 第十二轮（2026-09-21）ADS 对标续轮：referral 策略收口（GAP 最后一个 P1）
+
+上一轮收口 NOT 组 UI 后，本轮落地 GAP §1 剩余 P1：**referral 跟随策略**。
+关键修正：GAP 原计划"go-ldap ReferralEnabled"不成立——go-ldap v3.4.x 根本没有
+自动追随实现（URI 只在错误 BER 包与搜索延续引用里）；且 follow 语义要求向引用
+目标主机转发绑定凭据、结果绕过 DN 白名单，与本插件安全策略（§9 超越项）直接
+冲突。因此按 ADS 的 **manage** 行为落地（结构化透出 + UI 展示，不自动追随），
+follow 维持不做并记录理由。
+
+**后端**（`internal/ldapconn` + `main.go`）：
+
+- `ldap_errors.go` 新增 `LdapReferralURIs`：从结果码 10 错误携带的 BER 响应包
+  按结构位置容错提取引用 URI（对齐 go-ldap 内部 getReferral 的 OpenLDAP 兼容
+  写法，不依赖 referral 序列 tag 值）。
+- `operations.go` `Search`（非分页 + `pagedSearchEntries` 聚合路径）与
+  `search_sessions.go` `nextSearchSession` 收集延续引用 URI；封顶
+  `maxReportedReferrals=20`。`ldap/search` 返回体增 `referrals`；
+  `ldap/search/start|next` 会话级累计（每页带全量快照，调用方以最新为准）。
+- `main.go` `bizError`：结果码 10 错误前缀追加 `[ldap-referral=<URI|…>]`
+  （最多 5 条），与 `[ldap-code=..]`/`[ldap-matched=..]` 同一契约。
+- 单测 +3：URI 提取（手工构造 BER 响应包，含多 URI/包装错误/空串跳过）、
+  非 code-10 与畸形包容错 nil。
+
+**前端**：
+
+- `ldapErrors.ts`：`[ldap-referral=..]` 前缀结构化解析（`|` 分隔）；
+  结果码 10 友好文案规则（`err.referral`，置于 network/timeout 规则前）。
+- `useSearchSession.ts`：`resultReferrals` 会话状态（start 初值、next 以最新
+  累计替换、reset 归零）；`ResultTable` 增 `referrals` prop，结果区顶部
+  虚线提示条（条数文案 + 前 5 条 URI tooltip，封顶与错误前缀一致）。
+- i18n 七语补 `err.referral` 与 `result.referrals`。
+
+**验证水位**：后端 `go build`/`go vet`/`gofmt` 全净，`go test ./...` 全绿
+（ldapconn 含新增 3 例）；前端 vitest **1211 用例全绿**（ldapErrors +4、
+ResultTable +3、useSearchSession +3）、`vue-tsc --noEmit` 通过、`pnpm build`
+成功（`ui/` 按契约还原给 integrator）、`validate_repo.py` PASS。本轮未跑
+容器 smoke（referral 形态需多后端拓扑，单 OpenLDAP 容器难构造 code-10 场景，
+提取逻辑已由 BER 包单测钉桩）。
+
+**剩余追赶项（均为 P2）**：dial/read 双档超时、浏览树解引用、mTLS 客户端
+证书、digest realm、CRAM-MD5、服务器端排序控件。P1 已全部清零。
+
+## 第十三轮（2026-09-21）并行实施轮：传输层加固 × 搜索层补齐（P2 双线并进）
+
+本轮按「持续并发实施」要求，以两个隔离 git worktree（`.github/agent-flow.yml`
+one-branch-per-agent 契约）并行派出两个实施代理，各自在自己分支上完成实现、
+测试与提交，主树做集成调和：
+
+| 工作流 | 分支 | 内容 |
+| --- | --- | --- |
+| WS-1 传输层 | `codex/ldap/transport-hardening`（e408407） | dial/read 双档超时 + mTLS 客户端证书 |
+| WS-2 搜索层 | `codex/ldap/search-sort-deref`（dbc59c0） | RFC 2891 服务器端排序 + 浏览树解引用 |
+
+**WS-1 传输层**（GAP §1 超时行、§2 mTLS 行 → ✅）：
+
+- `dial_timeout_secs`（Profile `DialTimeoutSeconds`，缺省 0）：只约束拨号窗口
+  （TCP 建立 + StartTLS 升级；ldaps 握手在 go-ldap Dial 内部无独立 deadline，
+  注释如实描述）；0/未设回落 `timeout_secs`，旧行为完全保留。拨号唯一入口
+  dialTransport 确认（全仓仅一处裸 `net.Dialer`）；`ldap/check` 保持 3s 快速
+  拨号契约不读新字段。
+- `tls_client_cert_path` + `tls_client_key_path`（PEM 路径）：starttls/ldaps
+  联动显隐；两者皆空 = 现行为；只填其一/加载失败报清晰错误（消息不含密钥
+  内容）；`tls_mode=none` 不触发文件 I/O。manifest 七语 label + stdio 内联
+  参数镜像接线（poolKey 只 hash 路径）。
+- 单测：dial 回落语义 / mTLS 加载成败 / lifecycle 接线（transport_hardening_test.go，
+  新增）；manifest 显隐矩阵枚举同步；verify.mjs 补 mTLS 字段断言。
+
+**WS-2 搜索层**（GAP §5 排序行 → ✅；§1 别名行 → ✅）：
+
+- RFC 2891 服务器端排序：`sortBy`（空缺省不注入控件）+ `sortOrder`
+  （asc|desc，desc = SortKey.Reverse）；非分页/分页聚合/分页会话三条链路
+  每页携带排序控件，与 RFC 2696 cookie 共存（控件次序有专门单测）。服务器
+  未按请求排序时优雅降级：`sortResult` 状态码透出 + 前端一次性提示，条目
+  照常返回。已核实的 go-ldap v3.4.13 上游缺陷记入 sort.go 注释（SortResult
+  解码不回填 Result 字段，非零码暂多透出为 0，上游修复即生效）。
+- 浏览树解引用：链路核实为 DnTree → `ldap/search/start`（后端 DerefAliases
+  本就端到端就绪，前端此前硬编码 never）；树工具栏新增解引用下拉（缺省
+  never 零配置无行为变化，切换整树重建）；DN Picker 弹层留 TODO 余量。
+- 前端：SearchForm 高级区排序两字段（折叠形态不展开）、api.ts 类型透传、
+  useSearchSession `onNotice` 一次性提示；i18n 七语补 `tree.deref` +
+  `search.sortBy` 组 + `result.sortDegraded`。
+
+**集成调和**（主树）：WS-1 补丁干净合入（除 GAP 文档）；WS-2 与第十二轮
+referral 改动在 types.go / operations.go / search_sessions.go / api.ts /
+useSearchSession(.spec).ts / App.vue / i18n.ts / GAP 文档八处共享文件手工
+调和（如 `pagedSearchEntries` 签名合并为
+`(entries, referrals, truncated, sortResult, err)`、Search 会话响应同时带
+`referrals` 快照与 `sortResult`、i18n 意/葡 `derefAlways: "sempre"` 同文
+锚点碰撞去重）。GAP 文档三方行级合并 + M7 路线更新。
+
+**验证水位**：
+
+| 套件 | 结果 |
+| --- | --- |
+| validate_repo / connection-forms verify | PASS（18 组合，含 mTLS 新断言） |
+| 后端 gofmt/vet/test（6 包） | 全绿 |
+| 前端 vue-tsc + vitest | **1218 用例全绿** |
+| OpenLDAP 容器协议 smoke | **19/19**（S18 别名矩阵复验） |
+| MCP 全量 smoke（新编译二进制） | **20/20**（M15/M17 分页游标路径复验） |
+| TLS/认证专项 smoke | **10 PASS + 1 SKIP**（A2 DIGEST-MD5 服务端无机制，照例 SKIP；ldaps/StartTLS 真实路径复验 WS-1 拨号改动） |
+
+**遗留与后续**：(1) 排序 + 分页在部分服务器（AD adminLimit 场景）可能整页
+报错走既有错误通道，与 ADS 行为一致未特判；go-ldap 升级后 SortResult 非零
+码提示自动生效。(2) DN Picker 弹层未接树解引用下拉（TODO）。(3) `ui/` 生成物
+与版本号按契约留给 integrator；PROTOCOL.zh-CN.md 共享契约文档（`sortBy`/
+`sortOrder`/`sortResult`/`referrals`/`dialTimeoutSeconds`/mTLS 字段表）需
+integrator 同步。两个工作树已移除，分支保留供 integrator 审阅（e408407 /
+dbc59c0）。
+
+**剩余追赶项（均 P2）**：CRAM-MD5（go-ldap 有 CRAMMD5Bind）、digest realm
+字段、DSML（维持按需不做）。
+
+## 第十四轮（2026-09-21）对标终局轮：CRAM-MD5 / digest realm 决策闭环
+
+最后两项 P2（CRAM-MD5、digest realm 字段）经源码级可行性核验后**以决策记录
+关闭**，ADS 追赶路线全部闭环。核验结论：
+
+- **CRAM-MD5**：go-ldap v3.4.13 完全无实现（bind.go 无 CRAMMD5Bind），且 SASL
+  挑战-响应所需的连接消息层（doRequest/readPacket/finishMessage）全部私有、
+  无公开扩展点——实现只能 fork 依赖库（照 DigestMD5Bind 模板约 120 行）并
+  长期维护分叉。机制本身属 RFC 2195 时代遗产（现代等价 = simple + TLS，
+  本插件已具备），OpenLDAP 测试容器亦不含该 mech。**决策：不做**，如未来出现
+  真实需求再评估 fork（成本已量化记入 GAP §3）。
+- **digest realm**：现有实现的"realm 由服务端 challenge 驱动"正是 RFC 2831
+  的正确行为；go-ldap 硬编码回填 challenge realm（bind.go :342/:365），客户端
+  多 realm 选择仅对多 realm 服务器有意义且同样需要 fork。**决策：不做**，
+  GAP §3 行改记 ✅（RFC 对齐）。
+
+顺手收口：DnPickerDialog 的解引用余量由 TODO 转为设计决定（DN 查找辅助无需
+解引用，与树状态相隔三层组件不值得耦合），GAP §1 别名行闭环口径同步。
+
+**终局状态**：ADS_FEATURE_MATRIX（F1–F12）+ ADS_GAP_ANALYSIS 全表
+P0/P1/P2 追赶项**全部落地或决策关闭**（唯 DSML 维持"按需不做"）。相对 ADS
+保持的超越面：DN 白名单读写分离、屏蔽属性、只读门禁纵深、写审计 feed、
+Kerberos keytab/ccache、NTLM/NTLM-hash、LDAPI Unix socket、referral 结构化
+报告、七语 i18n、MCP 工具面（digest/cursor/schema）。
+
+**验证水位**：DnPickerDialog + i18n spec 15 例全绿、`vue-tsc --noEmit` 通过、
+`validate_repo.py` PASS。本轮零后端/零协议改动，无需容器回归（第十三轮
+19/19 + 20/20 + 10P/1S 仍为当前二进制水位）。
+
+**留给 integrator**：版本收口（manifest 0.1.89+）、`ui/` 重新生成、
+PROTOCOL.zh-CN.md 共享契约字段表（sortBy/sortOrder/sortResult/referrals/
+dialTimeoutSeconds/tls_client_cert_path/tls_client_key_path）、两分支
+（codex/ldap/transport-hardening @ e408407、codex/ldap/search-sort-deref @
+dbc59c0）与主树未提交合并成果的审阅提交。
+
+## 第十五轮（2026-09-21）修复轮：206 空密码被误报为「属性或值已存在」
+
+**现象**：本地打开 LDAP-DEV(docker) 连接弹「属性或值已存在」（code 20 文案）。
+
+**定位**（worktree 探针复刻 UI 打开序列 + 宿主库只读核对）：
+
+1. 打开链路本身全为只读（connect/statuses/check/schema/rootDse/树列举/
+   count/whoami），密钥键名 `bind_password` 下探针全序列 OK；
+2. 真实报错来自懒绑定：宿主未送达密钥时绑定密码为空，go-ldap 客户端侧
+   返回 **206**（`ErrorEmptyPassword`，bind.go）；
+3. 前端 `friendlyLdapError` 的文本正则 `result code 20` 是 `Result Code 206`
+   的**前缀**，206 被误判为 20 → 误显示「属性或值已存在」。同类碰撞影响
+   所有数字码（20×200/4×40/8×80…），且既有 spec 因断言过弱（只断言不含
+   原文）而未拦截。
+
+**修复**（`frontend/src/lib/ldapErrors.ts` + i18n 七语）：
+
+- code-first：`[ldap-code=NNN]` 前缀存在时按 `CODE_RULES` 精确码表命中
+  （新增 4/8/10/11/19/20/21/32/34/49/53/68/200/206 全表），杜绝前缀碰撞；
+- 文本正则全部加 `(?!\d)` 锚定，仅作无码消息的兜底；
+- TLS 证书规则保持全局最高优先（带码的 x509 错误仍归证书文案）；
+- 新增 **206 → `err.emptyPassword`** 七语文案：明示「绑定密码为空——请重新
+  保存密码后再连接」，不再误导为属性冲突。
+
+**验证**：vitest **1222 用例全绿**（ldapErrors +4 例：206 独立文案、
+20/200/206 三向互异、带码 TLS 仍优先、无码原文锚定）；`vue-tsc` 通过；
+重建重装 v0.1.88 后实装桥 digest 复验 OK；空密码探针确认后端 206 原样
+透出、前端映射切换为新文案。
+
+**对用户的处置建议**：修复安装后重新打开 LDAP-DEV(docker)——若仍提示
+「绑定密码为空」，在连接设置里重存一次密码即可（宿主库中该连接的密钥
+`plugin_connection.bind_password` 经只读核对存在且健康，重启后大概率直接恢复）。
+
+## 第十六轮（2026-09-21）修复轮：列表行整行可点（UI 走查用户反馈）
+
+**现象**：Schema 弹窗内点选列表项必须点中文字，点行空白处无响应（用户反馈
+附截图：associatedDomain 行选中态横跨整行、热区却只有名称文字）。
+
+**全 UI 清查**（所有列表/下拉/页签/行的点击目标 vs 视觉行范围）：
+
+| 组件 | 结论 |
+| --- | --- |
+| SchemaPanel 属性类型/匹配规则/用途/语法 四页签 | **缺陷**：点击只挂在内层 `padding:0` 的行内按钮上；li 有 hover 高亮 + cursor:default，视觉整行可选、实际仅文字可点 |
+| DnPickerDialog | **半缺陷**：名称按钮 flex:1 基本铺满，但行尾 badge/空白区不可点；展开按钮与选中共用行但语义未隔离 |
+| TreeBranch / AssociationPanel / 历史下拉 / qb-attr-option / objectClass 选择器 / 右键菜单 / 关联页签 | 已是整行（width:100%/flex 铺满）或显式按钮，无需改 |
+| SearchForm 预设/范围/解引用 | 原生 select，无此问题 |
+| ConnectionsPanel / RootDSE 行 | 显式逐行操作按钮（check/whoami/设为浏览基），非可点选列表，维持 |
+
+**修复**：
+
+- `SchemaPanel.vue`：四个页签的选中点击提升到 `<li>`（对齐 objectClasses
+  页签既有写法），名称按钮 `@click.stop` 防双触发；
+- `style.css`：`.schema-attribute-row` cursor:pointer；`.schema-attribute-button`
+  `display:block; width:100%`（键盘可达性保留在按钮上）；
+- `DnPickerDialog.vue`：行级点击选中（badge/空白区也响应），toggle 展开
+  `@click.stop` 不再误触发选中，行 cursor:pointer。
+
+**验证**：vitest **1227 用例全绿**（+5：Schema li 行选中×2、按钮单次触发×1、
+匹配规则行选中×1、DnPicker 整行选中 + toggle 不误选×2 中计 5）；`vue-tsc`
+通过；ui_test.mjs 走查对 `.schema-attribute-button` 的既有选择器不受影响。

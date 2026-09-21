@@ -28,6 +28,10 @@ import (
 // defaultSearchAggregateLimit 分页聚合上限（实施文档 §10：sizeLimit 缺省 500）。
 const defaultSearchAggregateLimit = 500
 
+// maxReportedReferrals 单次搜索透出的延续引用 URI 上限（referral report
+// 语义只透出不追随；封顶防个别服务端在海量引用上撑爆响应体）。
+const maxReportedReferrals = 20
+
 // maxSubtreeDeleteEntries 子树递归删除条目上限（N1 防误删：先清点后删除，
 // 超限一律报错不删）。
 const maxSubtreeDeleteEntries = 1000
@@ -114,6 +118,24 @@ func (s *Service) Search(ctx context.Context, req LDAPSearchRequest) (LDAPSearch
 
 	var entries []LDAPEntry
 	truncated := false
+	// RFC 2891 服务器端排序（sortBy 空 = 不注入控件，行为与旧版本一致）。
+	// 排序控件先于分页控件入列表：分页路径 pagedSearchEntries 会在其后追加
+	// paging 控件，两条控件随每个分页请求重复下发（RFC 2696 cookie 语义不变）。
+	sortControl := newLDAPSortControl(req.SortBy, req.SortOrder)
+	var controls []ldap.Control
+	if sortControl != nil {
+		controls = append(controls, sortControl)
+	}
+	var sortResult int
+	var referrals []string
+	collectReferrals := func(uris []string) {
+		for _, uri := range uris {
+			if len(referrals) >= maxReportedReferrals {
+				return
+			}
+			referrals = append(referrals, uri)
+		}
+	}
 	// K-5：独立短连接执行（失败回退共享 WithConn，见 withDedicatedConn）。
 	isBinaryValue := s.ldapBinaryValuePredicate(req.ConnectionID)
 	err = s.withDedicatedConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
@@ -135,23 +157,29 @@ func (s *Service) Search(ctx context.Context, req LDAPSearchRequest) (LDAPSearch
 			req.TypesOnly,
 			filter,
 			attrs,
-			nil,
+			controls,
 		)
 		if pageSize > 0 {
 			var result []*ldap.Entry
+			var pageReferrals []string
+			var pageSortResult int
 			var searchErr error
-			result, truncated, searchErr = pagedSearchEntries(conn, searchReq, pageSize, aggregateLimit(req.SizeLimit))
+			result, pageReferrals, truncated, pageSortResult, searchErr = pagedSearchEntries(conn, searchReq, pageSize, aggregateLimit(req.SizeLimit))
 			if searchErr != nil {
 				return searchErr
 			}
+			collectReferrals(pageReferrals)
 			entries = ldapEntriesToTypes(result, isBinaryValue)
+			sortResult = pageSortResult
 			return nil
 		}
 		result, searchErr := conn.Search(searchReq)
 		if searchErr != nil {
 			return searchErr
 		}
+		collectReferrals(result.Referrals)
 		entries = ldapEntriesToTypes(result.Entries, isBinaryValue)
+		sortResult = sortResultFromControls(result.Controls)
 		return nil
 	})
 	if err != nil {
@@ -161,11 +189,13 @@ func (s *Service) Search(ctx context.Context, req LDAPSearchRequest) (LDAPSearch
 		entries[i] = filterLDAPEntryBlockedAttributes(profile, entries[i])
 	}
 	return LDAPSearchResult{
-		Entries:   entries,
-		Count:     len(entries),
-		Truncated: truncated,
-		BaseDN:    baseDN,
-		Filter:    filter,
+		Entries:    entries,
+		Count:      len(entries),
+		Truncated:  truncated,
+		BaseDN:     baseDN,
+		Filter:     filter,
+		Referrals:  referrals,
+		SortResult: sortResult,
 	}, nil
 }
 
@@ -881,24 +911,41 @@ func aggregateLimit(sizeLimit int) int {
 
 // pagedSearchEntries 分页搜索聚合（对照 go-ldap Conn.SearchWithPaging 手动展开，
 // 加客户端聚合上限：达到 limit 截断并返回 truncated=true，用于前端提示）。
-func pagedSearchEntries(conn *ldap.Conn, searchReq *ldap.SearchRequest, pageSize uint32, limit int) ([]*ldap.Entry, bool, error) {
+// 返回的 referrals 是各页累计的延续引用（封顶 maxReportedReferrals）；sortResult
+// 是各页 SortResult 控件状态码（RFC 2891）：任一页报非 0 即透出该码；全部
+// 0/缺失时为 0。请求上已有的排序控件随每页重复下发，paging cookie 语义不变。
+func pagedSearchEntries(conn *ldap.Conn, searchReq *ldap.SearchRequest, pageSize uint32, limit int) ([]*ldap.Entry, []string, bool, int, error) {
 	pagingControl := ldap.NewControlPaging(pageSize)
 	searchReq.Controls = append(searchReq.Controls, pagingControl)
 
 	var entries []*ldap.Entry
+	var referrals []string
 	truncated := false
+	sortResult := 0
+	collectReferrals := func(uris []string) {
+		for _, uri := range uris {
+			if len(referrals) >= maxReportedReferrals {
+				return
+			}
+			referrals = append(referrals, uri)
+		}
+	}
 	for {
 		result, err := conn.Search(searchReq)
 		if err != nil {
-			return entries, truncated, err
+			return entries, referrals, truncated, sortResult, err
 		}
 		entries = append(entries, result.Entries...)
+		collectReferrals(result.Referrals)
+		if pageSort := sortResultFromControls(result.Controls); pageSort != 0 {
+			sortResult = pageSort
+		}
 
 		// 聚合上限（limit>0 时生效）：截断并停止翻页。
 		if limit > 0 && len(entries) >= limit {
 			entries = entries[:limit]
 			truncated = true
-			return entries, truncated, nil
+			return entries, referrals, truncated, sortResult, nil
 		}
 
 		// 读取服务器返回的 paging control cookie；无 cookie 表示翻页结束。
@@ -910,7 +957,7 @@ func pagedSearchEntries(conn *ldap.Conn, searchReq *ldap.SearchRequest, pageSize
 			}
 		}
 		if received == nil || len(received.Cookie) == 0 {
-			return entries, truncated, nil
+			return entries, referrals, truncated, sortResult, nil
 		}
 		pagingControl.SetCookie(received.Cookie)
 	}

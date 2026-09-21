@@ -21,3 +21,35 @@ func LdapErrorMeta(err error) (code int, matchedDN string, ok bool) {
 	}
 	return int(ldapErr.ResultCode), ldapErr.MatchedDN, true
 }
+
+// LdapReferralURIs 从结果码 10（Referral）的错误里提取引用 URI 列表。
+//
+// go-ldap v3.4.x 没有自动 referral 追随，URI 只保留在错误携带的原始 BER
+// 响应包里（Error.Packet）。按包结构容错遍历（对齐 go-ldap 内部 getReferral
+// 的 OpenLDAP 兼容写法：referral 序列的 tag 在不同服务端实现间不稳定，因此
+// 只按结构位置取 response 的第 3 个 child，URI 值取各子节点的首个 string
+// child），取不到返回 nil，调用方按"无引用"处理。
+func LdapReferralURIs(err error) []string {
+	var ldapErr *ldap.Error
+	if !errors.As(err, &ldapErr) || int(ldapErr.ResultCode) != int(ldap.LDAPResultReferral) || ldapErr.Packet == nil {
+		return nil
+	}
+	packet := ldapErr.Packet
+	if len(packet.Children) < 2 {
+		return nil
+	}
+	response := packet.Children[1]
+	if len(response.Children) < 3 {
+		return nil
+	}
+	var uris []string
+	for _, child := range response.Children[2].Children {
+		if child == nil || len(child.Children) == 0 {
+			continue
+		}
+		if uri, ok := child.Children[0].Value.(string); ok && uri != "" {
+			uris = append(uris, uri)
+		}
+	}
+	return uris
+}

@@ -453,8 +453,8 @@ useModalA11y(
             <template v-if="activeTab === 'attributeTypes'">
               <h3>{{ t("schema.attributeTypes") }} <span class="muted">({{ attributeRows.length }})</span></h3>
               <ul>
-                <li v-for="name in attributeRows" :key="name" class="mono schema-attribute-row" :class="{ 'is-selected': name === selectedAttribute }">
-                  <button type="button" class="schema-attribute-button mono" @click="selectAttribute(name)">{{ name }}</button>
+                <li v-for="name in attributeRows" :key="name" class="mono schema-attribute-row" :class="{ 'is-selected': name === selectedAttribute }" @click="selectAttribute(name)">
+                  <button type="button" class="schema-attribute-button mono" @click.stop="selectAttribute(name)">{{ name }}</button>
                   <div v-if="name === selectedAttribute && selectedAttributeInfo" class="schema-def">
                     <div v-if="selectedAttributeInfo.syntax">{{ t("schema.syntax") }}: <span class="mono">{{ selectedAttributeInfo.syntax }}</span></div>
                     <div v-if="selectedAttributeInfo.equality">{{ t("schema.equality") }}: {{ selectedAttributeInfo.equality }}</div>
@@ -487,8 +487,8 @@ useModalA11y(
             <template v-else-if="activeTab === 'matchingRules'">
               <h3>{{ t("schema.matchingRules") }} <span class="muted">({{ matchingRuleRows.length }})</span></h3>
               <ul>
-                <li v-for="row in matchingRuleRows" :key="row.oid" class="schema-attribute-row" :class="{ 'is-selected': row.oid === selectedMatchingRule }">
-                  <button type="button" class="schema-attribute-button mono" @click="selectMatchingRule(row.oid)">{{ namesOrOid(row.names, row.oid) }}</button>
+                <li v-for="row in matchingRuleRows" :key="row.oid" class="schema-attribute-row" :class="{ 'is-selected': row.oid === selectedMatchingRule }" @click="selectMatchingRule(row.oid)">
+                  <button type="button" class="schema-attribute-button mono" @click.stop="selectMatchingRule(row.oid)">{{ namesOrOid(row.names, row.oid) }}</button>
                 </li>
                 <li v-if="matchingRuleRows.length === 0" class="muted">{{ listEmptyText }}</li>
               </ul>
@@ -501,8 +501,9 @@ useModalA11y(
                   :key="row.oid"
                   class="schema-attribute-row"
                   :class="{ 'is-selected': row.oid === selectedMatchingRuleUse }"
+                  @click="selectMatchingRuleUse(row.oid)"
                 >
-                  <button type="button" class="schema-attribute-button mono" @click="selectMatchingRuleUse(row.oid)">{{ namesOrOid(row.names, row.oid) }}</button>
+                  <button type="button" class="schema-attribute-button mono" @click.stop="selectMatchingRuleUse(row.oid)">{{ namesOrOid(row.names, row.oid) }}</button>
                 </li>
                 <li v-if="matchingRuleUseRows.length === 0" class="muted">{{ listEmptyText }}</li>
               </ul>
@@ -510,8 +511,8 @@ useModalA11y(
             <template v-else>
               <h3>{{ t("schema.syntaxes") }} <span class="muted">({{ syntaxRows.length }})</span></h3>
               <ul>
-                <li v-for="row in syntaxRows" :key="row.oid" class="schema-attribute-row" :class="{ 'is-selected': row.oid === selectedSyntax }">
-                  <button type="button" class="schema-attribute-button mono" @click="selectSyntax(row.oid)">{{ syntaxLabel(row) }}</button>
+                <li v-for="row in syntaxRows" :key="row.oid" class="schema-attribute-row" :class="{ 'is-selected': row.oid === selectedSyntax }" @click="selectSyntax(row.oid)">
+                  <button type="button" class="schema-attribute-button mono" @click.stop="selectSyntax(row.oid)">{{ syntaxLabel(row) }}</button>
                 </li>
                 <li v-if="syntaxRows.length === 0" class="muted">{{ listEmptyText }}</li>
               </ul>

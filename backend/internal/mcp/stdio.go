@@ -334,22 +334,25 @@ func stdioConnectionProperties() map[string]any {
 			"type":        "string",
 			"description": "Connection id: either pooled from an earlier inline-credential call in this stdio session (mcp-…), or a DBX saved connection id (forwarded through the running DBX app's local bridge). Omit to connect by inline parameters instead; in DBX workbench/bridge mode credentials are resolved by the host and never travel in tool arguments",
 		},
-		"host":          map[string]any{"type": "string", "description": "LDAP server host (bare hostname, or a full ldap/ldaps URL); inline mode is keyed by a hash of these parameters"},
-		"port":          map[string]any{"type": "integer", "description": "Port; empty uses 389 for LDAP/StartTLS or 636 for LDAPS"},
-		"tlsMode":       map[string]any{"type": "string", "enum": []string{"none", "starttls", "ldaps"}, "description": "Encryption (default none)"},
-		"startTls":      map[string]any{"type": "boolean", "description": "Shorthand for tlsMode=starttls (ignored when tlsMode is set)"},
-		"authType":      map[string]any{"type": "string", "enum": []string{"anonymous", "simple", "unauthenticated"}, "description": "Bind type (default simple)"},
-		"bindDn":        map[string]any{"type": "string", "description": "Bind DN (simple bind)"},
-		"username":      map[string]any{"type": "string", "description": "Account name (fallback bind DN / NTLM user)"},
-		"domain":        map[string]any{"type": "string", "description": "NTLM domain"},
-		"password":      map[string]any{"type": "string", "description": "Bind password (inline credentials stay in process memory only)"},
-		"ntlmHash":      map[string]any{"type": "string", "description": "NT hash for ntlm_hash bind"},
-		"baseDn":        map[string]any{"type": "string", "description": "Default base DN"},
-		"tlsVerify":     map[string]any{"type": "boolean", "description": "Verify TLS certificate (default true)"},
-		"tlsCaPath":     map[string]any{"type": "string", "description": "PEM CA file path on this machine (TLS verification only)"},
-		"tlsServerName": map[string]any{"type": "string", "description": "TLS SNI override"},
-		"timeoutSecs":   map[string]any{"type": "integer", "description": "Operation timeout seconds (default 30)"},
-		"readOnly":      map[string]any{"type": "boolean", "description": "Open read-only (write tools refused)"},
+		"host":              map[string]any{"type": "string", "description": "LDAP server host (bare hostname, or a full ldap/ldaps URL); inline mode is keyed by a hash of these parameters"},
+		"port":              map[string]any{"type": "integer", "description": "Port; empty uses 389 for LDAP/StartTLS or 636 for LDAPS"},
+		"tlsMode":           map[string]any{"type": "string", "enum": []string{"none", "starttls", "ldaps"}, "description": "Encryption (default none)"},
+		"startTls":          map[string]any{"type": "boolean", "description": "Shorthand for tlsMode=starttls (ignored when tlsMode is set)"},
+		"authType":          map[string]any{"type": "string", "enum": []string{"anonymous", "simple", "unauthenticated"}, "description": "Bind type (default simple)"},
+		"bindDn":            map[string]any{"type": "string", "description": "Bind DN (simple bind)"},
+		"username":          map[string]any{"type": "string", "description": "Account name (fallback bind DN / NTLM user)"},
+		"domain":            map[string]any{"type": "string", "description": "NTLM domain"},
+		"password":          map[string]any{"type": "string", "description": "Bind password (inline credentials stay in process memory only)"},
+		"ntlmHash":          map[string]any{"type": "string", "description": "NT hash for ntlm_hash bind"},
+		"baseDn":            map[string]any{"type": "string", "description": "Default base DN"},
+		"tlsVerify":         map[string]any{"type": "boolean", "description": "Verify TLS certificate (default true)"},
+		"tlsCaPath":         map[string]any{"type": "string", "description": "PEM CA file path on this machine (TLS verification only)"},
+		"tlsServerName":     map[string]any{"type": "string", "description": "TLS SNI override"},
+		"tlsClientCertPath": map[string]any{"type": "string", "description": "PEM client certificate path for mutual TLS (both cert and key required)"},
+		"tlsClientKeyPath":  map[string]any{"type": "string", "description": "PEM client key path for mutual TLS (both cert and key required)"},
+		"timeoutSecs":       map[string]any{"type": "integer", "description": "Operation timeout seconds (default 30)"},
+		"dialTimeoutSecs":   map[string]any{"type": "integer", "description": "TCP dial timeout seconds (0/empty falls back to timeoutSecs)"},
+		"readOnly":          map[string]any{"type": "boolean", "description": "Open read-only (write tools refused)"},
 	}
 }
 
@@ -546,28 +549,36 @@ type inlineConn struct {
 	TLSVerify     *bool  `json:"tlsVerify,omitempty"`
 	TLSCAPath     string `json:"tlsCaPath,omitempty"`
 	TLSServerName string `json:"tlsServerName,omitempty"`
-	TimeoutSecs   int    `json:"timeoutSecs,omitempty"`
-	ReadOnly      bool   `json:"readOnly,omitempty"`
+	// mTLS 客户端证书路径（PEM 文件，用户本机提供）。证书/私钥路径是文件
+	// 位置而非密钥内容，可进 poolKey hash 输入；密钥内容本身永不出现。
+	TLSClientCertPath string `json:"tlsClientCertPath,omitempty"`
+	TLSClientKeyPath  string `json:"tlsClientKeyPath,omitempty"`
+	TimeoutSecs       int    `json:"timeoutSecs,omitempty"`
+	DialTimeoutSecs   int    `json:"dialTimeoutSecs,omitempty"`
+	ReadOnly          bool   `json:"readOnly,omitempty"`
 }
 
 // parseInlineConn 从工具参数提取内联连接参数（startTls 是 tlsMode=starttls
 // 的便捷别名；password 接受 bindPassword 别名）。present = host 非空。
 func parseInlineConn(args map[string]any) (inlineConn, bool) {
 	inline := inlineConn{
-		Host:          firstNonEmptyArg(args, "host"),
-		Port:          intArg(args["port"]),
-		TLSMode:       firstNonEmptyArg(args, "tlsMode"),
-		AuthType:      firstNonEmptyArg(args, "authType"),
-		BindDN:        firstNonEmptyArg(args, "bindDn"),
-		Username:      firstNonEmptyArg(args, "username"),
-		Domain:        firstNonEmptyArg(args, "domain"),
-		Password:      firstNonEmptyArg(args, "password", "bindPassword"),
-		NTLMHash:      firstNonEmptyArg(args, "ntlmHash"),
-		BaseDN:        firstNonEmptyArg(args, "baseDn"),
-		TLSCAPath:     firstNonEmptyArg(args, "tlsCaPath"),
-		TLSServerName: firstNonEmptyArg(args, "tlsServerName"),
-		TimeoutSecs:   intArg(args["timeoutSecs"]),
-		ReadOnly:      boolArg(args["readOnly"]),
+		Host:              firstNonEmptyArg(args, "host"),
+		Port:              intArg(args["port"]),
+		TLSMode:           firstNonEmptyArg(args, "tlsMode"),
+		AuthType:          firstNonEmptyArg(args, "authType"),
+		BindDN:            firstNonEmptyArg(args, "bindDn"),
+		Username:          firstNonEmptyArg(args, "username"),
+		Domain:            firstNonEmptyArg(args, "domain"),
+		Password:          firstNonEmptyArg(args, "password", "bindPassword"),
+		NTLMHash:          firstNonEmptyArg(args, "ntlmHash"),
+		BaseDN:            firstNonEmptyArg(args, "baseDn"),
+		TLSCAPath:         firstNonEmptyArg(args, "tlsCaPath"),
+		TLSServerName:     firstNonEmptyArg(args, "tlsServerName"),
+		TLSClientCertPath: firstNonEmptyArg(args, "tlsClientCertPath"),
+		TLSClientKeyPath:  firstNonEmptyArg(args, "tlsClientKeyPath"),
+		TimeoutSecs:       intArg(args["timeoutSecs"]),
+		DialTimeoutSecs:   intArg(args["dialTimeoutSecs"]),
+		ReadOnly:          boolArg(args["readOnly"]),
 	}
 	if raw, ok := args["tlsVerify"].(bool); ok {
 		inline.TLSVerify = &raw
@@ -622,8 +633,17 @@ func (c inlineConn) toLifecycle(id string) *lifecycle.Params {
 	if c.TLSServerName != "" {
 		external["tls_server_name"] = c.TLSServerName
 	}
+	if c.TLSClientCertPath != "" {
+		external["tls_client_cert_path"] = c.TLSClientCertPath
+	}
+	if c.TLSClientKeyPath != "" {
+		external["tls_client_key_path"] = c.TLSClientKeyPath
+	}
 	if c.TimeoutSecs > 0 {
 		external["timeout_secs"] = c.TimeoutSecs
+	}
+	if c.DialTimeoutSecs > 0 {
+		external["dial_timeout_secs"] = c.DialTimeoutSecs
 	}
 	if c.ReadOnly {
 		external["read_only"] = true

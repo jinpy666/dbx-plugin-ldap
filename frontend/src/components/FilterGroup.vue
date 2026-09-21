@@ -39,6 +39,36 @@ function setJoin(join: "and" | "or") {
   if (!props.disabled) props.group.join = join;
 }
 
+function toggleGroupNot() {
+  if (!props.disabled) props.group.negate = props.group.negate === true ? undefined : true;
+}
+
+/** A clause row is effectively negated when the NOT toggle is on or the ≠
+ *  operator is selected (≠ encodes one negation by itself). */
+function isClauseNegated(node: BuilderClause): boolean {
+  return node.negate === true || node.op === "notEquals";
+}
+
+function toggleClauseNot(node: BuilderClause) {
+  if (props.disabled) return;
+  // ≠ already means NOT(equals): the first NOT click downgrades it to a plain
+  // equals so negation never stacks; from there the toggle flips negate.
+  if (node.op === "notEquals") {
+    node.op = "equals";
+    node.negate = undefined;
+    return;
+  }
+  node.negate = node.negate === true ? undefined : true;
+}
+
+function onClauseOpChange(node: BuilderClause, event: Event) {
+  if (props.disabled) return;
+  const op = (event.target as HTMLSelectElement).value as BuilderOp;
+  node.op = op;
+  // Selecting ≠ clears any NOT toggle so the two negations can't double up.
+  if (op === "notEquals") node.negate = undefined;
+}
+
 function addClause() {
   if (!props.disabled) props.group.children.push(createBuilderClause());
 }
@@ -104,6 +134,13 @@ function onAttributeBlur() {
           :title="t('search.builderJoinOr')"
           @click="setJoin('or')"
         >OR</button>
+        <button
+          type="button"
+          :class="{ 'is-active': group.negate === true }"
+          :disabled="disabled"
+          :title="t('search.builderNot')"
+          @click="toggleGroupNot"
+        >NOT</button>
       </span>
       <span class="qb-actions">
         <button type="button" class="qb-add" :disabled="disabled" :title="t('search.builderAddRow')" @click="addClause">
@@ -124,6 +161,14 @@ function onAttributeBlur() {
     <div v-if="group.children.length === 0" class="qb-empty">{{ t("search.builderEmptyGroup") }}</div>
     <div v-for="(node, index) in group.children" :key="node.id" class="qb-node">
       <template v-if="isClause(node)">
+        <button
+          type="button"
+          class="qb-not"
+          :class="{ 'is-active': isClauseNegated(node) }"
+          :disabled="disabled"
+          :title="t('search.builderNot')"
+          @click="toggleClauseNot(node)"
+        >NOT</button>
         <div class="qb-attr-picker" @focusout="onAttributeBlur">
           <input
             v-model="node.attribute"
@@ -155,7 +200,7 @@ function onAttributeBlur() {
             >{{ option }}</button>
           </div>
         </div>
-        <select v-model="node.op" :disabled="disabled">
+        <select :value="node.op" :disabled="disabled" @change="onClauseOpChange(node, $event)">
           <option v-for="option in operatorOptions" :key="option.value" :value="option.value">{{ t(option.labelKey) }}</option>
         </select>
         <input

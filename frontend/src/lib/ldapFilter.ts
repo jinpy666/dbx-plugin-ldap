@@ -333,17 +333,30 @@ export const buildBuilderClauseFilter = (clause: BuilderClause): string => {
     }
 };
 
+/**
+ * Structural negation for builder nodes: always wraps, never passes an
+ * already-negated body through. buildNegatedFilter's passthrough exists for
+ * the legacy clause model (notEq op + negate flag both encoding one negation);
+ * here a NOT toggle on a group whose inner filter happens to start with `(!`
+ * must still produce a second, meaningful negation.
+ */
+const wrapStructuralNegation = (expression: string): string => `(!${expression})`;
+
 /** Recursively build a filter from a builder node (empty children are dropped). */
 export const buildNodeFilter = (node?: BuilderNode | null): string => {
     if (!node) return "";
     if (node.kind === "clause") {
         const expression = buildBuilderClauseFilter(node);
         if (!expression) return "";
-        return node.negate ? buildNegatedFilter(expression) : expression;
+        // notEquals already encodes one negation; a leftover negate flag on
+        // such a clause (revived persisted data) stays redundant — matching the
+        // previous buildNegatedFilter passthrough output.
+        const shouldNegate = node.negate === true && node.op !== "notEquals";
+        return shouldNegate ? wrapStructuralNegation(expression) : expression;
     }
     const inner = combineFilters((node.children || []).map((child) => buildNodeFilter(child)), node.join === "or" ? "or" : "and");
     if (!inner) return "";
-    return node.negate ? buildNegatedFilter(inner) : inner;
+    return node.negate ? wrapStructuralNegation(inner) : inner;
 };
 
 export interface BuilderNodeError {
@@ -520,6 +533,17 @@ const parseFilterItem = (cursor: ParseCursor): BuilderNode | null => {
         // is preserved by buildNodeFilter either way).
         if (child.kind === "clause" && child.op === "equals" && !child.negate) {
             return { ...child, op: "notEquals", negate: undefined };
+        }
+        // NOT(≠) is exactly equals — unfold instead of stacking a redundant
+        // negate flag that buildNodeFilter would silently drop.
+        if (child.kind === "clause" && child.op === "notEquals" && !child.negate) {
+            return { ...child, op: "equals", negate: undefined };
+        }
+        // negate is a single boolean per node: a second `!` over an already
+        // negated node must wrap it in a fresh group (flag-spread would lose
+        // the outer negation and break the round trip).
+        if (child.negate) {
+            return createBuilderGroup({ join: "and", children: [child], negate: true });
         }
         return { ...child, negate: true };
     }

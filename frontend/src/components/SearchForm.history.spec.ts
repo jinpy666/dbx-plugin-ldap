@@ -31,6 +31,8 @@ function baseModel(overrides: Partial<SearchFormModel> = {}): SearchFormModel {
     pageSize: "500",
     typesOnly: false,
     derefAliases: "never",
+    sortBy: "",
+    sortOrder: "asc",
     ...overrides,
   };
 }

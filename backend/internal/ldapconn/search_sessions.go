@@ -39,8 +39,14 @@ type ldapSearchSession struct {
 	pageSize     uint32
 	remaining    int // 0 means no client-side size limit
 	cookie       []byte
-	expiresAt    time.Time
-	closed       bool
+	// referrals 是会话级累计的延续引用 URI（referral report 语义，封顶
+	// maxReportedReferrals）；所有读写都在 session.mu（nextSearchSession）内。
+	referrals []string
+	// sortKey 是可选的 RFC 2891 排序键（nil = 不排序）。排序控件随每个分页
+	// 请求重复下发，服务器才能在 RFC 2696 cookie 翻页时保持同一排序序。
+	sortKey   *ldap.SortKey
+	expiresAt time.Time
+	closed    bool
 }
 
 // SearchStart opens an isolated, short-lived RFC 2696 paging session and
@@ -91,6 +97,10 @@ func (s *Service) SearchStart(ctx context.Context, req LDAPSearchSessionRequest)
 		typesOnly:    req.TypesOnly,
 		pageSize:     pageSize,
 		remaining:    normalizeLDAPSizeLimit(req.SizeLimit),
+	}
+	// RFC 2891 可选排序：sortBy 空 = sortKey nil（不注入控件）。
+	if sortControl, ok := newLDAPSortControl(req.SortBy, req.SortOrder).(*ldap.ControlServerSideSorting); ok && sortControl != nil && len(sortControl.SortKeys) == 1 {
+		session.sortKey = sortControl.SortKeys[0]
 	}
 
 	// Do not install a cursor if a concurrent reconnect/disconnect replaced the
@@ -238,10 +248,23 @@ func (s *Service) nextSearchSession(ctx context.Context, session *ldapSearchSess
 	session.conn.SetTimeout(time.Duration(session.profile.TimeoutSeconds) * time.Second)
 	paging := ldap.NewControlPaging(session.pageSize)
 	paging.SetCookie(session.cookie)
-	request := ldap.NewSearchRequest(session.baseDN, session.scope, session.derefAliases, 0, 0, session.typesOnly, session.filter, session.attributes, []ldap.Control{paging})
+	controls := []ldap.Control{paging}
+	// 排序控件随每页重复下发：RFC 2696 的 cookie 只表达游标位置，排序键
+	// 必须由每个请求自带，服务器才能续用同一排序（GAP §5；与 Search 的
+	// pagedSearchEntries 路径同一语义）。
+	if session.sortKey != nil {
+		controls = append(controls, ldap.NewControlServerSideSortingWithSortKeys([]*ldap.SortKey{session.sortKey}))
+	}
+	request := ldap.NewSearchRequest(session.baseDN, session.scope, session.derefAliases, 0, 0, session.typesOnly, session.filter, session.attributes, controls)
 	ldapResult, err := session.conn.Search(request)
 	if err != nil {
 		return LDAPSearchSessionResult{}, err
+	}
+	for _, uri := range ldapResult.Referrals {
+		if len(session.referrals) >= maxReportedReferrals {
+			break
+		}
+		session.referrals = append(session.referrals, uri)
 	}
 
 	entries := ldapEntriesToTypes(ldapResult.Entries, s.ldapBinaryValuePredicate(session.connectionID))
@@ -267,13 +290,16 @@ func (s *Service) nextSearchSession(ctx context.Context, session *ldapSearchSess
 	hasMore := len(nextCookie) > 0 && !truncated
 	session.expiresAt = time.Now().Add(searchSessionTTL)
 	response := LDAPSearchSessionResult{
-		SearchID:  session.id,
-		Entries:   entries,
-		Count:     len(entries),
-		HasMore:   hasMore,
-		Truncated: truncated,
-		BaseDN:    session.baseDN,
-		Filter:    session.filter,
+		SearchID:   session.id,
+		Entries:    entries,
+		Count:      len(entries),
+		HasMore:    hasMore,
+		Truncated:  truncated,
+		BaseDN:     session.baseDN,
+		Filter:     session.filter,
+		SortResult: sortResultFromControls(ldapResult.Controls),
+		// 累计快照：调用方无需跨页合并，以最新响应为准。
+		Referrals: append([]string(nil), session.referrals...),
 	}
 	return response, nil
 }

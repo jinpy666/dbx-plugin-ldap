@@ -45,7 +45,7 @@ func dialProfile(ctx context.Context, profile Profile, target connTarget, secret
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	conn, err := dialTransport(profile, target, timeout)
+	conn, err := dialTransport(profile, target, ldapDialTimeout(profile, timeout))
 	if err != nil {
 		return nil, err
 	}
@@ -62,10 +62,11 @@ func dialProfile(ctx context.Context, profile Profile, target connTarget, secret
 // dialTransport 建立 LDAP 传输：dial → (StartTLS)，不含 bind。从 dialProfile
 // 抽出，供 ldap/check network 段复用——检查与真实建连必须同一套
 // host/port/TLS 语义（方案 D5 端点解析、ldaps TLS、StartTLS 升级都在此），
-// 否则会出现"检查通过但连不上"或反之的语义漂移。timeout 同时约束 TCP 拨号
-// 与 StartTLS 升级；ldap.DialURL 不感知 ctx，调用方经 net.Dialer 期限生效。
-// 返回的 conn 未 bind；调用方负责 Close。
-func dialTransport(profile Profile, target connTarget, timeout time.Duration) (*ldap.Conn, error) {
+// 否则会出现"检查通过但连不上"或反之的语义漂移。dialTimeout 只约束拨号窗口
+// （TCP 建立 + StartTLS 升级；ldaps 握手属拨号阶段），LDAP 消息读超时由
+// 调用方经 conn.SetTimeout 单独约束（dial/read 两档）；ldap.DialURL 不感知
+// ctx，调用方经 net.Dialer 期限生效。返回的 conn 未 bind；调用方负责 Close。
+func dialTransport(profile Profile, target connTarget, dialTimeout time.Duration) (*ldap.Conn, error) {
 	parsed, err := url.Parse(profile.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse ldap url: %w", err)
@@ -97,7 +98,7 @@ func dialTransport(profile Profile, target connTarget, timeout time.Duration) (*
 		return nil, err
 	}
 
-	opts := []ldap.DialOpt{ldap.DialWithDialer(&net.Dialer{Timeout: timeout})}
+	opts := []ldap.DialOpt{ldap.DialWithDialer(&net.Dialer{Timeout: dialTimeout})}
 	if scheme == "ldaps" {
 		opts = append(opts, ldap.DialWithTLSConfig(tlsConfig))
 	}
@@ -117,6 +118,17 @@ func dialTransport(profile Profile, target connTarget, timeout time.Duration) (*
 		}
 	}
 	return conn, nil
+}
+
+// ldapDialTimeout 解析拨号窗口（dial/read 两档中的 dial 档）：
+// dial_timeout_secs（DialTimeoutSeconds）> 0 时优先；未设置（0/负）回落到
+// fallback（操作超时 timeout_secs 的有效值），完全保持旧行为。检查段（check）
+// 显式传入自己的收紧窗口，不经此 helper，保持「检查要快」的既有契约。
+func ldapDialTimeout(profile Profile, fallback time.Duration) time.Duration {
+	if profile.DialTimeoutSeconds > 0 {
+		return time.Duration(profile.DialTimeoutSeconds) * time.Second
+	}
+	return fallback
 }
 
 // bindLDAPConnection 按 authType 分发 bind（M1：simple/anonymous/unauthenticated；
@@ -218,7 +230,36 @@ func ldapTLSConfig(profile Profile, required bool, logicalHost string) (*tls.Con
 		}
 		cfg.RootCAs = pool
 	}
+	if err := ldapAppendClientCert(cfg, profile); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+// ldapAppendClientCert 加载 mTLS 客户端证书（tls_client_cert_path +
+// tls_client_key_path，PEM 文件路径由用户本机提供，插件侧只读）。两者都空 =
+// 不使用客户端证书（现行为不变）；只填其一时报清晰错误——错误只含字段名与
+// 路径，不含文件内容（私钥红线：密钥内容禁止进错误消息/日志）。证书原地
+// append 进 cfg.Certificates。
+func ldapAppendClientCert(cfg *tls.Config, profile Profile) error {
+	certPath := strings.TrimSpace(profile.TLSClientCertPath)
+	keyPath := strings.TrimSpace(profile.TLSClientKeyPath)
+	if certPath == "" && keyPath == "" {
+		return nil
+	}
+	if certPath == "" {
+		return fmt.Errorf("tls_client_key_path is set but tls_client_cert_path is empty; both paths are required for client certificates")
+	}
+	if keyPath == "" {
+		return fmt.Errorf("tls_client_cert_path is set but tls_client_key_path is empty; both paths are required for client certificates")
+	}
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		// tls.LoadX509KeyPair 的错误只含路径/PEM 解析结论，不含文件内容。
+		return fmt.Errorf("load tls client certificate: %w", err)
+	}
+	cfg.Certificates = append(cfg.Certificates, cert)
+	return nil
 }
 
 // ldapURLLogicalHost 取 URL 逻辑主机（TLS SNI / SASL host 的兜底来源，

@@ -317,8 +317,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .qb-add { display: inline-flex; align-items: center; gap: 3px; min-height: 20px; border: 1px dashed var(--border); border-radius: 4px; padding: 1px 7px; background: transparent; color: var(--muted-foreground); font-size: 10px; cursor: pointer; }
 .qb-add:hover:not(:disabled) { color: var(--foreground); border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); }
 .qb-add svg { width: 11px; height: 11px; }
-.qb-node { display: grid; grid-template-columns: minmax(110px, 200px) minmax(96px, 130px) minmax(80px, 1fr) auto; gap: 4px; align-items: center; }
+.qb-node { display: grid; grid-template-columns: auto minmax(110px, 200px) minmax(96px, 130px) minmax(80px, 1fr) auto; gap: 4px; align-items: center; }
 .qb-node:has(.qb-group) { grid-template-columns: minmax(0, 1fr) auto; }
+.qb-not { min-height: 20px; border: 1px solid var(--border); border-radius: 4px; padding: 1px 7px; background: transparent; color: var(--muted-foreground); font-size: 10px; font-weight: 600; cursor: pointer; }
+.qb-not:hover:not(:disabled) { color: var(--foreground); border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); }
+.qb-not.is-active { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
+.qb-not:disabled { cursor: not-allowed; opacity: 0.55; }
 .qb-attr-picker { position: relative; min-width: 0; }
 .qb-attr, .qb-value, .qb-node select {
   min-width: 0; height: 24px;
@@ -374,6 +378,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .empty { display: flex; min-height: 120px; align-items: center; justify-content: center; gap: 8px; padding: 16px; color: var(--muted-foreground); font-size: 12px; text-align: center; }
 .empty.compact { min-height: 42px; padding: 8px; }
 .truncated-badge { border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border)); border-radius: 999px; padding: 1px 8px; color: var(--primary); font-size: 10px; }
+.referral-hint { margin: 0 0 4px; padding: 3px 8px; border: 1px dashed color-mix(in srgb, var(--primary) 45%, var(--border)); border-radius: 4px; color: var(--muted-foreground); font-size: 11px; overflow-wrap: anywhere; }
 
 /* AG Grid 结果表（DbxAgGrid）：容器吃满结果区剩余高度，单元格工具类 */
 .result-grid { flex: 1 1 0; min-height: 0; }
@@ -642,7 +647,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .schema-col li:hover { background: color-mix(in srgb, var(--accent) 65%, transparent); }
 /* 阶段2：属性定义可点击展开语法详情 */
 .schema-attribute-row.is-selected { background: var(--accent); }
-.schema-attribute-button { border: 0; background: none; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+/* 整行可点：行点击挂在 li 上，按钮铺满行内容区（此前 padding:0 的行内
+   按钮让点击热区只有文字本身——2026-09-21 UI 走查修复）。 */
+.schema-attribute-row { cursor: pointer; }
+.schema-attribute-button { display: block; width: 100%; border: 0; background: none; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
 /* 首列不能钉死 110px：RootDSE/Schema 明细的 dt 是不可断行的长属性名
    （supportedSASLMechanisms 在 11px mono 下 152px），溢出轨道会直接压到
    值列上。max-content 上限=按内容精确撑开、不贪婪吞空闲空间（minmax 配

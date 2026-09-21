@@ -674,9 +674,14 @@ func invalidParams(err error) *dbxpluginsdk.PluginError {
 	return dbxpluginsdk.NewError(-32602, err.Error())
 }
 
+// bizErrorLdapReferralURIsLimit 错误前缀里最多携带的引用 URI 数（完整列表
+// 在搜索响应 referrals 字段里，前缀只保证错误可见即可分辨）。
+const bizErrorLdapReferralURIsLimit = 5
+
 // bizError 业务错误统一 -32000（对齐 ssh-sftp to_plugin_error）。
 // 错误携带 go-ldap 结果码时，message 前缀 "[ldap-code=<十进制>]"
-// （matchedDN 非空再追加 " [ldap-matched=<DN>]"），与前端
+// （matchedDN 非空再追加 " [ldap-matched=<DN>]"；结果码 10（Referral）再
+// 追加 " [ldap-referral=<URI|URI|…>]"，最多 5 条），与前端
 // frontend/src/lib/ldapErrors.ts 的 parseLdapErrorMeta 构成契约；
 // 原始错误串完整保留，既有文本正则仍可命中。无元数据时行为不变。
 func bizError(err error) *dbxpluginsdk.PluginError {
@@ -689,6 +694,14 @@ func bizError(err error) *dbxpluginsdk.PluginError {
 		if matchedDN != "" {
 			prefix.WriteString(" [ldap-matched=")
 			prefix.WriteString(matchedDN)
+			prefix.WriteString("]")
+		}
+		if uris := ldapconn.LdapReferralURIs(err); len(uris) > 0 {
+			if len(uris) > bizErrorLdapReferralURIsLimit {
+				uris = uris[:bizErrorLdapReferralURIsLimit]
+			}
+			prefix.WriteString(" [ldap-referral=")
+			prefix.WriteString(strings.Join(uris, "|"))
 			prefix.WriteString("]")
 		}
 		msg = prefix.String() + msg

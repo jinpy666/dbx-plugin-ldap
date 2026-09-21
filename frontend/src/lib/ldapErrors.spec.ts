@@ -94,3 +94,58 @@ describe("friendlyLdapError 对结果码 68 / 带前缀消息的行为", () => {
         expect(friendlyLdapError(raw)).toBe(raw);
     });
 });
+
+describe("referral (code 10) contract", () => {
+    it("parses the [ldap-referral=..] prefix into a URI list (bizError contract)", () => {
+        const meta = parseLdapErrorMeta(
+            '[ldap-code=10] [ldap-referral=ldap://a.example/dc=x|ldaps://b.example/dc=x] LDAP Result Code 10 "Referral": ...',
+        );
+        expect(meta.resultCode).toBe(10);
+        expect(meta.referrals).toEqual(["ldap://a.example/dc=x", "ldaps://b.example/dc=x"]);
+    });
+
+    it("omits referrals when the prefix is absent or empty", () => {
+        expect(parseLdapErrorMeta("[ldap-code=10] plain referral failure").referrals).toBeUndefined();
+        expect(parseLdapErrorMeta("[ldap-code=10] [ldap-referral=| | ] x").referrals).toBeUndefined();
+        expect(parseLdapErrorMeta("[ldap-code=68] unrelated").referrals).toBeUndefined();
+    });
+
+    it("maps code-10 messages to the friendly referral text", () => {
+        const mapped = friendlyLdapError('[ldap-code=10] [ldap-referral=ldap://a.example/dc=x] LDAP Result Code 10 "Referral": ...');
+        expect(mapped).not.toBe("");
+        expect(mapped).not.toContain("Result Code");
+    });
+
+    it("keeps the referral rule ahead of the generic network/timeout rules", () => {
+        const message = "ldap search: referral chase deadline exceeded";
+        expect(friendlyLdapError(message)).toBe(friendlyLdapError('[ldap-code=10] referral'));
+    });
+});
+
+describe("numeric code prefix collisions (LDAP-DEV mislocalization fix)", () => {
+    it("maps code 206 (empty password bind) to its own message, not attributeExists", () => {
+        const mapped = friendlyLdapError(
+            "[ldap-code=206]bind ldap: LDAP Result Code 206 \"Empty password not allowed by the client\": ldap: empty password not allowed by the client",
+        );
+        expect(mapped).toBe(friendlyLdapError("[ldap-code=206] x"));
+        expect(mapped).not.toBe(friendlyLdapError("[ldap-code=20] attribute or value exists"));
+    });
+
+    it("keeps exact code 20 on attributeExists while 200/206 diverge", () => {
+        const attr = friendlyLdapError("[ldap-code=20] LDAP Result Code 20 \"Attribute Or Value Exists\": x");
+        const net = friendlyLdapError('[ldap-code=200] dial ldap: LDAP Result Code 200 "Network Error": connection refused');
+        const empty = friendlyLdapError("[ldap-code=206] empty password");
+        expect(new Set([attr, net, empty]).size).toBe(3);
+    });
+
+    it("still routes prefixed TLS errors to the certificate message ahead of code mapping", () => {
+        const mapped = friendlyLdapError('[ldap-code=200] dial ldap: LDAP Result Code 200 "Network Error": tls: failed to verify certificate: x509: unknown authority');
+        expect(mapped).toBe(friendlyLdapError("tls: failed to verify certificate"));
+    });
+
+    it("anchors raw-text codes so 206 does not hit the 20 text rule", () => {
+        const raw = 'bind ldap: LDAP Result Code 206 "Empty password not allowed by the client"';
+        expect(friendlyLdapError(raw)).toBe(friendlyLdapError("[ldap-code=206] empty password"));
+        expect(friendlyLdapError(raw)).not.toBe(friendlyLdapError("[ldap-code=20] x"));
+    });
+});

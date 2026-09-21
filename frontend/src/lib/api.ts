@@ -9,6 +9,8 @@
 
 export type LdapScope = "base" | "one" | "sub";
 export type LdapDerefAliases = "never" | "searching" | "finding" | "always";
+/** RFC 2891 服务器端排序方向（sortOrder 仅在 sortBy 非空时随请求下发）。 */
+export type LdapSortOrder = "asc" | "desc";
 
 export interface LdapEntry {
   dn: string;
@@ -29,12 +31,21 @@ export interface LdapSearchRequest {
   pageSize?: number;
   typesOnly?: boolean;
   derefAliases?: LdapDerefAliases;
+  /** RFC 2891 服务器端排序属性（空缺省 = 不请求排序）。 */
+  sortBy?: string;
+  /** 排序方向，缺省 asc；仅 sortBy 非空时生效。 */
+  sortOrder?: LdapSortOrder;
 }
 
 export interface LdapSearchResult {
   entries: LdapEntry[];
   count: number;
   truncated: boolean;
+  /** 延续引用 URI（referral report 语义：只透出不追随）。 */
+  referrals?: string[];
+  /** RFC 2891 SortResult 控件状态码：0/缺省 = 排序成功；非 0 = 服务器未按
+   * 请求排序（优雅降级——条目照常返回，旧 sidecar 缺省该字段）。 */
+  sortResult?: number;
 }
 
 /**
@@ -45,6 +56,10 @@ export interface LdapSearchResult {
 export interface LdapSearchPage {
   entries: LdapEntry[];
   hasMore: boolean;
+  /** 会话级累计的延续引用 URI；每个响应都带全量累计，以最新响应为准。 */
+  referrals?: string[];
+  /** RFC 2891 SortResult 降级状态码（语义同 LdapSearchResult.sortResult）。 */
+  sortResult?: number;
 }
 
 export interface LdapSearchSessionResult extends LdapSearchPage {
