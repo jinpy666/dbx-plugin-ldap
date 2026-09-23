@@ -1,19 +1,19 @@
 // @vitest-environment happy-dom
 // 书签（F7）lib 层测试：增删查、大小写不敏感去重、每连接上限 20、连接隔离、
-// 无 localStorage 降级（内存 Map），以及 F8 revealDn 复用的 dnPathChain 纯函数。
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// 坏数据防御，以及 F8 revealDn 复用的 dnPathChain 纯函数。
+// 存储通道降级（宿主 host.storage → guarded localStorage → 内存）已收敛进
+// shared/frontend/pluginStorage.ts 适配器，由 pluginStorage.spec.ts 覆盖；
+// 持久化后端是 pluginStore 单例（模块导入时已水合进缓存），播种/清理须走
+// 同一实例，直接改 localStorage 读不到。
+import { beforeEach, describe, expect, it } from "vitest";
 import { addBookmark, dnPathChain, loadBookmarks, removeBookmark } from "./bookmarks";
+import { BOOKMARKS_KEY, pluginStore } from "./pluginStore";
 
-const KEY = "dbx-ldap-bookmarks-v1";
 const CONN = "conn-a";
 const OTHER = "conn-b";
 
 beforeEach(() => {
-  localStorage.removeItem(KEY);
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
+  pluginStore.removeItem(BOOKMARKS_KEY);
 });
 
 describe("书签增删查", () => {
@@ -25,7 +25,7 @@ describe("书签增删查", () => {
     expect(addBookmark(CONN, "cn=alice,dc=demo")).toBe(true);
     expect(addBookmark(CONN, "ou=people,dc=demo")).toBe(true);
     expect(loadBookmarks(CONN)).toEqual(["ou=people,dc=demo", "cn=alice,dc=demo"]);
-    const stored = JSON.parse(localStorage.getItem(KEY) ?? "[]");
+    const stored = JSON.parse(pluginStore.getItem(BOOKMARKS_KEY) ?? "[]");
     expect(stored[0]).toEqual({ connectionId: CONN, dn: "ou=people,dc=demo" });
   });
 
@@ -37,7 +37,7 @@ describe("书签增删查", () => {
   });
 
   it("损坏的存储内容回落为空列表，add 照常可用", () => {
-    localStorage.setItem(KEY, "{not json");
+    pluginStore.setItem(BOOKMARKS_KEY, "{not json");
     expect(loadBookmarks(CONN)).toEqual([]);
     expect(addBookmark(CONN, "cn=alice,dc=demo")).toBe(true);
     expect(loadBookmarks(CONN)).toEqual(["cn=alice,dc=demo"]);
@@ -82,77 +82,11 @@ describe("连接隔离", () => {
   });
 });
 
-describe("无 localStorage 降级（内存 Map）", () => {
-  it("localStorage 不可用时增删查可用且互不落盘", async () => {
-    vi.stubGlobal("localStorage", undefined);
-    vi.resetModules();
-    const degraded = await import("./bookmarks");
-    expect(degraded.addBookmark(CONN, "cn=alice,dc=demo")).toBe(true);
-    expect(degraded.loadBookmarks(CONN)).toEqual(["cn=alice,dc=demo"]);
-    expect(degraded.addBookmark(CONN, "CN=ALICE,DC=DEMO")).toBe(false);
-    expect(degraded.removeBookmark(CONN, "cn=alice,dc=demo")).toBe(true);
-    expect(degraded.loadBookmarks(CONN)).toEqual([]);
-  });
-
-  it("降级内存存储与持久化存储互不相通", async () => {
-    addBookmark(CONN, "cn=normal,dc=demo");
-    // 同一模块实例的显式引用（resetModules 后静态导入仍指向旧实例）。
-    const persisted = await import("./bookmarks");
-    vi.stubGlobal("localStorage", undefined);
-    vi.resetModules();
-    const degraded = await import("./bookmarks");
-    expect(degraded.loadBookmarks(CONN)).toEqual([]);
-    // 还原存储后，持久化实例仍读得到原数据（降级实例的内存态不回流）。
-    vi.unstubAllGlobals();
-    expect(persisted.loadBookmarks(CONN)).toEqual(["cn=normal,dc=demo"]);
-  });
-});
-
-// DBX 宿主 webview（WebKit 存储被禁 / 非安全上下文）下，localStorage 绑定
-// 本身访问即抛 SecurityError("The operation is insecure.")——typeof 拦不住
-// 抛异常的 getter，必须整体降级为内存存储。这正是「打开工作台即报 insecure」
-// 启动崩溃（App initialize → reloadBookmarks）的根因。
-describe("localStorage 访问即抛（宿主禁存储 SecurityError）降级", () => {
-  const stubThrowingStorage = (): (() => void) => {
-    const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
-    Object.defineProperty(globalThis, "localStorage", {
-      configurable: true,
-      get() {
-        throw new DOMException("The operation is insecure.", "SecurityError");
-      },
-    });
-    return () => {
-      if (previous) Object.defineProperty(globalThis, "localStorage", previous);
-      else delete (globalThis as unknown as Record<string, unknown>).localStorage;
-    };
-  };
-
-  it("loadBookmarks 返回空列表而非抛 SecurityError", async () => {
-    const restore = stubThrowingStorage();
-    try {
-      vi.resetModules();
-      const degraded = await import("./bookmarks");
-      expect(() => degraded.loadBookmarks(CONN)).not.toThrow();
-      expect(degraded.loadBookmarks(CONN)).toEqual([]);
-    } finally {
-      restore();
-    }
-  });
-
-  it("add/remove 降级为内存存储且本会话内可读回", async () => {
-    const restore = stubThrowingStorage();
-    try {
-      vi.resetModules();
-      const degraded = await import("./bookmarks");
-      expect(degraded.addBookmark(CONN, "cn=alice,dc=demo")).toBe(true);
-      expect(degraded.loadBookmarks(CONN)).toEqual(["cn=alice,dc=demo"]);
-      expect(degraded.removeBookmark(CONN, "cn=alice,dc=demo")).toBe(true);
-      expect(degraded.loadBookmarks(CONN)).toEqual([]);
-    } finally {
-      restore();
-    }
-  });
-});
+// -- 存储通道降级用例（原「无 localStorage 降级（内存 Map）」「localStorage
+// 访问即抛（宿主禁存储 SecurityError）降级」两个 describe）已随实现上移：
+// bookmarks.ts 不再自带 typeof/try 降级，通道选择与内存兜底由
+// shared/frontend/pluginStorage.ts 适配器提供，覆盖见 pluginStorage.spec.ts
+// （node 环境下 pluginStore.channel === "memory"、宿主桥失败仅告警不抛）。
 
 describe("dnPathChain（F8 路径切分纯函数）", () => {
   const base = "dc=demo,dc=dbx";

@@ -661,6 +661,49 @@ window.dbxPlugin = {
       clipboardWrites.push(text);
     },
   },
+  // 宿主 host.storage mock（Host API 1.2，pluginHostBridge storage 命名空间同形）：
+  // 与真实 web 宿主同形由 localStorage 兜底（键名不变；字符串值原样、对象 JSON
+  // 编码），刷新/重开不丢——ui_test walkthrough 断言依赖该语义；opaque origin
+  // 等不可用场景退化为内存 Map。get 未命中返回 null，set(undefined) 归一化为 null。
+  capabilities: { storage: true },
+  storage: (() => {
+    let ls: Storage | null = null;
+    try {
+      window.localStorage.setItem("__dbx_mock_storage_probe__", "1");
+      window.localStorage.removeItem("__dbx_mock_storage_probe__");
+      ls = window.localStorage;
+    } catch {
+      ls = null;
+    }
+    const mem = new Map<string, string>();
+    const write = (key: string, value: unknown) => {
+      const raw = typeof value === "string" ? value : JSON.stringify(value);
+      if (ls) ls.setItem(key, raw);
+      else mem.set(key, raw);
+    };
+    const read = (key: string): unknown => {
+      const raw = ls ? ls.getItem(key) : (mem.get(key) ?? null);
+      if (raw === null) return null;
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed !== null && typeof parsed === "object" ? parsed : raw;
+      } catch {
+        return raw;
+      }
+    };
+    return {
+      get: async (key: string) => read(key),
+      set: async (key: string, value: unknown) => {
+        write(key, value === undefined ? null : value);
+        return null;
+      },
+      delete: async (key: string) => {
+        if (ls) ls.removeItem(key);
+        else mem.delete(key);
+        return null;
+      },
+    };
+  })(),
 };
 
 // 走查注入：ui_test 经 window.dbxPlugin.emitUiIntent 发 ldap/ui/intent

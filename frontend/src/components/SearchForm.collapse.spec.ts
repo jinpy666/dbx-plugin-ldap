@@ -1,13 +1,12 @@
 // @vitest-environment happy-dom
 // SearchForm 折叠快捷条（对标 Apache Directory Studio 快捷搜索形态）：
 // 默认单行快捷条 + 高级区 hidden 收起（DOM 保留，构建器/源码状态不丢），
-// localStorage 记忆折叠偏好，expandSearch() 供宿主（MCP focus intent）展开。
+// pluginStore 记忆折叠偏好，expandSearch() 供宿主（MCP focus intent）展开。
 // Network calls (presets/schema) reject harmlessly without a dbxPlugin host bridge.
 import { beforeEach, describe, expect, it } from "vitest";
 import { mount } from "@vue/test-utils";
 import SearchForm from "./SearchForm.vue";
-
-const COLLAPSED_KEY = "dbx.ldap.ui.searchCollapsed";
+import { SEARCH_COLLAPSED_KEY, pluginStore } from "../lib/pluginStore";
 
 type Exposed = {
   expandSearch: () => void;
@@ -24,14 +23,15 @@ const compactBar = (wrapper: Awaited<ReturnType<typeof mountForm>>) => wrapper.f
 const compactFilter = (wrapper: Awaited<ReturnType<typeof mountForm>>) => wrapper.find(".search-form-compact .compact-filter");
 
 beforeEach(() => {
-  // 各用例对折叠偏好的写入互不干扰；happy-dom 每文件独立环境，这里兜底清场。
-  window.localStorage.clear();
+  // 各用例对折叠偏好的写入互不干扰；持久化后端是 pluginStore（宿主 storage
+  // 适配，模块导入时已水合进缓存），播种/清理须走同一实例。
+  pluginStore.removeItem(SEARCH_COLLAPSED_KEY);
 });
 
 describe("SearchForm collapsed quick bar", () => {
   it("defaults to the compact bar with the advanced area hidden, not unmounted", async () => {
     const wrapper = await mountForm();
-    expect(window.localStorage.getItem(COLLAPSED_KEY)).toBeNull();
+    expect(pluginStore.getItem(SEARCH_COLLAPSED_KEY)).toBeNull();
     expect(compactBar(wrapper).exists()).toBe(true);
     expect(compactBar(wrapper).isVisible()).toBe(true);
     // 默认值即快捷条形态：Base DN / scope / 过滤器框 / Run / 展开按钮同处一行。
@@ -99,14 +99,14 @@ describe("SearchForm collapsed quick bar", () => {
   });
 
   it("restores the persisted collapsed preference across remounts", async () => {
-    window.localStorage.setItem(COLLAPSED_KEY, "0");
+    pluginStore.setItem(SEARCH_COLLAPSED_KEY, "0");
     const expanded = await mountForm();
     expect(expanded.find(".search-form-compact").exists()).toBe(true);
     expect(expanded.find(".search-advanced").classes()).not.toContain("is-collapsed");
     expect(expanded.find(".search-advanced").classes()).not.toContain("is-collapsed");
     expect(expanded.find(".filter-block").exists()).toBe(true);
     expanded.unmount();
-    window.localStorage.setItem(COLLAPSED_KEY, "1");
+    pluginStore.setItem(SEARCH_COLLAPSED_KEY, "1");
     const collapsed = await mountForm();
     expect(collapsed.find(".search-form-compact").exists()).toBe(true);
     expect(collapsed.find(".search-advanced").classes()).toContain("is-collapsed");

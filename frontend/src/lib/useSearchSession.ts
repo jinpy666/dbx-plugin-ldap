@@ -200,7 +200,7 @@ export function useSearchSession(options: UseSearchSessionOptions) {
       if (sortResult !== 0) onNotice?.(t("result.sortDegraded", { code: sortResult }));
       activeSearchSession = !resultsComplete.value && result.searchId ? { id: result.searchId, connectionId: requestedConnectionId } : undefined;
       // 搜索成功才入历史（失败/竞态不记）：recordSearch 是 SearchForm 暴露的
-      // 本地历史入队（去重 + localStorage），与 presets 的 sidecar 持久化互补。
+      // 本地历史入队（去重 + pluginStore 持久化），与 presets 的 sidecar 持久化互补。
       onHistory(model);
       const anchorDn = results.value[0]?.dn;
       onSnapshot({

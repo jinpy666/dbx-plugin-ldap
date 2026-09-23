@@ -2,7 +2,7 @@
 // ag-grid-community 封装（对标 dbx-plugin-kafka 同名组件）：vanilla `createGrid`
 // + 定向 API 更新，避免再引 ag-grid-vue3 依赖。DBX 视觉经 style.css 的
 // `.dbx-grid` 用 --ag-* CSS 变量对齐主题令牌（light/dark 随宿主 data-theme 切换）。
-// 内建：排序/列内文本筛选/分页 + 页大小 localStorage 持久化（ldapGrid 存取）、
+// 内建：排序/列内文本筛选/分页 + 页大小持久化（pluginStore，ldapGrid 存取）、
 // 多行复选框选择（表头全选，批量操作用）、行双击 / 单元格 Enter 激活、
 // 列宽列序持久化（columnStateKey）。
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -61,7 +61,7 @@ const props = withDefaults(
   defineProps<{
     rowData: unknown[];
     columnDefs: ColDef[];
-    /** localStorage 持久化键（每表唯一）。 */
+    /** 持久化键（每表唯一；pluginStore 固定键下的 map 段名）。 */
     tableKey: string;
     /** 多行复选框选择（含表头全选）；false 关闭选择。 */
     rowSelection?: "multi" | false;

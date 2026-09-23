@@ -2,7 +2,7 @@
 // DbxAgGrid 组件测试（连线行为锁定）：真实 ag-grid 在 happy-dom 下无法可靠
 // 布局，故 mock ag-grid-community 的 createGrid 捕获 GridOptions + 假 GridApi：
 // - 初始 options：分页开启、默认页大小 50、多行复选框选择（enableClickSelection off）
-// - 分页页大小变更按 tableKey 持久化 localStorage + emit pageSizeChanged；
+// - 分页页大小变更按 tableKey 持久化（pluginStore 固定键 map）+ emit pageSizeChanged；
 //   未变化/非法值不写；tableKey 切换重载持久化页大小
 // - 行激活：双击 / 单元格 Enter（preventDefault）→ rowActivate，其他按键不触发
 // - selectionChanged 转发 api.getSelectedRows；deselectAll 透传
@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, type VueWrapper } from "@vue/test-utils";
 import DbxAgGrid from "./DbxAgGrid.vue";
 import type { ColDef, GridOptions, RowSelectionOptions } from "ag-grid-community";
+import { GRID_COLUMN_STATE_KEY, GRID_PAGE_SIZE_KEY, pluginStore } from "../lib/pluginStore";
 
 // -- ag-grid-community mock（捕获 options 与假 GridApi） ------------------------------
 const gridMock = vi.hoisted(() => ({
@@ -65,6 +66,10 @@ function mountGrid(props: Record<string, unknown> = {}) {
   });
 }
 
+// 固定键下的 map 形状读取助手（tableKey → 值）。
+const readSizeMap = () => JSON.parse(pluginStore.getItem(GRID_PAGE_SIZE_KEY) ?? "{}") as Record<string, unknown>;
+const readColumnStateMap = () => JSON.parse(pluginStore.getItem(GRID_COLUMN_STATE_KEY) ?? "{}") as Record<string, unknown>;
+
 function lastApi(wrapper: VueWrapper<InstanceType<typeof DbxAgGrid>>) {
   void wrapper;
   return gridMock.apis[gridMock.apis.length - 1] as unknown as {
@@ -75,7 +80,10 @@ function lastApi(wrapper: VueWrapper<InstanceType<typeof DbxAgGrid>>) {
 }
 
 beforeEach(() => {
-  localStorage.clear();
+  // 持久化后端是 pluginStore（宿主 storage 适配，模块导入时已水合进缓存），
+  // 播种/清理须走同一实例，直接改 localStorage 读不到。
+  pluginStore.removeItem(GRID_PAGE_SIZE_KEY);
+  pluginStore.removeItem(GRID_COLUMN_STATE_KEY);
   gridMock.created.length = 0;
   gridMock.apis.length = 0;
   gridMock.pendingSize = 50;
@@ -124,7 +132,7 @@ describe("DbxAgGrid", () => {
     expect(gridMock.created[0].options.paginationPageSize).toBe(50);
     gridMock.pendingSize = 123;
     gridMock.created[0].options.onPaginationChanged?.({ api: lastApi(wrapper) } as never);
-    expect(localStorage.getItem("dbx-ldap-grid-pagesize-spec-table")).toBe("123");
+    expect(readSizeMap()["spec-table"]).toBe(123);
     expect(wrapper.emitted("pageSizeChanged")).toEqual([[123]]);
   });
 
@@ -146,12 +154,12 @@ describe("DbxAgGrid", () => {
     gridMock.created[0].options.onPaginationChanged?.({ api: lastApi(wrapper) } as never);
     gridMock.pendingSize = 0;
     gridMock.created[0].options.onPaginationChanged?.({ api: lastApi(wrapper) } as never);
-    expect(localStorage.getItem("dbx-ldap-grid-pagesize-spec-table")).toBeNull();
+    expect(pluginStore.getItem(GRID_PAGE_SIZE_KEY)).toBeNull();
     expect(wrapper.emitted("pageSizeChanged")).toBeUndefined();
   });
 
   it("reloads the persisted page size when the table key changes", async () => {
-    localStorage.setItem("dbx-ldap-grid-pagesize-other-table", "25");
+    pluginStore.setItem(GRID_PAGE_SIZE_KEY, JSON.stringify({ "other-table": 25 }));
     const wrapper = mountGrid();
     lastApi(wrapper).setGridOption.mockClear();
     await wrapper.setProps({ tableKey: "other-table" });
@@ -204,15 +212,15 @@ describe("DbxAgGrid", () => {
   });
 
   it("replays a persisted column layout on mount and saves it when a resize finishes", () => {
-    localStorage.setItem("dbx-ldap-grid-colstate-result", JSON.stringify(gridMock.storedColumnState));
+    pluginStore.setItem(GRID_COLUMN_STATE_KEY, JSON.stringify({ result: gridMock.storedColumnState }));
     const wrapper = mountGrid({ columnStateKey: "result" });
     expect(lastApi(wrapper).applyColumnState).toHaveBeenCalledWith({ state: gridMock.storedColumnState, applyOrder: true });
     // resize 完成 → columnState 落盘；未完成（拖拽进行中）不写
     gridMock.created[0].options.onColumnResized?.({ finished: true } as never);
-    expect(JSON.parse(localStorage.getItem("dbx-ldap-grid-colstate-result") ?? "null")).toEqual(gridMock.storedColumnState);
+    expect(readColumnStateMap().result).toEqual(gridMock.storedColumnState);
     gridMock.storedColumnState = [{ colId: "cn", width: 90, hide: false }];
     gridMock.created[0].options.onColumnResized?.({ finished: false } as never);
-    expect(JSON.parse(localStorage.getItem("dbx-ldap-grid-colstate-result") ?? "null")).toEqual([{ colId: "dn", width: 220, hide: false }]);
+    expect(readColumnStateMap().result).toEqual([{ colId: "dn", width: 220, hide: false }]);
     wrapper.unmount();
   });
 
@@ -220,7 +228,7 @@ describe("DbxAgGrid", () => {
     const wrapper = mountGrid();
     expect(lastApi(wrapper).applyColumnState).not.toHaveBeenCalled();
     gridMock.created[0].options.onColumnResized?.({ finished: true } as never);
-    expect(localStorage.getItem("dbx-ldap-grid-colstate-result")).toBeNull();
+    expect(pluginStore.getItem(GRID_COLUMN_STATE_KEY)).toBeNull();
     wrapper.unmount();
   });
 });

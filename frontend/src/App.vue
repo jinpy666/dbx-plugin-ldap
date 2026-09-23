@@ -365,7 +365,7 @@ const batchMoveSubmitting = ref(false);
 const batchModifyOpen = ref(false);
 const batchModifyDns = ref<string[]>([]);
 const batchModifySubmitting = ref(false);
-// 书签（F7，localStorage 按连接隔离）与比较弹窗（F3）。
+// 书签（F7，pluginStore 持久化、按连接隔离）与比较弹窗（F3）。
 const bookmarks = ref<string[]>([]);
 function reloadBookmarks() {
   bookmarks.value = loadBookmarks(connectionId.value);
@@ -581,7 +581,8 @@ async function onGotoDn(dn: string) {
   if (!revealed) showNotice(t("goto.notFound"));
 }
 
-// 比较（F3）：树右键 → 打开 CompareDialog（弹窗内自执行 entryCompare）。
+// 比较（条目对比）：树右键 → 打开 CompareDialog（弹窗内两次 entryGet 拉取
+// 当前/目标条目，做整 DN 属性对比）。
 function onCompare(dn: string) {
   compareDn.value = dn;
   compareOpen.value = true;

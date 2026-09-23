@@ -9,6 +9,7 @@ import { buildTreeKeywordFilter } from "../lib/ldapFilter";
 import { friendlyLdapError } from "../lib/ldapErrors";
 import { splitFirstDnRdn } from "../lib/dn";
 import { dnPathChain } from "../lib/bookmarks";
+import { TREE_WIDTH_KEY, pluginStore } from "../lib/pluginStore";
 import { nextFocusIndex } from "../lib/modal";
 import { t } from "../lib/i18n";
 import { canExpandDnTreeNode, compareDnByLabel, compareDnForTree, flattenDnTree, nextTreeFocusIndex, objectClassValues, TREE_FETCH_PAGE, type DnTreeNode } from "../lib/dnTree";
@@ -76,17 +77,17 @@ const sortedFilterResults = computed(() => [...filterResults.value].sort((left, 
 // 虚拟滚动固定行高（与 .tree-vlist CSS 保持一致）；零依赖实现见 VirtualList.vue。
 const TREE_ROW_HEIGHT = 28;
 
-// -- 侧栏宽度（右缘 resizer 拖拽，localStorage 记忆，双击重置默认宽）----------
-// 宿主 webview 禁存储时静默降级为仅内存态。数值口径与 kafka TopicTree 同族。
+// -- 侧栏宽度（右缘 resizer 拖拽，pluginStore 记忆，双击重置默认宽）----------
+// 通道降级见 shared/frontend/pluginStorage.ts（宿主 host.storage → guarded
+// localStorage → 内存）；无存储通道时仅内存态。数值口径与 kafka TopicTree 同族。
 
-const TREE_WIDTH_KEY = "dbx.ldap.ui.treeWidth";
 const TREE_WIDTH_DEFAULT = 280;
 const TREE_WIDTH_MIN = 200;
 const TREE_WIDTH_MAX = 480;
 
 function readStoredWidth(): number {
   try {
-    const parsed = Number.parseInt(localStorage.getItem(TREE_WIDTH_KEY) ?? "", 10);
+    const parsed = Number.parseInt(pluginStore.getItem(TREE_WIDTH_KEY) ?? "", 10);
     return Number.isFinite(parsed) ? Math.min(TREE_WIDTH_MAX, Math.max(TREE_WIDTH_MIN, parsed)) : TREE_WIDTH_DEFAULT;
   } catch {
     return TREE_WIDTH_DEFAULT;
@@ -95,7 +96,7 @@ function readStoredWidth(): number {
 
 function persistWidth(value: number) {
   try {
-    localStorage.setItem(TREE_WIDTH_KEY, String(value));
+    pluginStore.setItem(TREE_WIDTH_KEY, String(value));
   } catch {
     /* 存储不可用（隐私模式等）：仅内存态 */
   }

@@ -10,6 +10,7 @@ import { validateLDAPFilter, buildNodeFilter, collectBuilderErrors, parseFilterS
 import { parseLdapSearchCommand, type LdapSearchCommandFailure } from "../lib/ldapSearchCommand";
 import { parsePsAdCommand } from "../lib/psCommandImport";
 import { useLdapSchemaCache } from "../lib/schemaCache";
+import { SEARCH_COLLAPSED_KEY, SEARCH_HISTORY_KEY, pluginStore } from "../lib/pluginStore";
 import { t, workbenchLocale } from "../lib/i18n";
 import FilterGroup from "./FilterGroup.vue";
 
@@ -154,13 +155,12 @@ function resetSearch() {
 // -- 折叠快捷条（对标 Apache Directory Studio 的快捷搜索形态）------------------
 // 默认折叠：完整面板常驻太占空间。高级区用 hidden 属性收起而非卸载，
 // 构建器/源码输入态与焦点都保留，展开即时还原，切换不改任何表单值。
-// 偏好记忆 localStorage；宿主 webview 禁存储时静默降级为仅内存态（同 DnTree 侧栏宽）。
-
-const SEARCH_COLLAPSED_KEY = "dbx.ldap.ui.searchCollapsed";
+// 偏好记忆 pluginStore（宿主 host.storage；降级链与 localStorage 惰性搬家
+// 见 shared/frontend/pluginStorage.ts），无存储通道时仅内存态（同 DnTree 侧栏宽）。
 
 function readStoredCollapsed(): boolean {
   try {
-    const stored = localStorage.getItem(SEARCH_COLLAPSED_KEY);
+    const stored = pluginStore.getItem(SEARCH_COLLAPSED_KEY);
     // 无记录视为折叠（新用户默认紧凑形态）；只有显式 "0" 才记忆为展开。
     return stored === null ? true : stored === "1";
   } catch {
@@ -170,7 +170,7 @@ function readStoredCollapsed(): boolean {
 
 function persistCollapsed(value: boolean) {
   try {
-    localStorage.setItem(SEARCH_COLLAPSED_KEY, value ? "1" : "0");
+    pluginStore.setItem(SEARCH_COLLAPSED_KEY, value ? "1" : "0");
   } catch {
     /* 存储不可用（隐私模式等）：仅内存态 */
   }
@@ -193,8 +193,8 @@ function expandSearch() {
 }
 
 // -- 历史过滤器（对账表 P1，对标 ADS 搜索历史）---------------------------------
-// 本地留存最近 N 条搜索过滤器（localStorage，宿主 webview 禁存储时静默降级，
-// 同 DnTree 侧栏宽）。应用只回填表单不自动运行，保持"先确认后运行"的节奏。
+// 本地留存最近 N 条搜索过滤器（pluginStore，通道降级同折叠偏好）。
+// 应用只回填表单不自动运行，保持"先确认后运行"的节奏。
 
 interface SearchHistoryEntry {
   filter: string;
@@ -204,17 +204,30 @@ interface SearchHistoryEntry {
   timestamp: number;
 }
 
-// 历史键按连接派生（审计 J-3）：全局键会让切换连接后应用历史时把上一台
-// 目录的 baseDn/条件灌进当前表单。getLdapConnectionId 是非响应式模块 getter，
-// 键必须在保存/读取时刻现取（不可固化为顶层常量）；连接未知（宿主上下文
-// 未就绪）时统一落 "default" 段。旧全局键一次性忽略：不读取也不迁移，
-// 其内容随各连接新键的写入自然淘汰。
-const SEARCH_HISTORY_KEY_PREFIX = "dbx.ldap.ui.searchHistory";
+// 历史按连接隔离（审计 J-3）：全局键会让切换连接后应用历史时把上一台
+// 目录的 baseDn/条件灌进当前表单。宿主 host.storage 没有列键/前缀枚举能力，
+// 原按连接派生的动态键（dbx.ldap.ui.searchHistory.<conn>）收敛为单一固定键
+// 下的 connectionId → 条目数组 map，写回走读-改-写合并（不覆盖其他连接段）；
+// 连接未知（宿主上下文未就绪）时统一落 "default" 段。旧全局数组键与本固定
+// 键同名但形状不同（数组 vs map）：读取时非 map 形状一律按空表忽略，不迁移
+// 也不删除（工作台 iframe 下旧键从未写成功过，无可迁数据）。
 const SEARCH_HISTORY_MAX = 10;
 
-function searchHistoryKey(): string {
-  const connectionId = getLdapConnectionId().trim();
-  return `${SEARCH_HISTORY_KEY_PREFIX}.${connectionId || "default"}`;
+type SearchHistoryMap = Record<string, SearchHistoryEntry[]>;
+
+/** 当前连接对应的历史段名；连接未知落 "default"（与原动态键末段同语义）。 */
+function historySegment(): string {
+  return getLdapConnectionId().trim() || "default";
+}
+
+/** 读取固定键下的全量历史 map；顶层形状不符（含旧全局数组形状）按空表处理。 */
+function readHistoryMap(): SearchHistoryMap {
+  try {
+    const parsed: unknown = JSON.parse(pluginStore.getItem(SEARCH_HISTORY_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as SearchHistoryMap) : {};
+  } catch {
+    return {};
+  }
 }
 
 // 存储内容可能被旧版本或人为写坏：读取时只接受形状完整的条目。
@@ -232,10 +245,10 @@ function isHistoryEntry(value: unknown): value is SearchHistoryEntry {
 
 function readStoredHistory(): SearchHistoryEntry[] {
   try {
-    // 每次读取现取按连接派生的键：切连接后读到的就是新连接自己的历史。
-    const parsed: unknown = JSON.parse(localStorage.getItem(searchHistoryKey()) ?? "[]");
-    return Array.isArray(parsed)
-      ? parsed.filter(isHistoryEntry).map((entry) => ({ ...entry, timestamp: entry.timestamp ?? 0 })).slice(0, SEARCH_HISTORY_MAX)
+    // 每次读取现取当前连接段：切连接后读到的就是新连接自己的历史。
+    const segment = readHistoryMap()[historySegment()];
+    return Array.isArray(segment)
+      ? segment.filter(isHistoryEntry).map((entry) => ({ ...entry, timestamp: entry.timestamp ?? 0 })).slice(0, SEARCH_HISTORY_MAX)
       : [];
   } catch {
     return []; // 存储不可用/JSON 损坏：降级为空历史
@@ -244,7 +257,9 @@ function readStoredHistory(): SearchHistoryEntry[] {
 
 function persistHistory() {
   try {
-    localStorage.setItem(searchHistoryKey(), JSON.stringify(searchHistory.value));
+    // 读-改-写合并：基于存储内最新 map 只更新当前连接段，不覆盖其他连接的历史。
+    const next: SearchHistoryMap = { ...readHistoryMap(), [historySegment()]: searchHistory.value };
+    pluginStore.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next));
   } catch {
     /* 存储不可用（隐私模式等）：仅内存态 */
   }

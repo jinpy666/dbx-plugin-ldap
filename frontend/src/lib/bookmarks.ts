@@ -1,8 +1,9 @@
-// 书签（F7）：按连接隔离的收藏 DN 列表，localStorage 持久化（键
+// 书签（F7）：按连接隔离的收藏 DN 列表，pluginStore 持久化（键
 // "dbx-ldap-bookmarks-v1"），最新在前、大小写不敏感去重、每连接上限 20。
-// 宿主 webview 禁存储或 node 测试环境无 localStorage 时（typeof 检查），
-// 静默降级为进程内 Map（仅内存态，跨会话不保留）。工具栏下拉的定位/键盘
-// 交互在 WorkbenchToolbar.vue 内实现，这里只管数据。
+// 存储通道与降级（宿主 host.storage → guarded localStorage → 内存，node/
+// 无桥环境天然内存态）由 shared/frontend/pluginStorage.ts 提供，这里只管
+// 数据形状。工具栏下拉的定位/键盘交互在 WorkbenchToolbar.vue 内实现。
+import { BOOKMARKS_KEY, pluginStore } from "./pluginStore";
 import { dnWithinBase, splitFirstDnRdn } from "./dn";
 
 export interface BookmarkEntry {
@@ -10,35 +11,12 @@ export interface BookmarkEntry {
   dn: string;
 }
 
-const BOOKMARKS_KEY = "dbx-ldap-bookmarks-v1";
 const BOOKMARKS_MAX = 20;
-
-// localStorage 不可用时的降级存储：connectionId → 该连接的书签 DN（最新在前）。
-const memoryStore = new Map<string, string[]>();
-
-/** typeof 检查：裸访问不存在的 localStorage 会抛 ReferenceError，typeof 不会；
- * 但宿主 webview（WebKit 存储被禁 / 非安全上下文）下 localStorage 绑定本身
- * 访问即抛 SecurityError（"The operation is insecure."），typeof 同样拦不住，
- * 因此再套 try，命中时与无存储同等对待（降级为内存 Map）。 */
-function hasLocalStorage(): boolean {
-  try {
-    return typeof localStorage !== "undefined";
-  } catch {
-    return false;
-  }
-}
 
 /** 读取全量书签（跨连接）；坏数据（非 JSON/非数组/形状不符）一律回落为空。 */
 function readAll(): BookmarkEntry[] {
-  if (!hasLocalStorage()) {
-    const entries: BookmarkEntry[] = [];
-    for (const [connectionId, dns] of memoryStore) {
-      for (const dn of dns) entries.push({ connectionId, dn });
-    }
-    return entries;
-  }
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) ?? "[]");
+    const parsed: unknown = JSON.parse(pluginStore.getItem(BOOKMARKS_KEY) ?? "[]");
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
       (item): item is BookmarkEntry =>
@@ -53,17 +31,8 @@ function readAll(): BookmarkEntry[] {
 
 /** 写回全量书签；写入失败（配额/禁存储）静默保留内存语义，不向调用方抛错。 */
 function writeAll(entries: BookmarkEntry[]) {
-  if (!hasLocalStorage()) {
-    memoryStore.clear();
-    for (const entry of entries) {
-      const dns = memoryStore.get(entry.connectionId) ?? [];
-      dns.push(entry.dn);
-      memoryStore.set(entry.connectionId, dns);
-    }
-    return;
-  }
   try {
-    localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(entries));
+    pluginStore.setItem(BOOKMARKS_KEY, JSON.stringify(entries));
   } catch {
     /* 存储不可用（隐私模式等）：仅内存态 */
   }

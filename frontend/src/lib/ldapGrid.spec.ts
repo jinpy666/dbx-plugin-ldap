@@ -20,10 +20,14 @@ import {
   truncateCellText,
 } from "./ldapGrid";
 import { workbenchLocale } from "./i18n";
+import { GRID_COLUMN_STATE_KEY, GRID_PAGE_SIZE_KEY, pluginStore } from "./pluginStore";
 import type { LdapEntry } from "./api";
 
 beforeEach(() => {
-  localStorage.clear();
+  // 持久化后端是 pluginStore（宿主 storage 适配，模块导入时已水合进缓存），
+  // 播种/清理须走同一实例，直接改 localStorage 读不到。
+  pluginStore.removeItem(GRID_PAGE_SIZE_KEY);
+  pluginStore.removeItem(GRID_COLUMN_STATE_KEY);
   workbenchLocale.value = "zh-CN";
 });
 
@@ -109,10 +113,20 @@ describe("pagination page size persistence", () => {
     expect(loadPreferredPageSize("other")).toBe(DEFAULT_PAGE_SIZE);
   });
 
+  it("merges writes without clobbering other table keys", () => {
+    pluginStore.setItem(GRID_PAGE_SIZE_KEY, JSON.stringify({ other: 25 }));
+    savePreferredPageSize("result", 100);
+    expect(loadPreferredPageSize("other")).toBe(25);
+    expect(loadPreferredPageSize("result")).toBe(100);
+  });
+
   it("ignores invalid stored values", () => {
-    localStorage.setItem("dbx-ldap-grid-pagesize-result", "not-a-number");
+    pluginStore.setItem(GRID_PAGE_SIZE_KEY, JSON.stringify({ result: "not-a-number" }));
     expect(loadPreferredPageSize("result")).toBe(DEFAULT_PAGE_SIZE);
-    localStorage.setItem("dbx-ldap-grid-pagesize-result", "0");
+    pluginStore.setItem(GRID_PAGE_SIZE_KEY, JSON.stringify({ result: 0 }));
+    expect(loadPreferredPageSize("result")).toBe(DEFAULT_PAGE_SIZE);
+    // 顶层形状损坏（旧动态键遗留数组等）按空表处理。
+    pluginStore.setItem(GRID_PAGE_SIZE_KEY, "[]");
     expect(loadPreferredPageSize("result")).toBe(DEFAULT_PAGE_SIZE);
   });
 });
@@ -125,12 +139,15 @@ describe("column state persistence", () => {
   });
 
   it("treats malformed payloads as absent", () => {
-    localStorage.setItem("dbx-ldap-grid-colstate-result", "{oops");
+    pluginStore.setItem(GRID_COLUMN_STATE_KEY, JSON.stringify({ result: "{oops" }));
     expect(loadColumnState("result")).toBeNull();
-    localStorage.setItem("dbx-ldap-grid-colstate-result", JSON.stringify(["not-an-object"]));
+    pluginStore.setItem(GRID_COLUMN_STATE_KEY, JSON.stringify({ result: ["not-an-object"] }));
     expect(loadColumnState("result")).toBeNull();
-    localStorage.setItem("dbx-ldap-grid-colstate-result", JSON.stringify([{ width: 10 }]));
+    pluginStore.setItem(GRID_COLUMN_STATE_KEY, JSON.stringify({ result: [{ width: 10 }] }));
     expect(loadColumnState("result")).toBeNull(); // colId 缺失视为无效
+    // 顶层形状损坏按空表处理。
+    pluginStore.setItem(GRID_COLUMN_STATE_KEY, "{oops");
+    expect(loadColumnState("result")).toBeNull();
   });
 });
 

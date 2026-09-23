@@ -3,11 +3,12 @@
  * - 结果表列定义/行视图模型：列 = dn 首列 + 条目属性并集，全部可排序/列宽拖拽/
  *   表头文本筛选；单元格显示文本与 tooltip（完整值）在此一次性算好，组件只接线。
  * - ag-grid 内置 chrome 文案（七语，键集对齐 AG_GRID_LOCALE_KEYS 守卫）。
- * - 分页页大小 / 列宽列序（columnState）按 tableKey 持久化 localStorage。
+ * - 分页页大小 / 列宽列序（columnState）按 tableKey 持久化（pluginStore，host.storage）。
  */
 import type { ColDef, ColumnState, ValueFormatterParams } from "ag-grid-community";
 import type { LdapEntry } from "./api";
 import { workbenchLocale } from "./i18n";
+import { GRID_COLUMN_STATE_KEY, GRID_PAGE_SIZE_KEY, pluginStore } from "./pluginStore";
 
 // -- 结果表行视图模型 --------------------------------------------------------------
 // 字段名 = 属性名（值 = 多值 " | " 连接后的全文，供筛选/排序匹配），单元格
@@ -113,31 +114,33 @@ export function resultColumns(attributeNames: string[]): ColDef<ResultRow>[] {
   ];
 }
 
-// -- 分页页大小持久化（对标 kafkaColumns；键前缀区分插件） ------------------------------
+// -- 分页页大小持久化（对标 kafkaColumns） ---------------------------------------------
+// 宿主 host.storage 无列键/前缀枚举能力，原 dbx-ldap-grid-pagesize-<tableKey>
+// 动态拼键收敛为单一固定键下的 tableKey → size map；写回走读-改-写合并，
+// 不覆盖其他表的值。旧动态键不做迁移：工作台 iframe 是 opaque origin，
+// localStorage 旧档在真机上从未写成功过，无可迁数据。
 
-const PAGE_SIZE_STORAGE_PREFIX = "dbx-ldap-grid-pagesize-";
 export const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
 export const DEFAULT_PAGE_SIZE = 50;
 
-function storage(): Storage | null {
+/** tableKey → 页大小 map；顶层形状不符按空表处理。 */
+function readSizeMap(): Record<string, unknown> {
   try {
-    return typeof localStorage === "undefined" ? null : localStorage;
+    const parsed: unknown = JSON.parse(pluginStore.getItem(GRID_PAGE_SIZE_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
   } catch {
-    return null; // 宿主 webview 禁用 localStorage 时的静默兜底
+    return {};
   }
 }
 
 export function loadPreferredPageSize(tableKey: string): number {
-  const raw = storage()?.getItem(PAGE_SIZE_STORAGE_PREFIX + tableKey) ?? "";
-  const parsed = Number.parseInt(raw, 10);
+  const parsed = Number.parseInt(String(readSizeMap()[tableKey] ?? ""), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PAGE_SIZE;
 }
 
 export function savePreferredPageSize(tableKey: string, size: number): void {
-  const store = storage();
-  if (!store) return;
   try {
-    store.setItem(PAGE_SIZE_STORAGE_PREFIX + tableKey, String(size));
+    pluginStore.setItem(GRID_PAGE_SIZE_KEY, JSON.stringify({ ...readSizeMap(), [tableKey]: size }));
   } catch {
     // quota/private mode → 分页偏好放弃持久化即可
   }
@@ -145,28 +148,35 @@ export function savePreferredPageSize(tableKey: string, size: number): void {
 
 // -- 列宽/列序持久化（columnState）------------------------------------------------------
 // 旧表按列名记宽度（ldap.result.columnWidths.v1）；ag-grid 化后升级为整份
-// columnState（宽度 + 顺序 + 隐藏态）。解析失败/缺字段按无存储处理。
+// columnState（宽度 + 顺序 + 隐藏态），同样收敛为固定键下的 tableKey → state
+// map。解析失败/缺字段按无存储处理。
 
-const COLUMN_STATE_STORAGE_PREFIX = "dbx-ldap-grid-colstate-";
+/** tableKey → columnState map；顶层形状不符按空表处理。 */
+function readColumnStateMap(): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(pluginStore.getItem(GRID_COLUMN_STATE_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function isValidColumnState(value: unknown): value is ColumnState[] {
+  return Array.isArray(value) && value.every((item) => item && typeof item === "object" && typeof (item as ColumnState).colId === "string");
+}
 
 export function loadColumnState(tableKey: string): ColumnState[] | null {
   try {
-    const raw = storage()?.getItem(COLUMN_STATE_STORAGE_PREFIX + tableKey);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) && parsed.every((item) => item && typeof item === "object" && typeof (item as ColumnState).colId === "string")
-      ? (parsed as ColumnState[])
-      : null;
+    const state = readColumnStateMap()[tableKey];
+    return isValidColumnState(state) ? state : null;
   } catch {
     return null;
   }
 }
 
 export function saveColumnState(tableKey: string, state: ColumnState[]): void {
-  const store = storage();
-  if (!store) return;
   try {
-    store.setItem(COLUMN_STATE_STORAGE_PREFIX + tableKey, JSON.stringify(state));
+    pluginStore.setItem(GRID_COLUMN_STATE_KEY, JSON.stringify({ ...readColumnStateMap(), [tableKey]: state }));
   } catch {
     // quota/private mode → 列布局放弃持久化即可
   }

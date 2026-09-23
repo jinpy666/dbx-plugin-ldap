@@ -1707,3 +1707,92 @@ dbc59c0）与主树未提交合并成果的审阅提交。
 **验证**：vitest **1227 用例全绿**（+5：Schema li 行选中×2、按钮单次触发×1、
 匹配规则行选中×1、DnPicker 整行选中 + toggle 不误选×2 中计 5）；`vue-tsc`
 通过；ui_test.mjs 走查对 `.schema-attribute-button` 的既有选择器不受影响。
+
+## 前端持久化迁移 host.storage（2026-09-24）
+
+### 背景
+
+工作台 iframe 是 sandbox（opaque origin），插件代码直接读 `localStorage`
+绑定即抛 `SecurityError`——本插件所有 localStorage 持久化在真机上此前全部
+静默失效（折叠偏好/侧栏宽/搜索历史/书签/分页页大小/列布局，重启即丢）。
+宿主 Host API 1.2 起提供 `window.dbxPlugin.storage`（get/set/delete，能力位
+`capabilities.storage`，manifest 需声明 `host.storage` 权限）：桌面端落
+`plugin-data/<id>/ui-storage.json`，web 宿主落顶层文档 localStorage。
+适配器复用族内公共实现 `shared/frontend/pluginStorage.ts`（files 插件已先行
+全绿），ldap 侧在 `frontend/src/lib/pluginStore.ts` 建单例：
+
+- 键集合显式声明（宿主 storage 无列键方法，水合阶段逐键拉入缓存）；
+- 通道降级链：宿主桥 storage → guarded localStorage（web 直连/dev/老宿主）
+  → 内存（仅当前会话）；读全同步（启动水合 + 写穿缓存），调用点保持
+  `getItem/setItem/removeItem` 语义零 async 改造；
+- 宿主档水合时对 localStorage 旧值做一次性惰性搬家（读旧键 → 写穿宿主，
+  旧档保留不删）；桌面 opaque origin 下 localStorage 天然不可读，搬家跳过；
+- `main.ts` 挂载前 `await pluginStore.ready`，保证组件 setup 首读命中。
+
+### 键清单（原键 → 新后端）
+
+| 原键 | 内容 | 新后端（pluginStore 键） |
+| --- | --- | --- |
+| `dbx.ldap.ui.searchCollapsed` | 搜索快捷条折叠偏好 | 同名不变 |
+| `dbx.ldap.ui.searchHistory.<connId>`（动态拼键） | 按连接的搜索过滤器历史 | `dbx.ldap.ui.searchHistory`（固定键，connectionId → 条目数组 map，读写读-改-写合并不覆盖其他连接段） |
+| `dbx.ldap.ui.treeWidth` | 目录树侧栏宽度 | 同名不变 |
+| `dbx-ldap-grid-pagesize-<tableKey>`（动态拼键） | 结果表分页页大小 | `dbx-ldap-grid-pagesizes`（固定键，tableKey → number map） |
+| `dbx-ldap-grid-colstate-<tableKey>`（动态拼键） | 结果表列宽/列序/隐藏 | `dbx-ldap-grid-colstates`（固定键，tableKey → ColumnState[] map） |
+| `dbx-ldap-bookmarks-v1` | 书签（F7，按连接隔离） | 同名不变 |
+
+### 动态键收敛决策
+
+宿主 host.storage 没有「列键/前缀枚举」能力，动态拼键无法声明进水合键
+集合，统一收敛为单一固定键 + JSON map 对象（导出函数签名不变，内部布局
+换掉；`searchHistoryKey()` → `historySegment()` 段名现取，保留连接未知落
+`default` 的语义）。旧动态键不做数据迁移，理由：这些键只存在于
+localStorage，而工作台 iframe（opaque origin）下 localStorage 写入从未
+成功过，真机上没有可迁数据；旧全局数组键 `dbx.ldap.ui.searchHistory`
+与新固定键同名但形状不同（数组 vs map），读取时非 map 形状一律按空表
+忽略，不迁移也不删除（J-3 语义延续，spec 有锁定）。
+
+### 改动面与配套
+
+- `lib/pluginStore.ts`（新）：键常量 + `PLUGIN_STORE_KEYS` + `pluginStore` 单例；
+- 调用点换 `pluginStore.getItem/setItem`：`SearchForm.vue`（折叠 + 历史）、
+  `DnTree.vue`（侧栏宽）、`lib/ldapGrid.ts`（页大小/列布局）、
+  `lib/bookmarks.ts`（书签；自有 typeof/try 降级与内存 Map 删除，降级收敛
+  进适配器）；
+- `env.d.ts`：`DbxPluginApi` 内联补 `capabilities?: { storage?: boolean }`
+  与 `storage?: { get/set/delete }`（ambient 声明不 import 类型）；
+- `mockDbxHost.ts`：补 storage mock（内存 Map、get 未命中 null、
+  `set(undefined)` 归一化 null）+ `capabilities.storage=true`，镜像真实桥
+  （对齐 files mockHost 模板）；mock 的 `ldap-mock-presets` localStorage 是
+  mock 后端自有 preset 存储，不在迁移范围；
+- `manifest.json`：permissions 增 `"host.storage"`（版本号不动）；
+- spec：播种/断言从全局 localStorage 改走 `pluginStore` 实例（happy-dom 下
+  store 在模块导入时已水合，之后改 localStorage 读不到）——SearchForm
+  history/collapse、DbxAgGrid、ldapGrid、bookmarks 共 5 份；bookmarks 的
+  两个降级 describe 随实现上移删除（覆盖转到 pluginStorage.spec）；
+- 新增 `lib/pluginStorage.spec.ts`（薄 spec，对齐 files 同款）：键集合
+  字面量锁定、node 环境下 `pluginStore.channel === "memory"`、宿主/localStorage/
+  内存三通道读写与搬家、桥失败仅告警。
+
+### web/docker 注意点
+
+web 宿主的 host.storage 落顶层文档 localStorage（同源共享），与桌面
+`plugin-data/<id>/ui-storage.json` 不同档；镜像内无需额外挂载。dev 直连
+浏览器（无宿主桥）自动走 guarded localStorage 档，行为与迁移前一致。
+
+### 验证
+
+`pnpm exec vue-tsc --noEmit` 通过；`pnpm exec vitest run` **86 个文件 /
+1241 用例全绿**（净 +8：pluginStorage.spec 新增 10 项、ldapGrid +2
+（merge 写入/顶层形状损坏）、SearchForm 历史 legacy 形状锁定重写、
+bookmarks 降级 describe 删除 -4）。真机复验建议随下一次 .dbxp 出包一起做
+（首启 → 改偏好/加书签 → 重启确认恢复）。
+
+- **mock 兜底语义修正（收尾统一改动）**：storage mock 初版为纯内存 Map，
+  页面刷新即丢，背离真实宿主（web 宿主由顶层 localStorage 兜底、桌面端落
+  `plugin-data/<id>/ui-storage.json`）——ldap ui_test walkthrough 的
+  「expanding the compact bar … persists」用例即因此失败（用例 109 行裸
+  localStorage 断言，且 walkthrough 共用 page 导致后续 builder 用例连坐，
+  一度 30/35）。统一改为 localStorage 兜底（键名不变；字符串值原样、对象
+  JSON 编码；opaque origin 不可用时退化内存），dev/`?mock=1` 恢复刷新持久化，
+  walkthrough 断言无需改动；修正后 walkthrough 重跑 **35/35 全过**（exit 0），vitest 1241 用例不受影响。
+
