@@ -1500,9 +1500,15 @@ function onAssociationRelation(dn: string, attribute?: string) {
 /* 打开条目页签条（F9）：形态对齐全局 .entry-relation-tabs（App.vue 关联双栏），
    但样式就地 scoped 落在本组件，不新增全局选择器；页签本体与 ✕ 按钮为兄弟
    节点，规避 button 嵌 button。 */
+/* flex: 0 0 auto 是页签条的收缩防线：overflow-x:auto 使其在列向 flex 里
+   自动最小高为 0，表单内容超过弹窗 680px 封顶时按 basis 比例分摊收缩会把
+   页签条压瘪（走查实测 34px→16px，文字被裁）。溢出只属于 min-height:0 +
+   overflow:auto 的 attr-editor（同 .entry-relation-tabs / relation footer 约定）。 */
 .entry-tabs {
   display: flex;
   min-width: 0;
+  min-height: 34px;
+  flex: 0 0 auto;
   align-items: center;
   gap: 4px;
   overflow-x: auto;

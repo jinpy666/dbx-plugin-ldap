@@ -253,11 +253,6 @@ export const ldapApi = {
     );
   },
 
-  /** Compare（RFC 4511 Compare 操作，F3）：断言条目在某属性上持有指定值。 */
-  entryCompare(dn: string, attribute: string, value: string) {
-    return callLdap<{ match: boolean }>("ldap/entry/compare", { dn, attribute, value });
-  },
-
   /** WhoAmI（RFC 4531 扩展操作，F3）：返回服务器认可的授权身份。 */
   whoami() {
     return callLdap<{ authzId: string }>("ldap/whoami");

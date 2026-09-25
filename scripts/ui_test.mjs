@@ -694,22 +694,71 @@ test("goto DN reveals and selects the tree node", async (page) => {
   await page.waitForFunction(() => document.querySelector('.tree-node[title="ou=people,dc=demo,dc=dbx"]')?.getAttribute("aria-selected") === "true");
 });
 
-test("compare dialog: match then no-match on the same entry", async (page) => {
-  const node = page.locator('.tree-node[title="ou=groups,dc=demo,dc=dbx"]').first();
+test("compare dialog: whole-entry diff between two DNs", async (page) => {
+  const node = page.locator('.tree-node[title="ou=people,dc=demo,dc=dbx"]').first();
   await node.waitFor();
   await node.click({ button: "right" });
   await page.getByRole("menuitem", { name: "比较条目" }).click();
   await page.locator(".compare-modal").waitFor();
-  await expectEqual(await page.locator(".compare-dn").inputValue(), "ou=groups,dc=demo,dc=dbx", "compare dn prefilled");
-  await page.locator(".compare-attribute-input").fill("cn");
-  await page.locator(".compare-value-input").fill("groups");
+  await expectEqual(await page.locator(".compare-dn").inputValue(), "ou=people,dc=demo,dc=dbx", "compare dn prefilled");
+  // 同 DN 对比被拦截（无请求）；换成不同 DN 后展示整条目属性差异表。
+  await page.locator(".compare-target-input").fill("ou=people,dc=demo,dc=dbx");
+  await page.waitForFunction(() => document.querySelector(".compare-modal")?.textContent?.includes("目标 DN 与当前 DN 相同"));
+  await page.locator(".compare-target-input").fill("ou=groups,dc=demo,dc=dbx");
   await page.locator(".compare-modal .primary-button").click();
-  await page.waitForFunction(() => document.querySelector(".compare-modal")?.textContent?.includes("值一致"));
-  await page.locator(".compare-value-input").fill("other");
-  await page.locator(".compare-modal .primary-button").click();
-  await page.waitForFunction(() => document.querySelector(".compare-modal")?.textContent?.includes("值不一致"));
+  // people{ou,objectClass} vs groups{ou,cn,objectClass}：ou 值不同、cn 仅目标有、objectClass 一致不展示。
+  await page.waitForFunction(() => document.querySelector(".compare-modal")?.textContent?.includes("共 3 个属性，2 个存在差异"));
+  await page.waitForFunction(() => document.querySelector(".compare-modal")?.textContent?.includes("值不同"));
+  await page.waitForFunction(() => document.querySelector(".compare-modal")?.textContent?.includes("仅目标条目"));
   await page.keyboard.press("Escape");
   await page.waitForTimeout(300);
+});
+
+test("compare dialog picks the target DN from the tree picker", async (page) => {
+  const node = page.locator('.tree-node[title="ou=people,dc=demo,dc=dbx"]').first();
+  await node.waitFor();
+  await node.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "比较条目" }).click();
+  await page.locator(".compare-modal").waitFor();
+  await page.locator(".compare-modal").getByRole("button", { name: "从目录树选择" }).click();
+  await page.locator(".dn-picker-modal").waitFor();
+  // 选择器浏览根为当前 DN 的父（dc=demo,dc=dbx）；点选 ou=groups 子行回填目标。
+  await page.locator('.dn-picker-row .dn-picker-name[title="ou=groups,dc=demo,dc=dbx"]').click();
+  await expectEqual(await page.locator(".compare-target-input").inputValue(), "ou=groups,dc=demo,dc=dbx", "picker fills target dn");
+  await page.locator(".compare-modal .primary-button").click();
+  await page.waitForFunction(() => document.querySelector(".compare-modal")?.textContent?.includes("共 3 个属性，2 个存在差异"));
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+});
+
+test("compare dialog: identical verdict, failure path and reopen reset", async (page) => {
+  // 构造一个与 ou=people 属性完全一致的临时条目（mock add/delete 走协议仿真）。
+  await page.evaluate(() => window.dbxPlugin.invoke("ldap/entry/add", { dn: "ou=cmp-twin,dc=demo,dc=dbx", attributes: { objectClass: ["organizationalUnit"], ou: ["people"] } }));
+  const node = page.locator('.tree-node[title="ou=people,dc=demo,dc=dbx"]').first();
+  await node.waitFor();
+  await node.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "比较条目" }).click();
+  await page.locator(".compare-modal").waitFor();
+  try {
+    await page.locator(".compare-target-input").fill("ou=cmp-twin,dc=demo,dc=dbx");
+    await page.locator(".compare-modal .primary-button").click();
+    await page.waitForFunction(() => document.querySelector(".compare-modal")?.textContent?.includes("两个条目的属性完全一致"));
+    // 失败路径：目标不存在 → 行内友好错误，可再次比较。
+    await page.locator(".compare-target-input").fill("cn=missing,dc=demo,dc=dbx");
+    await page.locator(".compare-modal .primary-button").click();
+    await page.waitForFunction(() => document.querySelector(".compare-modal .form-error")?.textContent?.includes("比较失败"));
+    // 关闭重开：目标与结果重置。
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    await node.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "比较条目" }).click();
+    await page.locator(".compare-modal").waitFor();
+    await expectEqual(await page.locator(".compare-target-input").inputValue(), "", "reopen resets target");
+  } finally {
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    await page.evaluate(() => window.dbxPlugin.invoke("ldap/entry/delete", { dn: "ou=cmp-twin,dc=demo,dc=dbx" }).catch(() => {}));
+  }
 });
 
 test("F9 entry tabs: open two entries, switch, dirty veto", async (page) => {
@@ -811,6 +860,53 @@ test("F9 entry tabs: open two entries, switch, dirty veto", async (page) => {
     for (const dn of ["uid=tabs-1,ou=people,dc=demo,dc=dbx"]) {
       await page.evaluate((entryDn) => window.dbxPlugin.invoke("ldap/entry/delete", { dn: entryDn }).catch(() => {}), dn);
     }
+  }
+});
+
+test("F9 entry tab bar keeps its height when the form tab overflows the modal", async (page) => {
+  // 回归：.entry-tabs 自带 overflow-x:auto（列向 flex 里自动最小高为 0），
+  // 表单内容超过弹窗 680px 封顶时 flex 收缩按 basis 比例分摊会把页签条压瘪
+  // （复现实测 34px→16px，tab 文字被裁）。修复 = 非内容区 flex: 0 0 auto +
+  // min-height，与全局 .entry-relation-tabs / relation footer 同一约定。
+  await page.evaluate(() => window.dbxPlugin.invoke("ldap/entry/add", {
+    dn: "uid=tall-tabbar,ou=people,dc=demo,dc=dbx",
+    attributes: {
+      objectClass: ["inetOrgPerson", "posixAccount"],
+      uid: ["tall-tabbar"], cn: ["Tall Tabbar"], sn: ["Tabbar"],
+      ...Object.fromEntries(Array.from({ length: 24 }, (_, index) => [`description${index + 1}`, [`value ${index + 1}`]])),
+    },
+  }));
+  try {
+    // 前置：紧凑条若折叠则展开，再切源码模式。
+    const collapsed = await page.locator(".search-advanced.is-collapsed").count();
+    if (collapsed) {
+      await page.locator(".search-form-compact .compact-toggle").click();
+    }
+    await page.locator(".filter-block").waitFor();
+    await page.locator(".search-form .mode-switch button").nth(1).click();
+    // 先开超高条目再关闭（工作集保留），随后打开矮条目：页签条 ≥2 才渲染，
+    // 且只有激活页签的表单内容超高时收缩才发生。
+    await page.locator(".filter-source input").fill("(uid=tall-tabbar)");
+    await page.getByRole("button", { name: /搜索|Search/ }).first().click();
+    await page.waitForFunction(() => document.querySelectorAll(".ag-row").length === 1);
+    await page.locator(".ag-row").first().dblclick();
+    await page.locator(".editor-modal").waitFor();
+    await page.locator(".editor-modal footer button", { hasText: /取消|Cancel/ }).first().click();
+    await page.waitForFunction(() => !document.querySelector(".editor-modal"));
+    await page.locator(".filter-source input").fill("(uid=user0002)");
+    await page.getByRole("button", { name: /搜索|Search/ }).first().click();
+    await page.waitForFunction(() => document.querySelectorAll(".ag-row").length === 1);
+    await page.locator(".ag-row").first().dblclick();
+    await page.locator(".editor-modal").waitFor();
+    await page.waitForFunction(() => document.querySelectorAll(".entry-tab-shell").length >= 2);
+    await page.locator(".entry-tab[role='tab']", { hasText: "uid=tall-tabbar" }).click();
+    await page.waitForFunction(() => document.querySelector(".entry-dn-row")?.textContent?.includes("uid=tall-tabbar"));
+    // 自然高度 = 26px 页签 + 6px padding + 2px border = 34px；被收缩会显著低于它。
+    const tabsHeight = await page.locator(".entry-tabs").evaluate((el) => el.getBoundingClientRect().height);
+    if (!(tabsHeight >= 30)) throw new Error(`entry tab bar collapsed to ${tabsHeight}px (expect ≥30px)`);
+  } finally {
+    await closeEditorIfOpen(page);
+    await page.evaluate(() => window.dbxPlugin.invoke("ldap/entry/delete", { dn: "uid=tall-tabbar,ou=people,dc=demo,dc=dbx" }).catch(() => {}));
   }
 });
 
