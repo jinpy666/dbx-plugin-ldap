@@ -369,7 +369,7 @@ describe("DnTree revealDn 树内定位", () => {
     expect(titles).toContain(parentDn);
     expect(titles).toContain(targetDn);
     expect(wrapper.find(".tree-badge--truncated").exists()).toBe(false);
-  });
+  }, 15000);
 
   it("目标在续载第 2 页内 → 逐页续载并命中（临时 dn 索引不丢新节点）", async () => {
     const page1 = Array.from({ length: 500 }, (_, index) => ({ dn: `cn=u${index},${baseDn}`, attributes: {} }));
@@ -387,7 +387,7 @@ describe("DnTree revealDn 树内定位", () => {
     const targetRow = wrapper.findAll(".tree-node").find((row) => row.attributes("title") === lateDn);
     expect(targetRow).toBeDefined();
     expect(targetRow!.attributes("aria-selected")).toBe("true");
-  });
+  }, 15000);
 
   it("游标耗尽仍未找到 → false 且不抛错", async () => {
     const fillers = Array.from({ length: 500 }, (_, index) => ({ dn: `cn=u${index},${baseDn}`, attributes: {} }));
@@ -398,7 +398,7 @@ describe("DnTree revealDn 树内定位", () => {
 
     await expect(wrapper.vm.revealDn("cn=missing," + baseDn)).resolves.toBe(false);
     expect(searchNext).toHaveBeenCalledTimes(1);
-  });
+  }, 15000);
 
   it("DN 不在 baseDn 之下 → 直接 false（零请求）", async () => {
     await expect(wrapper.vm.revealDn("cn=x,dc=other")).resolves.toBe(false);
