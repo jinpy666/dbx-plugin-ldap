@@ -10,7 +10,8 @@
   ],
   "permissions": [
     "host.events",
-    "host.workbench"
+    "host.workbench",
+    "host.storage"
   ],
   "source": "https://github.com/jinpy666/dbx-plugin-ldap",
   "homepage": "https://github.com/jinpy666/dbx-plugin-ldap",
