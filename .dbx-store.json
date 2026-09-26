@@ -16,7 +16,7 @@
   "source": "https://github.com/jinpy666/dbx-plugin-ldap",
   "homepage": "https://github.com/jinpy666/dbx-plugin-ldap",
   "license": "MIT",
-  "releaseNotes": "首个商店版本：LDAP 目录浏览与管理工作台。DN 树浏览、分页搜索与 RFC 4515 过滤器；条目查看、新增、编辑、重命名与删除；RootDSE/Schema 检查与 LDIF/CSV 导出；支持 anonymous、simple、Kerberos/GSSAPI、NTLM、DIGEST-MD5、SASL External 等认证矩阵与 LDAP/StartTLS/LDAPS；内置只读模式、Base DN 白名单、屏蔽属性和审计等安全护栏，支持粘贴 ldapsearch 命令一键导入搜索表单，并提供 MCP 工具面供 AI 客户端复用。",
+  "releaseNotes": "代码审查修复版：modifyDn newRDN/newSuperior 控制字符防护并同步 MCP 预检；搜索聚合 10 万防御上限与 MCP digest sizeLimit clamp；tls-insecure 审计回归 ok/denied/error 三值契约；语义色改用主题令牌；Disconnect/WithConn 竞态身份双检防 fd 泄漏等 9 项修复。",
   "localizations": {
     "zh-CN": {
       "name": "LDAP Studio",
