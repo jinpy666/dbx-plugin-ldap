@@ -11,7 +11,7 @@ import { ldapApi, type LdapEntry } from "../lib/api";
 import { friendlyLdapError } from "../lib/ldapErrors";
 import { splitFirstDnRdn } from "../lib/dn";
 import { decideBackdropClose, useModalA11y } from "../lib/modal";
-import { countEntryDiff, diffLdapEntries, type EntryDiffRow, type EntryDiffStatus } from "../lib/entryDiff";
+import { countEntryDiff, diffLdapEntries, truncateDiffValue, type EntryDiffRow, type EntryDiffStatus } from "../lib/entryDiff";
 import { t } from "../lib/i18n";
 
 const props = defineProps<{
@@ -97,15 +97,21 @@ async function run() {
   submitted.value = true;
   if (submitting.value || targetInvalid.value || sameDn.value) return;
   submitting.value = true;
+  // 评审 M-1：请求发出时锁定目标。输入框在途不禁用（不打断输入），但
+  // markTouched 只清已展示的旧结论、拦不住 await 之后的晚到写回——过期
+  // 的差异/一致/失败结论对新输入一律丢弃，否则旧目标结论会被当成当前的。
+  const requested = targetDraft.value.trim();
+  const stale = () => targetDraft.value.trim() !== requested;
   try {
     // 两次 base 读取；任一侧失败即整单失败（Promise.all 短路）。
-    const target = targetDraft.value.trim();
-    const [left, right] = await Promise.all([ldapApi.entryGet(props.dn), ldapApi.entryGet(target)]);
+    const [left, right] = await Promise.all([ldapApi.entryGet(props.dn), ldapApi.entryGet(requested)]);
+    if (stale()) return;
     const rows = diffLdapEntries(left.entry, right.entry);
     outcome.value = rows.some((row) => row.status !== "equal")
       ? { kind: "diff", rows }
       : { kind: "identical", total: rows.length };
   } catch (cause) {
+    if (stale()) return;
     const raw = cause instanceof Error ? cause.message : String(cause);
     const message = t("compare.failed", { error: friendlyLdapError(raw) });
     outcome.value = { kind: "failed", message };
@@ -113,6 +119,12 @@ async function run() {
   } finally {
     submitting.value = false;
   }
+}
+
+// 差异表值单元格：大值展示层截断（评审 M-4，比较仍按全值），尾部附总长标记。
+function diffValueLabel(value: string): string {
+  const shown = truncateDiffValue(value);
+  return shown.truncated ? `${shown.text} ${t("compare.valueTruncated", { count: shown.totalChars })}` : shown.text;
 }
 
 // Esc 关闭 + Tab 焦点陷阱；对比在途时否决 Esc（防结果不明，家族约定），
@@ -181,11 +193,11 @@ function onBackdropClick() {
               <span class="badge compare-diff-badge">{{ statusLabels[row.status] }}</span>
             </span>
             <span class="mono compare-diff-values" role="cell">
-              <div v-for="(value, index) of row.leftValues" :key="`l${index}`">{{ value }}</div>
+              <div v-for="(value, index) of row.leftValues" :key="`l${index}`">{{ diffValueLabel(value) }}</div>
               <div v-if="row.leftValues.length === 0" class="compare-diff-empty">—</div>
             </span>
             <span class="mono compare-diff-values" role="cell">
-              <div v-for="(value, index) of row.rightValues" :key="`r${index}`">{{ value }}</div>
+              <div v-for="(value, index) of row.rightValues" :key="`r${index}`">{{ diffValueLabel(value) }}</div>
               <div v-if="row.rightValues.length === 0" class="compare-diff-empty">—</div>
             </span>
           </div>

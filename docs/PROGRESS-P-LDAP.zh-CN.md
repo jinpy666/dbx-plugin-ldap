@@ -1834,3 +1834,43 @@ bookmarks 降级 describe 删除 -4）。真机复验建议随下一次 .dbxp �
 - `go test ./...`：5 包全绿（main/ldapconn/ldapgssapi/lifecycle/mcp/store）。
 - 前端 `pnpm typecheck` 通过、`pnpm test` 86 文件/1241 用例全绿（M2 为纯 CSS，
   无逻辑面变化）。
+
+## 2026-09-26 评审修复轮 2：main 93f0e69..f2e76ea 双通道代码评审收口
+
+> 范围：code-reviewer（安全/质量）+ architect（架构对抗）双通道评审 main 自
+> PR #4 合并点以来的 8 个提交（52 文件 +1839/−590），承重发现经源码复核后
+> 全部修复。共 HIGH×4 + MEDIUM×4 + LOW 注释项；TDD 全程（每项先写失败测试
+> 再实现）。
+
+| 项 | 修复 | 关键落点 |
+| --- | --- | --- |
+| HIGH-1 | 读路径裸控制字符门（评审 WATCH：H1 只补了写路径，读路径把裸换行/空字节 BaseDN/DN 原样发服务端并落 read-policy 审计）：新增 `normalizeLDAPReadDN`（TrimSpace + 控制字符拒绝，不强制 ParseDN——空 baseDN=不限等既有语义保留），应用于 Search/Count/GetEntry/Compare/ChildrenCount 入口（Effective baseDN 单点，含 profile 回退值）；本地校验拒绝不发审计（≠ 策略拒绝），转义形态放行；读无两阶段令牌，不做 MCP 预检 | policy.go、operations.go、policy_test.go（矩阵）、operations_test.go（TestReadPathControlCharGate，含"不出 dial 错、零审计"断言） |
+| HIGH-2 | UI 水合不再阻塞挂载：`createPluginKvStore` 宿主档水合包 `hydrateTimeoutMs`（默认 2000ms）超时放行 + 告警留痕——此前 main.ts `await ready` 后才 mount，桥挂起（宿主 bug/通道半开）会把整个工作台拖成白屏；超时后 hydrate 后台继续，晚到值经 cache.has 守卫只补缺失键、不覆盖 UI 已写值 | shared/frontend/pluginStorage.ts（单实现点，main.ts 零改动）、pluginStorage.spec.ts（挂起桥超时放行 + 晚到不覆盖） |
+| HIGH-3 | manifest `engines.host_api` ">=1.0.0" → ">=1.2.0"：host.storage 是 Host API 1.2 能力（宿主仓证据：宿主 2026-09-21 `865b9fba8` 引入 storage，同窗 host_api=1.2.0；且宿主对未知权限是安装期 compat 硬错误而非告警——旧宿主上">=1.0.0 + host.storage"的组合会直接拒绝安装，适配器的降级链路根本不会执行）。宿主插件框架本身自 dbx 0.6.11（host_api 1.0）起步，host.storage 随 dbx 0.6.18 上线，>=1.2.0 是唯一诚实的声明 | manifest.json |
+| HIGH-4 | build.sh `DBX_PREBUILT_UI=1` 预置产物快车道补新鲜度告警：打印 ui/index.html 大小/mtime，早于 manifest.json 时 WARN（产物无指纹校验，本地陈旧 ui/ 会被静默打包）；CI 工作流当前无调用方（release 5 平台各全量现构建），接线指纹校验前该开关只作本地兜底——"接线或删除"留待集成决策 | scripts/build.sh |
+| MED-1 | CompareDialog 在途改目标 DN 丢弃过期结论：run() 发请求时锁定 `requested`，resolve/reject 后目标已变则三态（diff/identical/failed）都不写回、不发 notify（markTouched 只清已展示旧结论，拦不住 await 后的晚到写回） | CompareDialog.vue、CompareDialog.spec.ts（在途改目标用例） |
+| MED-2 | MCP modifyDn preview 补 destination 白名单预检：`destination` 计算后、签发令牌前 `EnsureWriteBaseAllowed`（此前越白名单目标 preview 照发令牌、confirm 后执行层才拒——白烧令牌缺口，与预检前置自设目标相悖；执行层兜底保留，纵深不变） | mcp/server.go、writegate_test.go（S-WGATE-9：越界不签发 + 界内照常签发） |
+| MED-3 | 固定键 JSON map 段数上限：`prunePersistedMap`（delete+set 活跃段移末尾近似 LRU，先插入后裁剪稳态不超上限）；列布局/页大小 map 上限 64 段、搜索历史 map 上限 20 连接段——tableKey/连接段只增不减，无界增长终会顶到宿主单值 256 KiB 上限整键静默停摆；注释同步交代多实例并发写同键仍是整 map last-writer-wins（宿主 storage 无 CAS，既有取舍） | frontend/src/lib/pluginStore.ts、ldapGrid.ts、SearchForm.vue、pluginStorage.spec.ts（prune 单测）、ldapGrid.spec.ts（64 段淘汰/LRU 用例） |
+| MED-4 | 对比差异表大值展示截断：`truncateDiffValue`（默认 4096 字符，head+…+总长标记 `compare.valueTruncated` 七语），仅展示侧——diffLdapEntries 仍按全值比较，比较语义不变；jpegPhoto/证书类 base64 大值不再全量进 DOM | frontend/src/lib/entryDiff.ts、CompareDialog.vue、i18n.ts（七语）、entryDiff.spec.ts |
+| LOW | policy.go 补三层同源校验契约注释（MCP 预检 → destination 计算 → 执行层 ModifyDN，删任何一层需评审） | policy.go |
+
+### 测试
+
+- 新增：policy_test.go（normalizeLDAPReadDN 矩阵：空合法/Trim/控制字符拒绝/
+  转义放行）、operations_test.go（TestReadPathControlCharGate 五入口 + 转义
+  放行 + 零审计）、writegate_test.go（S-WGATE-9 destination 白名单两态）、
+  pluginStorage.spec.ts（挂起桥超时放行 + 晚到值不覆盖 + prunePersistedMap
+  三态）、entryDiff.spec.ts（truncateDiffValue 四态含 4096 缺省）、
+  CompareDialog.spec.ts（在途改目标丢结论）、ldapGrid.spec.ts（64 段淘汰 +
+  LRU 重存）。
+- 全部先证 RED（Go 编译失败/断言失败、vitest 超时/断言失败）再实现转 GREEN。
+
+### 验证
+
+- `cd backend && go build ./... && go vet ./... && gofmt -l .`：零输出全净；
+  `go test ./...` 6 包全绿。
+- 前端 `pnpm typecheck` 通过；`pnpm test` 全绿（86+ 文件，净增用例见上）。
+- `python3 scripts/validate_repo.py` 通过。
+- 遗留给集成方：manifest 版本号 bump、store release notes（建议写明"UI 状态
+  持久化需 Host API ≥1.2（dbx ≥0.6.18），旧宿主安装会被兼容校验拒绝"）、
+  DBX_PREBUILT_UI 的"接线（指纹校验）或删除"决策。

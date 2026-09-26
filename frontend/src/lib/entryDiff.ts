@@ -59,3 +59,20 @@ export function diffLdapEntries(left: LdapEntry, right: LdapEntry): EntryDiffRow
 export function countEntryDiff(rows: EntryDiffRow[]): { total: number; differences: number } {
   return { total: rows.length, differences: rows.filter((row) => row.status !== "equal").length };
 }
+
+// -- 展示层大值截断（评审 M-4）--------------------------------------------------------
+// jpegPhoto/证书类 base64 大值全量进差异表会拖垮 DOM。截断只发生在展示侧：
+// diffLdapEntries 仍按全值比较，比较语义不受影响。
+
+export const DIFF_VALUE_MAX_CHARS = 4096;
+
+export interface TruncatedDiffValue {
+  text: string;
+  truncated: boolean;
+  totalChars: number;
+}
+
+export function truncateDiffValue(value: string, maxChars: number = DIFF_VALUE_MAX_CHARS): TruncatedDiffValue {
+  if (value.length <= maxChars) return { text: value, truncated: false, totalChars: value.length };
+  return { text: `${value.slice(0, maxChars)}…`, truncated: true, totalChars: value.length };
+}

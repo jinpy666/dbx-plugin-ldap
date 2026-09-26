@@ -26,11 +26,19 @@ done
 
 # Release CI builds the target-independent UI once per plugin and stages ui/
 # here as an artifact; DBX_PREBUILT_UI=1 packages it as-is instead of rerunning
-# the frontend three-step on every platform job.
+# the frontend three-step on every platform job. The staged artifact carries no
+# version/commit fingerprint, so a stale ui/index.html would be packaged
+# silently — print its freshness and warn when it predates the manifest
+# (评审 HIGH-4；CI 工作流当前没有调用方，接线指纹校验前只作本地兜底)。
 if [ "${DBX_PREBUILT_UI:-0}" = "1" ]; then
   if [ ! -f ui/index.html ]; then
     echo "DBX_PREBUILT_UI=1 but ui/index.html is missing; stage the CI frontend artifact first" >&2
     exit 1
+  fi
+  echo "==> frontend: prebuilt ui/index.html ($(ls -l ui/index.html | awk '{print $5" bytes, modified "$6" "$7" "$8}'))"
+  if [ manifest.json -nt ui/index.html ]; then
+    echo "WARN: ui/index.html is OLDER than manifest.json — the prebuilt UI may not match this source tree" >&2
+    echo "WARN: drop DBX_PREBUILT_UI=1 to run the full frontend build instead" >&2
   fi
   echo "==> frontend: skipped (prebuilt ui/ staged by CI)"
 else

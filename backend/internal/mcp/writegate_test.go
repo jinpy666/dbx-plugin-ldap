@@ -243,3 +243,30 @@ func TestServerEntryWriteModifyDNPrevalidation(t *testing.T) {
 		t.Fatalf("escaped RDN/superior preview must issue a confirmToken, got: %v", preview)
 	}
 }
+
+// S-WGATE-9 modifyDn destination 白名单预检（评审 M-2）：越白名单的目标 DN
+// 与源 DN 同一道 preview 前第二门——此前 destination 只在执行层兜底，preview
+// 照发令牌、confirm 后才报错（白烧令牌缺口，与预检前置的自设目标相悖）。
+func TestServerEntryWriteModifyDNDestinationWhitelist(t *testing.T) {
+	server := NewServer(ldapconn.NewService(), nil)
+	server.settings.ReportWaitMs = 1
+	connectWriteGateProfile(t, server, "wg-mdn-dst",
+		`{"allowed_write_base_dns": "ou=people,dc=example,dc=org", "base_dn": "dc=example,dc=org"}`)
+	_, err := server.entryWrite(map[string]any{
+		"connectionId": "wg-mdn-dst", "action": "modifyDn",
+		"dn": "uid=a,ou=people,dc=example,dc=org", "newRdn": "uid=b",
+		"newSuperior": "ou=elsewhere,dc=example,dc=org"})
+	if err == nil || !strings.Contains(err.Error(), "outside allowed write base DNs") {
+		t.Fatalf("out-of-whitelist destination must be refused before preview: %v", err)
+	}
+	if len(server.confirms.items) != 0 {
+		t.Fatalf("refused destination must not issue tokens: %d", len(server.confirms.items))
+	}
+	// 白名单内目标照常进入 preview 签发。
+	preview, err := server.entryWrite(map[string]any{
+		"connectionId": "wg-mdn-dst", "action": "modifyDn",
+		"dn": "uid=a,ou=people,dc=example,dc=org", "newRdn": "uid=b"})
+	if err != nil || preview["confirmToken"] == "" {
+		t.Fatalf("in-whitelist destination preview must issue a token: %v %v", preview, err)
+	}
+}

@@ -86,6 +86,23 @@ func hasRawControlChar(dn string) bool {
 	return false
 }
 
+// normalizeLDAPReadDN 读操作目标 DN/baseDN 的控制字符纵深（评审 WATCH-1：
+// H1 只给写路径补了同款防护，读路径此前把裸换行/空字节 DN 原样发往服务端
+// 并落入 read-policy 审计）。与写路径差异：不强制 ParseDN（空 baseDN = 不
+// 限、RootDSE dn="" 等既有语义由调用方处理），只做 TrimSpace + 裸控制字符
+// 拒绝；空输入合法返回空串。读路径无两阶段令牌，白名单门仍在执行层单点
+// 执法，不做 MCP 预检。
+func normalizeLDAPReadDN(rawDN string) (string, error) {
+	dn := strings.TrimSpace(rawDN)
+	if dn == "" {
+		return "", nil
+	}
+	if hasRawControlChar(dn) {
+		return "", fmt.Errorf("invalid dn: raw control characters are not allowed (escape them per RFC 4514, e.g. \\0A for line feed)")
+	}
+	return dn, nil
+}
+
 // normalizeLDAPWriteRDN modifyDn 的 newRDN 校验（2026-09-26 审查 H1：与
 // normalizeLDAPWriteDN 同款控制字符纵深——go-ldap ParseDN 对裸换行/空字节
 // 不报错，注入风格 RDN 会静默直达服务端并落审计/展示面；RFC 4514 转义形态
@@ -268,6 +285,9 @@ func uniqueLDAPAttributeNames(attrs []string) []string {
 // ldapModifyDNDestinationDN 计算 modifyDn 目标 DN（tiny-rdm :1831 原样 +
 // 审查 H1 加固：newRDN/newSuperior 走 normalizeLDAPWriteRDN/Superior 同款
 // 控制字符纵深，注入风格输入在本地三道校验前即被拒绝）。
+// 契约：modifyDn 的 RDN/superior/destination 校验在三层同源执行——MCP 预检
+// （NormalizeWriteRDN/Superior + destination 白名单）、本函数归一化、执行层
+// ModifyDN 全套门禁——防绕层调用，删任何一层需评审。
 func ldapModifyDNDestinationDN(rawDN, rawNewRDN, rawNewSuperior string) (string, error) {
 	dn := strings.TrimSpace(rawDN)
 	newRDN, err := normalizeLDAPWriteRDN(rawNewRDN)

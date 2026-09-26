@@ -101,6 +101,9 @@ func (s *Service) Search(ctx context.Context, req LDAPSearchRequest) (LDAPSearch
 	if baseDN == "" {
 		return LDAPSearchResult{}, fmt.Errorf("baseDn is required")
 	}
+	if _, err := normalizeLDAPReadDN(baseDN); err != nil {
+		return LDAPSearchResult{}, err
+	}
 	filter := strings.TrimSpace(req.Filter)
 	if filter == "" {
 		filter = "(objectClass=*)"
@@ -224,6 +227,9 @@ func (s *Service) count(ctx context.Context, req LDAPCountRequest, dedicated boo
 	if baseDN == "" {
 		return LDAPCountResult{}, fmt.Errorf("baseDn is required")
 	}
+	if _, err := normalizeLDAPReadDN(baseDN); err != nil {
+		return LDAPCountResult{}, err
+	}
 	filter := strings.TrimSpace(req.Filter)
 	if filter == "" {
 		filter = "(objectClass=*)"
@@ -287,6 +293,9 @@ func (s *Service) GetEntry(ctx context.Context, req LDAPGetEntryRequest) (LDAPEn
 	dn := strings.TrimSpace(req.DN)
 	if dn == "" {
 		return LDAPEntry{}, fmt.Errorf("dn is required")
+	}
+	if _, err := normalizeLDAPReadDN(dn); err != nil {
+		return LDAPEntry{}, err
 	}
 	if err := ensureLDAPReadAllowed(profile, dn); err != nil {
 		s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "read-policy", Target: dn, Result: "denied", Detail: err.Error()})
@@ -694,6 +703,9 @@ func (s *Service) Compare(ctx context.Context, req LDAPCompareRequest) (LDAPComp
 	dn := strings.TrimSpace(req.DN)
 	if dn == "" {
 		return LDAPCompareResult{}, fmt.Errorf("dn is required")
+	}
+	if _, err := normalizeLDAPReadDN(dn); err != nil {
+		return LDAPCompareResult{}, err
 	}
 	attribute := strings.TrimSpace(req.Attribute)
 	if attribute == "" {

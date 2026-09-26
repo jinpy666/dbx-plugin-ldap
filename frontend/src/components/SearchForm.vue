@@ -10,7 +10,7 @@ import { validateLDAPFilter, buildNodeFilter, collectBuilderErrors, parseFilterS
 import { parseLdapSearchCommand, type LdapSearchCommandFailure } from "../lib/ldapSearchCommand";
 import { parsePsAdCommand } from "../lib/psCommandImport";
 import { useLdapSchemaCache } from "../lib/schemaCache";
-import { SEARCH_COLLAPSED_KEY, SEARCH_HISTORY_KEY, pluginStore } from "../lib/pluginStore";
+import { SEARCH_COLLAPSED_KEY, SEARCH_HISTORY_KEY, pluginStore, prunePersistedMap } from "../lib/pluginStore";
 import { t, workbenchLocale } from "../lib/i18n";
 import FilterGroup from "./FilterGroup.vue";
 
@@ -212,6 +212,8 @@ interface SearchHistoryEntry {
 // 键同名但形状不同（数组 vs map）：读取时非 map 形状一律按空表忽略，不迁移
 // 也不删除（工作台 iframe 下旧键从未写成功过，无可迁数据）。
 const SEARCH_HISTORY_MAX = 10;
+// 历史固定键下的连接段上限（评审 M-3，prunePersistedMap 近似 LRU）。
+const SEARCH_HISTORY_MAX_SEGMENTS = 20;
 
 type SearchHistoryMap = Record<string, SearchHistoryEntry[]>;
 
@@ -257,9 +259,14 @@ function readStoredHistory(): SearchHistoryEntry[] {
 
 function persistHistory() {
   try {
-    // 读-改-写合并：基于存储内最新 map 只更新当前连接段，不覆盖其他连接的历史。
-    const next: SearchHistoryMap = { ...readHistoryMap(), [historySegment()]: searchHistory.value };
-    pluginStore.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next));
+    // 读-改-写合并：基于存储内最新 map 只更新当前连接段，不覆盖其他连接的
+    // 历史；delete+set 让活跃段移到键序末尾，超限从最旧连接段淘汰（评审
+    // M-3：连接删除不清理、段只增不减）。多实例并发写同键仍是整 map
+    // last-writer-wins（宿主 storage 无 CAS），为既有取舍。
+    const next = readHistoryMap();
+    delete next[historySegment()];
+    next[historySegment()] = searchHistory.value;
+    pluginStore.setItem(SEARCH_HISTORY_KEY, JSON.stringify(prunePersistedMap(next, SEARCH_HISTORY_MAX_SEGMENTS)));
   } catch {
     /* 存储不可用（隐私模式等）：仅内存态 */
   }

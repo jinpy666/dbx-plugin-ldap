@@ -8,7 +8,7 @@
 import type { ColDef, ColumnState, ValueFormatterParams } from "ag-grid-community";
 import type { LdapEntry } from "./api";
 import { workbenchLocale } from "./i18n";
-import { GRID_COLUMN_STATE_KEY, GRID_PAGE_SIZE_KEY, pluginStore } from "./pluginStore";
+import { GRID_COLUMN_STATE_KEY, GRID_PAGE_SIZE_KEY, pluginStore, prunePersistedMap } from "./pluginStore";
 
 // -- 结果表行视图模型 --------------------------------------------------------------
 // 字段名 = 属性名（值 = 多值 " | " 连接后的全文，供筛选/排序匹配），单元格
@@ -140,7 +140,12 @@ export function loadPreferredPageSize(tableKey: string): number {
 
 export function savePreferredPageSize(tableKey: string, size: number): void {
   try {
-    pluginStore.setItem(GRID_PAGE_SIZE_KEY, JSON.stringify({ ...readSizeMap(), [tableKey]: size }));
+    // 读-改-写合并，不覆盖其他表的值；delete+set 让活跃段移到键序末尾，
+    // 再裁剪超限最旧段（评审 M-3，近似 LRU；先插入后裁剪，稳态不超上限）。
+    const merged = readSizeMap();
+    delete merged[tableKey];
+    merged[tableKey] = size;
+    pluginStore.setItem(GRID_PAGE_SIZE_KEY, JSON.stringify(prunePersistedMap(merged)));
   } catch {
     // quota/private mode → 分页偏好放弃持久化即可
   }
@@ -176,7 +181,11 @@ export function loadColumnState(tableKey: string): ColumnState[] | null {
 
 export function saveColumnState(tableKey: string, state: ColumnState[]): void {
   try {
-    pluginStore.setItem(GRID_COLUMN_STATE_KEY, JSON.stringify({ ...readColumnStateMap(), [tableKey]: state }));
+    // 同页大小 map：合并写 + 段数上限（评审 M-3；先插入后裁剪，稳态不超上限）。
+    const merged = readColumnStateMap();
+    delete merged[tableKey];
+    merged[tableKey] = state;
+    pluginStore.setItem(GRID_COLUMN_STATE_KEY, JSON.stringify(prunePersistedMap(merged)));
   } catch {
     // quota/private mode → 列布局放弃持久化即可
   }

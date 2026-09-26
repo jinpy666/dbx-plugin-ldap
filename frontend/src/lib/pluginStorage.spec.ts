@@ -11,6 +11,7 @@ import {
   SEARCH_HISTORY_KEY,
   TREE_WIDTH_KEY,
   pluginStore,
+  prunePersistedMap,
 } from "./pluginStore";
 
 function memoryBacking(initial: Record<string, string> = {}): KvBacking {
@@ -107,6 +108,33 @@ describe("pluginStorage host channel", () => {
     expect(store.getItem("boom")).toBe("x");
     expect(warn).toHaveBeenCalled();
   });
+
+  // 评审 HIGH-2：水合挂在启动关键路径（main.ts await ready 后才 mount），
+  // 桥挂起（宿主 bug/通道半开）时逐键 catch 兜不住「永不 settle」——ready
+  // 必须超时放行，晚到值只补缺失键，不得覆盖 UI 已写值。
+  it("resolves ready when the host bridge hangs and late values never overwrite UI writes", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let resolveGet!: (value: unknown) => void;
+    const store = createPluginKvStore(["k"], {
+      bridge: {
+        get: () =>
+          new Promise((resolve) => {
+            resolveGet = resolve;
+          }),
+        set: async () => null,
+        delete: async () => null,
+      },
+      localStorage: null,
+      hydrateTimeoutMs: 10,
+    });
+    await store.ready;
+    expect(warn).toHaveBeenCalled();
+    store.setItem("k", "from-ui");
+    // 挂起的桥稍后返回旧值：晚到水合不覆盖已写键（既有守卫语义）。
+    resolveGet("from-host");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.getItem("k")).toBe("from-ui");
+  });
 });
 
 describe("pluginStorage degraded channels", () => {
@@ -162,5 +190,29 @@ describe("ldap pluginStore wiring", () => {
     expect(ls.getItem("k")).toBe("v");
     store.removeItem("k");
     expect(ls.getItem("k")).toBeNull();
+  });
+});
+
+// 评审 M-3：固定键下 JSON map 的段数上限（评审 M-3）。tableKey/连接段只增
+// 不减，无上限增长终会顶到宿主单值 256 KiB 上限后静默停摆。
+describe("prunePersistedMap", () => {
+  it("keeps the newest segments and drops the oldest beyond the cap", () => {
+    const map: Record<string, number> = { a: 1, b: 2, c: 3, d: 4 };
+    const pruned = prunePersistedMap(map, 2);
+    expect(Object.keys(pruned)).toEqual(["c", "d"]);
+    expect(pruned).toEqual({ c: 3, d: 4 });
+  });
+
+  it("moves a re-set segment to the end so active segments survive pruning (LRU-ish)", () => {
+    const map: Record<string, number> = { a: 1, b: 2, c: 3 };
+    delete map.a;
+    map.a = 10; // 活跃段移到键序末尾
+    const pruned = prunePersistedMap(map, 2);
+    expect(Object.keys(pruned)).toEqual(["c", "a"]);
+  });
+
+  it("returns the map unchanged when under the cap", () => {
+    const map: Record<string, number> = { a: 1 };
+    expect(prunePersistedMap(map, 64)).toEqual({ a: 1 });
   });
 });
