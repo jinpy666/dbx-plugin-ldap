@@ -109,6 +109,27 @@ func TestNormalizeLDAPWriteRDNRejectsRawControlChars(t *testing.T) {
 	}
 }
 
+// 评审 WATCH-1：读路径（Search/Count/GetEntry/Compare 的 BaseDN/DN）与写
+// 路径同款裸控制字符纵深。差异：不强制 ParseDN、空输入合法（空 baseDN =
+// 不限等既有语义由调用方处理），只做 TrimSpace 归一化 + 控制字符拒绝。
+func TestNormalizeLDAPReadDN(t *testing.T) {
+	if got, err := normalizeLDAPReadDN("   "); err != nil || got != "" {
+		t.Fatalf("normalizeLDAPReadDN empty = %q, %v, want (\"\", nil)", got, err)
+	}
+	if got, err := normalizeLDAPReadDN("  cn=Test,dc=example,dc=com  "); err != nil || got != "cn=Test,dc=example,dc=com" {
+		t.Fatalf("normalizeLDAPReadDN trim = %q, %v", got, err)
+	}
+	// 归一化后仍含控制字符一律拒绝；RFC 4514 转义形态放行。
+	for _, raw := range []string{"uid=a\nb,dc=example,dc=org", "uid=a\x00b", "dc=x\x7f", "dc=ne\x0bw"} {
+		if _, err := normalizeLDAPReadDN(raw); err == nil || !strings.Contains(err.Error(), "raw control characters") {
+			t.Errorf("normalizeLDAPReadDN(%q) err = %v, want raw control characters rejected", raw, err)
+		}
+	}
+	if _, err := normalizeLDAPReadDN(`uid=a\0Ab,dc=example,dc=org`); err != nil {
+		t.Errorf("normalizeLDAPReadDN escaped = %v, want accepted", err)
+	}
+}
+
 func TestNormalizeLDAPWriteSuperior(t *testing.T) {
 	// 空 = 沿用原父 DN，合法返回空串。
 	if got, err := normalizeLDAPWriteSuperior("   "); err != nil || got != "" {

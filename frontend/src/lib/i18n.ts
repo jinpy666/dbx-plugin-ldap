@@ -501,6 +501,7 @@ export const messages = {
       different: "Values differ",
       onlyLeft: "Only in current",
       onlyRight: "Only in target",
+      valueTruncated: "({count} chars in total)",
     },
     bookmark: {
       title: "Bookmarks",
@@ -1083,6 +1084,7 @@ export const messages = {
       different: "值不同",
       onlyLeft: "仅当前条目",
       onlyRight: "仅目标条目",
+      valueTruncated: "（共 {count} 字符）",
     },
     bookmark: {
       title: "书签",
@@ -1665,6 +1667,7 @@ export const messages = {
       different: "值不同",
       onlyLeft: "僅目前條目",
       onlyRight: "僅目標條目",
+      valueTruncated: "（共 {count} 字元）",
     },
     bookmark: {
       title: "書籤",
@@ -2247,6 +2250,7 @@ export const messages = {
       different: "Valores distintos",
       onlyLeft: "Solo en la actual",
       onlyRight: "Solo en el destino",
+      valueTruncated: "({count} caracteres en total)",
     },
     bookmark: {
       title: "Marcadores",
@@ -2829,6 +2833,7 @@ export const messages = {
       different: "Valori diversi",
       onlyLeft: "Solo nella corrente",
       onlyRight: "Solo nella destinazione",
+      valueTruncated: "({count} caratteri in totale)",
     },
     bookmark: {
       title: "Segnalibri",
@@ -3411,6 +3416,7 @@ export const messages = {
       different: "値が異なる",
       onlyLeft: "現在のエントリのみ",
       onlyRight: "対象エントリのみ",
+      valueTruncated: "（全 {count} 文字）",
     },
     bookmark: {
       title: "ブックマーク",
@@ -3993,6 +3999,7 @@ export const messages = {
       different: "Valores diferentes",
       onlyLeft: "Somente na atual",
       onlyRight: "Somente no destino",
+      valueTruncated: "({count} caracteres no total)",
     },
     bookmark: {
       title: "Favoritos",

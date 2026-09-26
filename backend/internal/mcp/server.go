@@ -590,6 +590,11 @@ func (s *Server) entryWrite(args map[string]any) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
+		// 评审 M-2：destination 与源 DN 同款白名单预检——越白名单目标在签发
+		// 令牌前拒绝（执行层 ModifyDN 对 destination 仍有兜底，纵深不变）。
+		if err := ldapconn.EnsureWriteBaseAllowed(profile, destination); err != nil {
+			return nil, err
+		}
 		return s.twoPhaseWrite(connectionID, req, args, func() error {
 			return s.svc.ModifyDN(getContext(), ldapconn.LDAPModifyDNRequest{
 				ConnectionID: connectionID, DN: dn, NewRDN: req.NewRDN,

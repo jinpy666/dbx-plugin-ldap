@@ -121,6 +121,48 @@ func TestCountParameterValidation(t *testing.T) {
 	_ = records
 }
 
+// 评审 WATCH-1（读路径控制字符门）：H1 只给写路径补了裸控制字符纵深，读
+// 路径（Search/Count/GetEntry/Compare/ChildrenCount 的 BaseDN/DN）此前把
+// 注入风格输入原样发往服务端并落 read-policy 审计。离线断言：本地门在拨
+// 号前拒绝（错误是 control-char 文案而非拨号错误），且不发审计（校验错
+// 误 ≠ 策略拒绝，与 invalid filter 同语义）。
+func TestReadPathControlCharGate(t *testing.T) {
+	svc, recs := newAuditService()
+	connectProfile(t, svc, "r1", nil)
+	ctx := context.Background()
+	const evil = "uid=a\nb,dc=example,dc=org"
+
+	if _, err := svc.Search(ctx, LDAPSearchRequest{ConnectionID: "r1", BaseDN: evil, Filter: "(objectClass=*)"}); err == nil ||
+		!strings.Contains(err.Error(), "raw control characters") {
+		t.Fatalf("search baseDn control-char gate: %v", err)
+	}
+	if _, err := svc.Count(ctx, LDAPCountRequest{ConnectionID: "r1", BaseDN: evil}); err == nil ||
+		!strings.Contains(err.Error(), "raw control characters") {
+		t.Fatalf("count baseDn control-char gate: %v", err)
+	}
+	if _, err := svc.GetEntry(ctx, LDAPGetEntryRequest{ConnectionID: "r1", DN: evil}); err == nil ||
+		!strings.Contains(err.Error(), "raw control characters") {
+		t.Fatalf("getEntry dn control-char gate: %v", err)
+	}
+	if _, err := svc.Compare(ctx, LDAPCompareRequest{ConnectionID: "r1", DN: evil, Attribute: "cn", Value: "y"}); err == nil ||
+		!strings.Contains(err.Error(), "raw control characters") {
+		t.Fatalf("compare dn control-char gate: %v", err)
+	}
+	if _, err := svc.ChildrenCount(ctx, LDAPChildrenCountRequest{ConnectionID: "r1", DN: evil}); err == nil ||
+		!strings.Contains(err.Error(), "raw control characters") {
+		t.Fatalf("childrenCount dn control-char gate: %v", err)
+	}
+	// RFC 4514 转义形态不受影响：错误只能来自拨号层（端口 1 不可达）。
+	if _, err := svc.GetEntry(ctx, LDAPGetEntryRequest{ConnectionID: "r1", DN: `uid=a\0Ab,dc=example,dc=org`}); err == nil ||
+		strings.Contains(err.Error(), "raw control characters") {
+		t.Fatalf("escaped DN must pass the read gate (dial error expected): %v", err)
+	}
+	// 本地校验拒绝不发审计。
+	if len(*recs) != 0 {
+		t.Errorf("no audit expected for local validation refusals, got %+v", *recs)
+	}
+}
+
 func TestAddEntryPolicyDenials(t *testing.T) {
 	ctx := context.Background()
 

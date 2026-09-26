@@ -31,11 +31,21 @@ export interface DbxPluginStorageBridge {
 
 export type PluginKvChannel = "host" | "localStorage" | "memory";
 
+/** 宿主档水合超时缺省值：超过即视为桥挂起，按缺省 UI 状态放行挂载。 */
+const HOST_HYDRATE_TIMEOUT_MS = 2000;
+
 export interface PluginKvStoreOptions {
   /** 注入宿主桥；null 强制跳过宿主档，undefined 按 window.dbxPlugin 解析。 */
   bridge?: DbxPluginStorageBridge | null;
   /** 注入 localStorage 档；null 强制跳过，undefined 按 guarded window.localStorage 解析。 */
   localStorage?: KvBacking | null;
+  /**
+   * 宿主档水合超时（毫秒），默认 2000。水合挂在启动关键路径（挂载前 await
+   * ready）：桥挂起（宿主 bug/通道半开）时逐键 catch 兜不住「永不 settle」，
+   * 会把整个工作台拖成白屏——超时按缓存缺省值放行挂载，告警留痕；晚到值
+   * 仍只补缺失键，不覆盖 UI 已写值（评审 HIGH-2）。
+   */
+  hydrateTimeoutMs?: number;
 }
 
 export interface PluginKvStore extends KvBacking {
@@ -141,7 +151,7 @@ export function createPluginKvStore(keys: string[], options: PluginKvStoreOption
     }
     if (mode !== "host") return;
     const { bridge, fallback } = ensure();
-    await Promise.all(
+    const hydrate = Promise.all(
       keys.map(async (key) => {
         try {
           const value = await bridge!.get(key);
@@ -162,6 +172,25 @@ export function createPluginKvStore(keys: string[], options: PluginKvStoreOption
         }
       }),
     );
+    // 水合超时放行（评审 HIGH-2）：超时后 hydrate 继续在后台跑，晚到值经
+    // cache.has 守卫只补缺失键。hydrate 正常完成则取消计时器、不发告警。
+    const timeoutMs = options.hydrateTimeoutMs ?? HOST_HYDRATE_TIMEOUT_MS;
+    await new Promise<void>((done) => {
+      const timer = setTimeout(() => {
+        console.warn(`[pluginStorage] host hydration timed out after ${timeoutMs}ms; mounting without stored UI state`);
+        done();
+      }, timeoutMs);
+      void hydrate.then(
+        () => {
+          clearTimeout(timer);
+          done();
+        },
+        () => {
+          clearTimeout(timer);
+          done();
+        },
+      );
+    });
   })();
 
   return {

@@ -149,6 +149,21 @@ describe("column state persistence", () => {
     pluginStore.setItem(GRID_COLUMN_STATE_KEY, "{oops");
     expect(loadColumnState("result")).toBeNull();
   });
+
+  // 评审 M-3：tableKey 随搜索属性集演化只增不减，map 需段数上限——超限从
+  // 最旧段淘汰；重存旧段 = 活跃段移到末尾（近似 LRU），不会被新段挤掉。
+  it("caps the columnState map at 64 segments, evicting the oldest (LRU-ish)", () => {
+    for (let i = 0; i < 65; i++) saveColumnState(`t${i}`, [{ colId: `c${i}` }]);
+    expect(loadColumnState("t0")).toBeNull();
+    expect(loadColumnState("t1")).toEqual([{ colId: "c1" }]);
+    expect(loadColumnState("t64")).toEqual([{ colId: "c64" }]);
+    // 重存 t1 后再写新段：挤掉的是次旧段 t2，刚用过的 t1 保留。
+    saveColumnState("t1", [{ colId: "c1b" }]);
+    saveColumnState("t65", [{ colId: "c65" }]);
+    expect(loadColumnState("t1")).toEqual([{ colId: "c1b" }]);
+    expect(loadColumnState("t2")).toBeNull();
+    expect(loadColumnState("t65")).toEqual([{ colId: "c65" }]);
+  });
 });
 
 describe("agGridLocaleText", () => {

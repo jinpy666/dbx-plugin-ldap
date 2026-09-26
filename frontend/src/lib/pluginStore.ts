@@ -34,3 +34,25 @@ export const PLUGIN_STORE_KEYS = [
 ];
 
 export const pluginStore = createPluginKvStore(PLUGIN_STORE_KEYS);
+
+// -- 固定键 JSON map 的段数上限（评审 M-3）--------------------------------------------
+// 页大小/列布局/搜索历史都是「固定键 + tableKey/连接段 → JSON map」。动态段
+// 只增不减（tableKey 随属性集演化、连接删除不清理），无上限增长终会顶到宿主
+// 单值 256 KiB 上限后整键静默停摆。
+
+/** 单个固定键下的段数上限：足够覆盖真实工作台的表/连接数，又封住无界增长。 */
+export const PERSISTED_MAP_MAX_SEGMENTS = 64;
+
+/**
+ * 就地裁剪 map 超限的最旧段（对象键序 = 插入序）。配合写入侧的 delete+set
+ * （活跃段移到末尾）构成近似 LRU。注意这只约束单实例内的增长：多实例并发
+ * 写同一固定键仍是整 map last-writer-wins（宿主 storage 无 CAS），该窗口是
+ * 既有取舍，非本 helper 的目标。
+ */
+export function prunePersistedMap<T extends object>(map: T, maxSegments: number = PERSISTED_MAP_MAX_SEGMENTS): T {
+  const keys = Object.keys(map);
+  for (const key of keys.slice(0, Math.max(0, keys.length - maxSegments))) {
+    delete (map as Record<string, unknown>)[key];
+  }
+  return map;
+}

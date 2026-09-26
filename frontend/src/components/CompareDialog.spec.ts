@@ -168,6 +168,27 @@ describe("CompareDialog", () => {
     expect(runButton(wrapper).text()).toBe(t("compare.run"));
   });
 
+  // 评审 M-1：在途改目标 DN，旧请求的结论对新输入不再成立——markTouched
+  // 只清已展示的旧结论，拦不住 await 之后的晚到写回；run 必须丢弃过期结果
+  // （差异/一致/失败三态都不写回，也不发 notify），否则操作者会把旧目标的
+  // 结论当成当前目标的。
+  it("discards the stale verdict when the target DN changes while a compare is in flight", async () => {
+    let release!: (value: { entry: LdapEntry }) => void;
+    const shared = new Promise<{ entry: LdapEntry }>((resolve) => { release = resolve; });
+    vi.spyOn(ldapApi, "entryGet").mockImplementation(() => shared);
+    const wrapper = trackDialog({ open: true });
+    await typeTarget(wrapper, TARGET);
+    await runButton(wrapper).trigger("click");
+    await typeTarget(wrapper, "cn=carol,dc=demo,dc=dbx");
+    release({ entry: { dn: TARGET, attributes: {} } });
+    await flushPromises();
+    expect(wrapper.find(".compare-result-match").exists()).toBe(false);
+    expect(wrapper.find(".compare-result-nomatch").exists()).toBe(false);
+    expect(wrapper.find(".compare-diff-table").exists()).toBe(false);
+    expect(wrapper.find(".form-error").exists()).toBe(false);
+    expect(wrapper.emitted("notify")).toBeUndefined();
+  });
+
   it("fills the target DN from the tree picker and clears a stale verdict", async () => {
     const CHILD = "cn=devs,ou=groups,dc=demo,dc=dbx";
     vi.spyOn(ldapApi, "search").mockResolvedValue({
