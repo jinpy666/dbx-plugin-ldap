@@ -24,17 +24,28 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-echo "==> frontend: install + typecheck + test + build"
-if [ ! -d frontend/node_modules ]; then
-  pnpm --dir frontend install --frozen-lockfile
-fi
-if [ "$SKIP_TESTS" = 1 ]; then
-  echo "--skip-tests: frontend typecheck + test skipped (artifacts are NOT verified)"
+# Release CI builds the target-independent UI once per plugin and stages ui/
+# here as an artifact; DBX_PREBUILT_UI=1 packages it as-is instead of rerunning
+# the frontend three-step on every platform job.
+if [ "${DBX_PREBUILT_UI:-0}" = "1" ]; then
+  if [ ! -f ui/index.html ]; then
+    echo "DBX_PREBUILT_UI=1 but ui/index.html is missing; stage the CI frontend artifact first" >&2
+    exit 1
+  fi
+  echo "==> frontend: skipped (prebuilt ui/ staged by CI)"
 else
-  pnpm --dir frontend typecheck
-  pnpm --dir frontend test
+  echo "==> frontend: install + typecheck + test + build"
+  if [ ! -d frontend/node_modules ]; then
+    pnpm --dir frontend install --frozen-lockfile
+  fi
+  if [ "$SKIP_TESTS" = 1 ]; then
+    echo "--skip-tests: frontend typecheck + test skipped (artifacts are NOT verified)"
+  else
+    pnpm --dir frontend typecheck
+    pnpm --dir frontend test
+  fi
+  pnpm --dir frontend build
 fi
-pnpm --dir frontend build
 
 echo "==> package .dbxp"
 unset DBX_PLUGIN_SDK_ROOT
