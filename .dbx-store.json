@@ -16,7 +16,7 @@
   "source": "https://github.com/jinpy666/dbx-plugin-ldap",
   "homepage": "https://github.com/jinpy666/dbx-plugin-ldap",
   "license": "MIT",
-  "releaseNotes": "安全加固版：读路径（搜索/取条目/对比/子计数）补齐裸控制字符 DN 防护；modifyDn 预检覆盖目标 DN 白名单（不再白烧确认令牌）；条目对比修复在途修改目标的过期结论、大值展示截断；UI 偏好水合超时降级（宿主桥挂起不再白屏）；持久化 map 段数上限防无限增长。注意：本版要求宿主 Host API ≥1.2（dbx ≥0.6.18），旧宿主会被兼容校验拒绝。",
+  "releaseNotes": "结果反馈升级版：搜索结果区空态升级为图标+主副文案的居中引导（未搜索与无匹配双态区分），加载态加旋转指示、错误态加警示图标；导出按钮图标尺寸对齐工具栏规范；新增副文案覆盖七语。",
   "localizations": {
     "zh-CN": {
       "name": "LDAP Studio",
