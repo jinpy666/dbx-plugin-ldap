@@ -381,8 +381,20 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .pager { display: flex; align-items: center; gap: 6px; }
 .pager button { border: 1px solid var(--border); border-radius: 4px; background: var(--background); min-height: 22px; padding: 0 8px; cursor: pointer; }
 .pager button:disabled { opacity: .4; }
+/* 导出按钮为 icon-only：lucide 默认 24px 会撑满 22px 高的按钮，钉住尺寸 */
+.pager button svg { width: 13px; height: 13px; flex: 0 0 13px; }
 .empty { display: flex; min-height: 120px; align-items: center; justify-content: center; gap: 8px; padding: 16px; color: var(--muted-foreground); font-size: 12px; text-align: center; }
 .empty.compact { min-height: 42px; padding: 8px; }
+/* 结果区 hero 空态（未搜索 / 无匹配两态共用）：图标圆底 + 主副文案纵向居中，
+   主文案提升到前景色、副文案保留 muted 引导下一步动作；flex:1 吃满结果区
+   剩余高度，让空态垂直居中而不是贴在顶部。 */
+.empty--hero { flex: 1 1 auto; flex-direction: column; gap: 10px; min-height: 220px; }
+.empty--hero .empty-icon { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 999px; background: color-mix(in srgb, var(--muted) 72%, transparent); color: var(--muted-foreground); }
+.empty--hero .empty-icon svg { width: 20px; height: 20px; }
+.empty--hero .empty-title { margin: 0; color: var(--foreground); font-size: 12px; font-weight: 500; }
+.empty--hero .empty-hint { margin: 0; max-width: 420px; font-size: 11px; line-height: 1.6; }
+.empty-spinner { width: 14px; height: 14px; flex: 0 0 14px; }
+.empty-error-icon { width: 15px; height: 15px; flex: 0 0 15px; color: var(--destructive); }
 .truncated-badge { border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border)); border-radius: 999px; padding: 1px 8px; color: var(--primary); font-size: 10px; }
 .referral-hint { margin: 0 0 4px; padding: 3px 8px; border: 1px dashed color-mix(in srgb, var(--primary) 45%, var(--border)); border-radius: 4px; color: var(--muted-foreground); font-size: 11px; overflow-wrap: anywhere; }
 

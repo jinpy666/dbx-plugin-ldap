@@ -7,7 +7,7 @@
 //   payload 按条目顺序取回原始大小写）
 // - 结果集变化时清空批量选择
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { FileDown, FileJson, FileSpreadsheet } from "@lucide/vue";
+import { CircleAlert, FileDown, FileJson, FileSpreadsheet, FolderSearch, Loader2, SearchX } from "@lucide/vue";
 import DbxAgGrid from "./DbxAgGrid.vue";
 import type { LdapEntry } from "../lib/api";
 import { extractEntryAttributeNames } from "../lib/ldapExporter";
@@ -191,12 +191,26 @@ const referralCount = computed(() => props.referrals?.length ?? 0);
     <p v-if="!loading && !error && referralCount > 0" class="referral-hint" :title="referralHint" data-qa="result-referrals">
       {{ t("result.referrals", { count: referralCount }) }}
     </p>
-    <div v-if="loading" class="empty" role="status">{{ t("search.running") }}</div>
+    <div v-if="loading" class="empty" role="status">
+      <Loader2 class="empty-spinner spinning" aria-hidden="true" />
+      <span>{{ t("search.running") }}</span>
+    </div>
     <div v-else-if="error" class="empty request-error" role="alert">
+      <CircleAlert class="empty-error-icon" aria-hidden="true" />
       <p :title="errorDetail || error">{{ error }}</p>
       <button type="button" :disabled="disabled" @click="emit('retry')">{{ t("retry") }}</button>
     </div>
-    <div v-else-if="!hasEntries" class="empty" role="status">{{ props.searched ? t("result.emptyNoMatch") : t("result.empty") }}</div>
+    <!-- 空态双形态（未搜索 vs 无匹配）升级为图标 + 主副文案的居中引导：
+         主文案保持原 key 不变（走查 P2-3 的两态区分语义不动），副文案给出
+         下一步动作建议，降低首次使用与空结果的困惑。 -->
+    <div v-else-if="!hasEntries" class="empty empty--hero" role="status">
+      <span class="empty-icon" aria-hidden="true">
+        <SearchX v-if="searched" />
+        <FolderSearch v-else />
+      </span>
+      <p class="empty-title">{{ props.searched ? t("result.emptyNoMatch") : t("result.empty") }}</p>
+      <p class="empty-hint">{{ props.searched ? t("result.emptyNoMatchHint") : t("result.emptyHint") }}</p>
+    </div>
     <div v-else class="result-table" :title="complete ? t('result.keyboardHint') : t('result.partialHint')">
       <div v-if="!complete" class="partial-results" role="status">
         <span>{{ t("result.partialHint") }}</span>

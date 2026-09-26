@@ -83,17 +83,20 @@ describe("ResultTable empty states (P2-3)", () => {
     await wrapper.find("[role='alert'] button").trigger("click");
     expect(wrapper.emitted("retry")).toHaveLength(1);
     await wrapper.setProps({ error: "", entries: [], count: 0 });
-    expect(wrapper.find("[role='status']").text()).toBe("当前搜索没有匹配的条目");
+    expect(wrapper.find(".empty-title").text()).toBe("当前搜索没有匹配的条目");
     wrapper.unmount();
   });
   it("says 'run a search first' before any search has run", () => {
     const wrapper = mountTable({ entries: [], count: 0 });
-    expect(wrapper.find(".empty").text()).toBe("暂无结果，请先执行搜索");
+    expect(wrapper.find(".empty-title").text()).toBe("暂无结果，请先执行搜索");
+    expect(wrapper.find(".empty-hint").text()).toBe("在上方设置 Base DN 与过滤器，点击「搜索」即可浏览目录内容。");
+    expect(wrapper.find(".empty-icon svg").exists()).toBe(true);
   });
 
   it("says 'no matches' after a search returned zero entries", () => {
     const wrapper = mountTable({ entries: [], count: 0, searched: true });
-    expect(wrapper.find(".empty").text()).toBe("当前搜索没有匹配的条目");
+    expect(wrapper.find(".empty-title").text()).toBe("当前搜索没有匹配的条目");
+    expect(wrapper.find(".empty-hint").text()).toBe("尝试放宽过滤器、扩大 Base DN 范围或提高数量上限。");
   });
 
   it("keeps the no-match copy after a later empty search (state is sticky until next run)", () => {
