@@ -86,12 +86,60 @@ func hasRawControlChar(dn string) bool {
 	return false
 }
 
+// normalizeLDAPWriteRDN modifyDn 的 newRDN 校验（2026-09-26 审查 H1：与
+// normalizeLDAPWriteDN 同款控制字符纵深——go-ldap ParseDN 对裸换行/空字节
+// 不报错，注入风格 RDN 会静默直达服务端并落审计/展示面；RFC 4514 转义形态
+// 不受影响）。空值报错文案与 ModifyDN 原实现一致；「恰好一个 RDN」的结构
+// 校验仍由 ldapModifyDNDestinationDN 承担。
+func normalizeLDAPWriteRDN(raw string) (string, error) {
+	rdn := strings.TrimSpace(raw)
+	if rdn == "" {
+		return "", fmt.Errorf("dn and newRdn are required")
+	}
+	if hasRawControlChar(rdn) {
+		return "", fmt.Errorf("invalid newRdn: raw control characters are not allowed (escape them per RFC 4514, e.g. \\0A for line feed)")
+	}
+	if _, err := ldap.ParseDN(rdn); err != nil {
+		return "", fmt.Errorf("parse newRdn: %w", err)
+	}
+	return rdn, nil
+}
+
+// normalizeLDAPWriteSuperior modifyDn 的 newSuperior 校验（同款控制字符
+// 纵深；空 = 沿用原父 DN，合法，返回空串）。
+func normalizeLDAPWriteSuperior(raw string) (string, error) {
+	superior := strings.TrimSpace(raw)
+	if superior == "" {
+		return "", nil
+	}
+	if hasRawControlChar(superior) {
+		return "", fmt.Errorf("invalid newSuperior: raw control characters are not allowed (escape them per RFC 4514, e.g. \\0A for line feed)")
+	}
+	if _, err := ldap.ParseDN(superior); err != nil {
+		return "", fmt.Errorf("parse newSuperior: %w", err)
+	}
+	return superior, nil
+}
+
 // NormalizeWriteDN 导出给 MCP 写工具预检（两阶段 preview 签发一次性令牌
 // 之前早失败，不白烧令牌——MCP_ACCEPTANCE §5 预检前置）：空 DN/结构非法
 // DN（含换行/空字节等注入风格输入）返回与执行层一致的错误。返回规范化
 // （TrimSpace）DN。
 func NormalizeWriteDN(rawDN string) (string, error) {
 	return normalizeLDAPWriteDN(rawDN)
+}
+
+// NormalizeWriteRDN 导出给 MCP modifyDn 预检（审查 H1）：newRDN 的控制字符
+// 纵深与执行层 normalizeLDAPWriteRDN 同源。返回规范化（TrimSpace）RDN。
+func NormalizeWriteRDN(raw string) (string, error) {
+	return normalizeLDAPWriteRDN(raw)
+}
+
+// NormalizeWriteSuperior 导出给 MCP modifyDn 预检（审查 H1）：newSuperior
+// 的控制字符纵深与执行层 normalizeLDAPWriteSuperior 同源；空输入合法（沿用
+// 原父 DN），返回空串。
+func NormalizeWriteSuperior(raw string) (string, error) {
+	return normalizeLDAPWriteSuperior(raw)
 }
 
 // EnsureWriteBaseAllowed 导出给 MCP 写工具预检：写白名单（空则回退读白
@@ -217,19 +265,27 @@ func uniqueLDAPAttributeNames(attrs []string) []string {
 	return out
 }
 
-// ldapModifyDNDestinationDN 计算 modifyDn 目标 DN（tiny-rdm :1831 原样）。
+// ldapModifyDNDestinationDN 计算 modifyDn 目标 DN（tiny-rdm :1831 原样 +
+// 审查 H1 加固：newRDN/newSuperior 走 normalizeLDAPWriteRDN/Superior 同款
+// 控制字符纵深，注入风格输入在本地三道校验前即被拒绝）。
 func ldapModifyDNDestinationDN(rawDN, rawNewRDN, rawNewSuperior string) (string, error) {
 	dn := strings.TrimSpace(rawDN)
-	newRDN := strings.TrimSpace(rawNewRDN)
-	newSuperior := strings.TrimSpace(rawNewSuperior)
-	if dn == "" || newRDN == "" {
+	newRDN, err := normalizeLDAPWriteRDN(rawNewRDN)
+	if err != nil {
+		return "", err
+	}
+	newSuperior, err := normalizeLDAPWriteSuperior(rawNewSuperior)
+	if err != nil {
+		return "", err
+	}
+	if dn == "" {
 		return "", fmt.Errorf("dn and newRdn are required")
 	}
 	parsedNewRDN, err := ldap.ParseDN(newRDN)
-	if err != nil || len(parsedNewRDN.RDNs) != 1 {
-		if err != nil {
-			return "", fmt.Errorf("parse newRdn: %w", err)
-		}
+	if err != nil {
+		return "", fmt.Errorf("parse newRdn: %w", err)
+	}
+	if len(parsedNewRDN.RDNs) != 1 {
 		return "", fmt.Errorf("newRdn must contain exactly one RDN")
 	}
 	parentDN := newSuperior
@@ -379,14 +435,27 @@ func sanitizeLDAPAttributes(profile Profile, attrs []string) []string {
 
 // filterLDAPEntryBlockedAttributes 结果侧屏蔽属性过滤（§5.2 GetEntry"屏蔽属性过滤后返回"、
 // smoke S7：结果中不含 userPassword）。返回剔除后的副本；输入 nil Attributes 时保留 nil。
+// 审查 L2：blocked 集合在顶部构建一次（原先每属性经 firstBlockedLDAPAttribute
+// 重建整张 map，O(条目×属性×表长)；Search 聚合与 search_sessions 逐页路径
+// 同一受益）。空属性名语义与 firstBlockedLDAPAttribute 一致：不算命中，保留。
 func filterLDAPEntryBlockedAttributes(profile Profile, entry LDAPEntry) LDAPEntry {
 	if entry.Attributes == nil {
 		return entry
 	}
+	blockedList := profile.BlockedAttributes
+	if len(blockedList) == 0 {
+		blockedList = DefaultLDAPBlockedAttributes()
+	}
+	blocked := make(map[string]struct{}, len(blockedList))
+	for _, attr := range blockedList {
+		blocked[strings.ToLower(strings.TrimSpace(attr))] = struct{}{}
+	}
 	out := make(map[string][]string, len(entry.Attributes))
 	for name, values := range entry.Attributes {
-		if firstBlockedLDAPAttribute(profile, []string{name}) != "" {
-			continue
+		if key := strings.ToLower(strings.TrimSpace(name)); key != "" {
+			if _, ok := blocked[key]; ok {
+				continue
+			}
 		}
 		out[name] = values
 	}

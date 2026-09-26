@@ -585,6 +585,24 @@ func TestAggregateLimit(t *testing.T) {
 	if defaultSearchAggregateLimit != 500 {
 		t.Errorf("defaultSearchAggregateLimit = %d, want 500 (§10)", defaultSearchAggregateLimit)
 	}
+	// 审查 H2：显式 sizeLimit 原样透传会让客户端聚合无顶物化进 sidecar 内存，
+	// 超上限必须 clamp（分页聚合到顶后置 truncated）。
+	if got := aggregateLimit(maxSearchAggregateLimit + 1); got != maxSearchAggregateLimit {
+		t.Errorf("aggregateLimit(%d) = %d, want clamp to %d", maxSearchAggregateLimit+1, got, maxSearchAggregateLimit)
+	}
+	if got := aggregateLimit(maxSearchAggregateLimit); got != maxSearchAggregateLimit {
+		t.Errorf("aggregateLimit(%d) = %d, want unchanged at the cap", maxSearchAggregateLimit, got)
+	}
+	if maxSearchAggregateLimit != 100000 {
+		t.Errorf("maxSearchAggregateLimit = %d, want 100000 (aligned with mcp digestScanLimit sanitize cap)", maxSearchAggregateLimit)
+	}
+	// MCP searchDigest 透传前同一 clamp（单点语义）。
+	if got := ClampSearchAggregateLimit(999999999); got != maxSearchAggregateLimit {
+		t.Errorf("ClampSearchAggregateLimit(999999999) = %d, want %d", got, maxSearchAggregateLimit)
+	}
+	if got := ClampSearchAggregateLimit(42); got != 42 {
+		t.Errorf("ClampSearchAggregateLimit(42) = %d, want 42", got)
+	}
 }
 
 func TestSchemaCacheNilSafe(t *testing.T) {

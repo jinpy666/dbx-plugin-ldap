@@ -379,10 +379,14 @@ func (s *Server) searchDigest(args map[string]any) (map[string]any, error) {
 	settings := s.settings
 	s.mu.Unlock()
 
+	// 审查 H2：显式 sizeLimit 先 clamp 到 ldapconn 聚合防御上限再透传（执行
+	// 层 aggregateLimit 还有同上限兜底，此处让 digest 的 truncated 语义与
+	// 实际生效上限单点一致）。
 	sizeLimit := intArg(args["sizeLimit"])
 	if sizeLimit <= 0 {
 		sizeLimit = settings.DigestScanLimit
 	}
+	sizeLimit = ldapconn.ClampSearchAggregateLimit(sizeLimit)
 	result, err := s.svc.Search(getContext(), ldapconn.LDAPSearchRequest{
 		ConnectionID: connectionID,
 		BaseDN:       strings.TrimSpace(stringField(args, "baseDn")),
@@ -573,6 +577,14 @@ func (s *Server) entryWrite(args map[string]any) (map[string]any, error) {
 		req.NewSuperior = strings.TrimSpace(stringField(args, "newSuperior"))
 		if req.NewRDN == "" {
 			return nil, errors.New("newRdn is required for modifyDn")
+		}
+		// 审查 H1：newRDN/newSuperior 与主 DN 同款控制字符预检（preview
+		// 签发令牌前早失败，注入风格输入不白烧令牌）。
+		if _, err := ldapconn.NormalizeWriteRDN(req.NewRDN); err != nil {
+			return nil, err
+		}
+		if _, err := ldapconn.NormalizeWriteSuperior(req.NewSuperior); err != nil {
+			return nil, err
 		}
 		destination, err := ldapconn.ModifyDNDestinationDN(dn, req.NewRDN, req.NewSuperior)
 		if err != nil {

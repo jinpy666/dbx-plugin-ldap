@@ -10,6 +10,7 @@ package mcp
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"log"
 	"sync"
 	"time"
 )
@@ -207,6 +208,8 @@ func newCursorID() string {
 	buf := make([]byte, 8)
 	if _, err := rand.Read(buf); err != nil {
 		// crypto/rand 失败极罕见；退化为时间戳（同进程内仍几乎不冲突）。
+		// 审查 L6：退化路径显式留痕，不让熵退化静默发生。
+		log.Printf("WARN: [dbx-plugin-ldap] crypto/rand unavailable, cursor ids degrade to timestamp-derived values: %v", err)
 		return "cur-" + hex.EncodeToString([]byte(time.Now().Format("150405.000000000")))
 	}
 	return "cur-" + hex.EncodeToString(buf)

@@ -79,9 +79,9 @@ type StdioServer struct {
 	bridgeEnsureWait time.Duration
 
 	mu    sync.Mutex
-	ids   map[string]string // 池化 connectionId → 参数 hash（poolHas/淘汰双向索引）
-	hash  map[string]string // 参数 hash → 池化 connectionId
-	order []string          // 参数 hash 淘汰序（FIFO）
+	ids   map[string]struct{} // 池化 connectionId 集合（poolHas 查询 + 淘汰清理；审查 L5：value 从未被读取，死存储收敛为 set）
+	hash  map[string]string   // 参数 hash → 池化 connectionId
+	order []string            // 参数 hash 淘汰序（FIFO）
 }
 
 // NewStdioServer 构造 stdio MCP 服务器（自带底层连接 service 与工具面
@@ -95,7 +95,7 @@ func NewStdioServer(version string, st *store.Store, audit func(ldapconn.AuditRe
 		svc:              svc,
 		version:          version,
 		bridgeEnsureWait: DefaultBridgeEnsureWait,
-		ids:              map[string]string{},
+		ids:              map[string]struct{}{},
 		hash:             map[string]string{},
 	}
 }
@@ -512,7 +512,7 @@ func (s *StdioServer) pooledConnectionID(inline inlineConn) (string, error) {
 		}
 	}
 	s.hash[id] = id
-	s.ids[id] = strings.TrimPrefix(id, "mcp-")
+	s.ids[id] = struct{}{}
 	s.order = append(s.order, id)
 	s.mu.Unlock()
 	for _, stale := range evicted {

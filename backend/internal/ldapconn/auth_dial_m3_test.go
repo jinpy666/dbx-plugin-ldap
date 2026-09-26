@@ -1,5 +1,6 @@
 // auth_dial_m3_test.go（X-C 路 M3）：M3 认证（external / digest_md5 /
-// ntlm / ntlm_hash / kerberos）与 TLS 审计 warning 的单测。
+// ntlm / ntlm_hash / kerberos）与 TLS 审计留痕（三值契约 + Detail 警示，
+// 审查 M1）的单测。
 //
 // 容器不可达路径（真机 KDC / AD / ldapi unix socket）按实施文档 §8 登记为
 // 集成测试（smoke_auth_test.py 的 SKIP 语义 + 后续 ldap-gssapi-test.yml），
@@ -455,7 +456,9 @@ func TestBindLDAPConnectionKerberosNoLongerUnsupported(t *testing.T) {
 	}
 }
 
-// --- TLS：InsecureSkipVerify 配置与审计 warning（实施文档 §10） ---
+// --- TLS：InsecureSkipVerify 配置与审计留痕（实施文档 §10） ---
+// 审查 M1：审计 Result 恪守 ok/denied/error 三值契约（不引入第四值），警示
+// 语义放 Detail（前端 auditFeed 把越约值折算成红色 error 误导排障）。
 
 func TestLDAPTlsConfigInsecureSkipVerify(t *testing.T) {
 	cfg, err := ldapTLSConfig(Profile{URL: "ldaps://host:636", TLSVerify: false}, true, "host")
@@ -479,20 +482,27 @@ func TestEmitTLSInsecureAudit(t *testing.T) {
 	svc := NewService()
 	svc.Audit = func(rec AuditRecord) { records = append(records, rec) }
 
-	t.Run("ldaps with tls_verify=false emits warning", func(t *testing.T) {
+	t.Run("ldaps with tls_verify=false emits contract-compliant record", func(t *testing.T) {
 		records = nil
 		svc.emitTLSInsecureAudit(Profile{ID: "c1", URL: "ldaps://host:636", TLSVerify: false})
 		if len(records) != 1 {
-			t.Fatalf("records = %+v, want 1 warning", records)
+			t.Fatalf("records = %+v, want 1 record", records)
 		}
-		if records[0].Action != "tls-insecure" || records[0].Result != "warning" {
+		if records[0].Action != "tls-insecure" {
 			t.Fatalf("record = %+v", records[0])
 		}
+		// 三值契约 + Detail 携带警示语义。
+		if records[0].Result != "ok" {
+			t.Fatalf("result = %q, want ok (three-value audit contract)", records[0].Result)
+		}
+		if !strings.Contains(records[0].Detail, "tls_verify=false") {
+			t.Fatalf("detail = %q, want the verification-skipped warning", records[0].Detail)
+		}
 	})
-	t.Run("starttls with tls_verify=false emits warning", func(t *testing.T) {
+	t.Run("starttls with tls_verify=false emits contract-compliant record", func(t *testing.T) {
 		records = nil
 		svc.emitTLSInsecureAudit(Profile{ID: "c2", URL: "ldap://host:389", UseStartTLS: true, TLSVerify: false})
-		if len(records) != 1 || records[0].Result != "warning" {
+		if len(records) != 1 || records[0].Result != "ok" || !strings.Contains(records[0].Detail, "tls_verify=false") {
 			t.Fatalf("records = %+v", records)
 		}
 	})

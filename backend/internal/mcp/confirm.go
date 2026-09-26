@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"sync"
 	"time"
 )
@@ -123,7 +124,10 @@ func (s *ConfirmStore) Consume(token, paramHash string, now time.Time) ConfirmRe
 func randomHex(n int) string {
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(cryptorand.Reader, buf); err != nil {
-		// crypto/rand 失败极罕见；退化为纳秒时间戳（防阻塞大于防猜）。
+		// crypto/rand 失败极罕见；退化为纳秒时间戳（防阻塞大于防猜）。审查
+		// L6：退化路径必须显式留痕——一次性令牌的可猜性上升对排障不可见，
+		// 静默降级等于把熵问题埋进日志之外。
+		log.Printf("WARN: [dbx-plugin-ldap] crypto/rand unavailable, one-time confirm tokens degrade to timestamp-derived values: %v", err)
 		return hex.EncodeToString([]byte(time.Now().Format("150405.000000000")))[:n*2]
 	}
 	return hex.EncodeToString(buf)

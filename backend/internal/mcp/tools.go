@@ -99,6 +99,7 @@ func allToolDefinitions() []map[string]any {
 				"attributes":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Projected attributes carried into cursor rows and samples"},
 				"distinctAttr": map[string]any{"type": "string", "description": "Aggregate the distinct values of this attribute (e.g. mail)"},
 				"format":       map[string]any{"type": "string", "enum": []string{"digest", "rows"}, "description": "digest (default) = counts + sample; rows = at most 20 rows"},
+				"sizeLimit":    map[string]any{"type": "integer", "description": "Max matched entries fetched; 0/omit = digestScanLimit setting (default 1000), hard-capped at 100000"},
 			},
 		),
 		toolEntry(

@@ -197,6 +197,8 @@ func TestServerEntryWriteRecursiveRootEdge(t *testing.T) {
 }
 
 // S-WGATE-8 modifyDn 预检：多段 newRdn 在签发令牌前拒绝（不白烧）。
+// 审查 H1：newRdn/newSuperior 的裸控制字符同款预检——go-ldap ParseDN 放行的
+// 注入风格输入在 preview 签发前本地拒绝，不白烧令牌。
 func TestServerEntryWriteModifyDNPrevalidation(t *testing.T) {
 	server := NewServer(ldapconn.NewService(), nil)
 	server.settings.ReportWaitMs = 1
@@ -209,5 +211,35 @@ func TestServerEntryWriteModifyDNPrevalidation(t *testing.T) {
 	}
 	if len(server.confirms.items) != 0 {
 		t.Fatalf("refused modifyDn must not issue tokens: %d", len(server.confirms.items))
+	}
+
+	// H1：newRdn 与 newSuperior 的裸换行/空字节在预检层拒绝（与主 DN 同款）。
+	for _, args := range []map[string]any{
+		{"connectionId": "wg-mdn", "action": "modifyDn", "dn": "uid=a,dc=example,dc=org",
+			"newRdn": "uid=b\nrm -rf /etc"},
+		{"connectionId": "wg-mdn", "action": "modifyDn", "dn": "uid=a,dc=example,dc=org",
+			"newRdn": "uid=b\x00", "newSuperior": "ou=people,dc=example,dc=org"},
+		{"connectionId": "wg-mdn", "action": "modifyDn", "dn": "uid=a,dc=example,dc=org",
+			"newRdn": "uid=b", "newSuperior": "ou=people\ndc=example,dc=org"},
+	} {
+		_, err := server.entryWrite(args)
+		if err == nil || !strings.Contains(err.Error(), "raw control characters") {
+			t.Fatalf("control-char newRdn/newSuperior must be refused before preview, got: %v (args=%v)", err, args)
+		}
+	}
+	if len(server.confirms.items) != 0 {
+		t.Fatalf("refused modifyDn must not issue tokens: %d", len(server.confirms.items))
+	}
+
+	// RFC 4514 转义形态放行本地门：modifyDn 无 token → 成功进入 preview
+	// 签发分支（拿到 confirmToken），证明本地门没有误伤转义输入。
+	preview, err := server.entryWrite(map[string]any{
+		"connectionId": "wg-mdn", "action": "modifyDn", "dn": "uid=a,dc=example,dc=org",
+		"newRdn": `uid=b\0Ac`, "newSuperior": `ou=people\0Adc=example,dc=org`})
+	if err != nil {
+		t.Fatalf("escaped RDN/superior must pass the local gate into preview, got: %v", err)
+	}
+	if preview["confirmToken"] == "" {
+		t.Fatalf("escaped RDN/superior preview must issue a confirmToken, got: %v", preview)
 	}
 }

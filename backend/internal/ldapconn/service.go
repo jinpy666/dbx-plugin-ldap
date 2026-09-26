@@ -81,6 +81,10 @@ type Service struct {
 	// 字段只为单测注入 stub——真网络拨号不可进单测；领域代码勿在别处改写
 	// （与 checkDialFn 同款约束）。
 	dedicatedDialFn func(ctx context.Context, profile Profile, target connTarget, secrets bindSecrets) (*ldap.Conn, error)
+	// connectDialFn 是 WithConn 惰性建连/断线重连（connectLocked）的拨号
+	// 函数（缺省 dialProfile，与真实建连同一套语义）。抽成字段只为单测注入
+	// stub（L1 身份双检竞态路径）；领域代码勿在别处改写（同上款约束）。
+	connectDialFn func(ctx context.Context, profile Profile, target connTarget, secrets bindSecrets) (*ldap.Conn, error)
 	// checkDialFn 是 ldap/check network 段的拨号函数（缺省 dialTransport，
 	// 与真实建连同一套 host/port/TLS 语义）。抽成字段只为单测注入 stub——
 	// 真网络拨号不可进单测；领域代码勿在别处改写。
@@ -97,6 +101,7 @@ func NewService() *Service {
 		searchSessions:  map[string]*ldapSearchSession{},
 		SchemaCache:     NewSchemaCache(0), // 0 → schema.go 默认 10 分钟 TTL
 		dedicatedDialFn: dialProfile,
+		connectDialFn:   dialProfile,
 		checkDialFn:     dialTransport,
 		checkProbeFn:    probeBindSession,
 	}
@@ -431,13 +436,24 @@ func (s *Service) EmitAudit(rec AuditRecord) {
 }
 
 // connectLocked 拨号并 bind（调用方须持 entry.mu），语义对照
-// tiny-rdm connectRuntimeLocked(:1035)。
+// tiny-rdm connectRuntimeLocked(:1035)。审查 L1：拨号前后对连接表条目做
+// 身份双检（对齐 search_sessions.go addSearchSession）——Disconnect 幂等
+// 且不等 entry.mu，本条目可能在拨号期间已被移出连接表；此时把新连接装进
+// 孤儿条目会永久泄漏 fd，改为关闭新连接并放弃重建（调用方拿到错误后对
+// （重新）注册的连接重试）。
 func (s *Service) connectLocked(ctx context.Context, entry *connEntry) error {
-	conn, err := dialProfile(ctx, entry.profile, entry.target, entry.secrets)
+	if !s.connectionEntryCurrent(entry) {
+		return errEntryDetached(entry.profile.ID)
+	}
+	conn, err := s.connectDialFn(ctx, entry.profile, entry.target, entry.secrets)
 	if err != nil {
 		entry.status = "error"
 		entry.lastError = err.Error()
 		return err
+	}
+	if !s.connectionEntryCurrent(entry) {
+		_ = conn.Close()
+		return errEntryDetached(entry.profile.ID)
 	}
 	entry.conn = conn
 	now := time.Now().UnixMilli()
@@ -449,10 +465,28 @@ func (s *Service) connectLocked(ctx context.Context, entry *connEntry) error {
 	return nil
 }
 
+// connectionEntryCurrent 身份双检（search_sessions.go addSearchSession 同款）：
+// entry 是否仍是连接表中该 id 的当前条目。
+func (s *Service) connectionEntryCurrent(entry *connEntry) bool {
+	s.mu.Lock()
+	current := s.conns[entry.profile.ID]
+	s.mu.Unlock()
+	return current == entry
+}
+
+// errEntryDetached 条目已被并发 Disconnect 移出连接表（身份双检失败）的
+// 统一错误面：指向重试而非误导为配置错误。
+func errEntryDetached(connectionID string) error {
+	return fmt.Errorf("connection %q was disconnected while connecting; retry the operation", connectionID)
+}
+
 // emitTLSInsecureAudit 在 tls_verify=false 且本次连接实际启用 TLS（ldaps 或
-// StartTLS）时发一条审计 warning（实施文档 §10：tls_verify=false 走
-// InsecureSkipVerify，审计记录一条 warning；连接级显式配置，非默认行为）。
-// 只在 dial 成功后触发，每次建连一条；target 不含凭据，仅记录 URL scheme。
+// StartTLS）时发一条审计记录（实施文档 §10：tls_verify=false 走
+// InsecureSkipVerify，审计留痕；连接级显式配置，非默认行为）。只在 dial
+// 成功后触发，每次建连一条；target 不含凭据，仅记录 URL scheme。
+// 审查 M1：Result 保持 ok/denied/error 三值契约（不引入第四值 warning——
+// 前端 auditFeed 会把越约值折算成红色 error 误导排障），"验证已关闭"的
+// 警示语义放 Detail 字段透出。
 func (s *Service) emitTLSInsecureAudit(profile Profile) {
 	if profile.TLSVerify {
 		return
@@ -468,8 +502,8 @@ func (s *Service) emitTLSInsecureAudit(profile Profile) {
 		ConnectionID: profile.ID,
 		Action:       "tls-insecure",
 		Target:       profile.URL,
-		Result:       "warning",
-		Detail:       "tls_verify=false: TLS server certificate verification skipped (InsecureSkipVerify)",
+		Result:       "ok",
+		Detail:       "warning: tls_verify=false, TLS server certificate verification skipped (InsecureSkipVerify)",
 	})
 }
 

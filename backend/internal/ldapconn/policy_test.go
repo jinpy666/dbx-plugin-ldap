@@ -83,6 +83,49 @@ func TestNormalizeLDAPWriteDN(t *testing.T) {
 	}
 }
 
+// 审查 H1：modifyDn 的 newRDN/newSuperior 与主 DN 同款裸控制字符防护
+// （go-ldap ParseDN 对裸换行/空字节静默通过，2026-09-26 实测复证）。
+func TestNormalizeLDAPWriteRDNRejectsRawControlChars(t *testing.T) {
+	if got, err := normalizeLDAPWriteRDN("  cn=new  "); err != nil || got != "cn=new" {
+		t.Fatalf("normalizeLDAPWriteRDN valid = %q, %v", got, err)
+	}
+	if _, err := normalizeLDAPWriteRDN(""); err == nil || !strings.Contains(err.Error(), "dn and newRdn are required") {
+		t.Errorf("normalizeLDAPWriteRDN empty err = %v, want required", err)
+	}
+	// 尾随/前导控制字符与主 DN 同语义：TrimSpace 归一化先行（返回的是实际
+	// 下发的值，无注入面残留），不触发控制字符拒绝。
+	if got, err := normalizeLDAPWriteRDN("cn=new\n"); err != nil || got != "cn=new" {
+		t.Fatalf("normalizeLDAPWriteRDN trailing LF = %q, %v, want trimmed passthrough", got, err)
+	}
+	// 归一化后仍含控制字符（中间位置/非空白控制符）一律拒绝。
+	for _, raw := range []string{"cn=ne\nw", "cn=new\x00", "cn=new\x7f", "cn=ne\x0bw"} {
+		if _, err := normalizeLDAPWriteRDN(raw); err == nil || !strings.Contains(err.Error(), "raw control characters") {
+			t.Errorf("normalizeLDAPWriteRDN(%q) err = %v, want raw control characters rejected", raw, err)
+		}
+	}
+	// RFC 4514 转义形态（字面反斜杠 + 0A）不是裸控制字符，放行。
+	if _, err := normalizeLDAPWriteRDN(`cn=\0Atest`); err != nil {
+		t.Errorf("normalizeLDAPWriteRDN escaped = %v, want accepted", err)
+	}
+}
+
+func TestNormalizeLDAPWriteSuperior(t *testing.T) {
+	// 空 = 沿用原父 DN，合法返回空串。
+	if got, err := normalizeLDAPWriteSuperior("   "); err != nil || got != "" {
+		t.Fatalf("normalizeLDAPWriteSuperior empty = %q, %v, want (\"\", nil)", got, err)
+	}
+	if got, err := normalizeLDAPWriteSuperior(" ou=b,dc=com "); err != nil || got != "ou=b,dc=com" {
+		t.Fatalf("normalizeLDAPWriteSuperior valid = %q, %v", got, err)
+	}
+	// 尾随换行 TrimSpace 归一化先行（同主 DN 语义）；归一化后仍含控制字符
+	//（中间换行/空字节）本地拒绝。
+	for _, raw := range []string{"ou=b\ndc=com", "ou=b,\x00dc=com", "ou=b\x7f,dc=com"} {
+		if _, err := normalizeLDAPWriteSuperior(raw); err == nil || !strings.Contains(err.Error(), "raw control characters") {
+			t.Errorf("normalizeLDAPWriteSuperior(%q) err = %v, want raw control characters rejected", raw, err)
+		}
+	}
+}
+
 func TestDNWithinBase(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -442,6 +485,9 @@ func TestLDAPModifyDNDestinationDN(t *testing.T) {
 		{"multi rdn rejected", "cn=x,dc=com", "cn=a,cn=b", "", "", "newRdn must contain exactly one RDN"},
 		{"invalid rdn", "cn=x,dc=com", "bad rdn", "", "", "parse newRdn"},
 		{"invalid superior", "cn=x,dc=com", "cn=y", "bad superior", "", "parse newSuperior"},
+		// 审查 H1：裸控制字符在结构解析前即被拒绝（go-ldap ParseDN 不报错）。
+		{"raw newline rdn", "cn=x,dc=com", "cn=y\nz", "", "", "raw control characters"},
+		{"raw newline superior", "cn=x,dc=com", "cn=y", "ou=b\ndc=com", "", "raw control characters"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

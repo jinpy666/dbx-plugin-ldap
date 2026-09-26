@@ -1379,13 +1379,14 @@ function onAssociationRelation(dn: string, attribute?: string) {
 .oid-input:disabled {
   opacity: 0.6;
 }
-/* 值类型轻校验警告（不阻断）：琥珀色调与 .command-warn 同一约定，区别于
-   .form-error 的阻断红；多属性命中时纵向排列。 */
+/* 值类型轻校验警告（不阻断）：琥珀警示语义走 --warning 令牌（审查 M2，
+   与 .command-warn 同一约定），区别于 .form-error 的阻断红；多属性命中时
+   纵向排列。 */
 .value-kind-warnings {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  color: color-mix(in srgb, var(--muted-foreground) 70%, #d97706);
+  color: color-mix(in srgb, var(--muted-foreground) 70%, var(--warning));
 }
 /* 行内「数据类型」下拉：替代 text 行的静态类型标签，胶囊外形对齐
    .attr-format-label（全局样式），宽度收紧不挤压属名列。 */

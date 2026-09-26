@@ -114,6 +114,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   stroke-width: 1.7;
 }
 .icon-neutral { color: var(--muted-foreground); }
+/* 审查 M2 豁免（2026-09-26）：.icon-* 是树节点/条目类型的装饰性分类色
+   （emerald/amber/cyan/violet/blue 各映射一种 objectClass 类别，见
+   TreeNodeIcon.vue），不是成功/警示语义状态，宿主无对应令牌可映射；
+   语义状态一律用 --success/--warning/--destructive（见 .command-warn）。 */
 .icon-emerald { color: #10b981; }
 .icon-amber { color: #d97706; }
 .icon-cyan { color: #0891b2; }
@@ -283,7 +287,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .command-import > .form-error, .command-import > .command-warn, .command-import > .command-ok { grid-column: 1 / -1; }
 .command-actions { display: flex; }
 .command-actions-legacy, .legacy-command-textarea { display: none !important; }
-.command-warn { margin: 0; color: color-mix(in srgb, var(--muted-foreground) 70%, #d97706); font-size: 10px; }
+/* 审查 M2：警示语义走 --warning 令牌（shared/frontend/themeSync.ts 兜底
+   rgb(217 119 6)，与原散装 hex #d97706 同值），不再散装色值。 */
+.command-warn { margin: 0; color: color-mix(in srgb, var(--muted-foreground) 70%, var(--warning)); font-size: 10px; }
 .command-ok { margin: 0; color: var(--muted-foreground); font-size: 10px; }
 .link-button { align-self: center; padding: 2px 4px; color: var(--primary); font-size: 11px; cursor: pointer; }
 .link-button:hover { text-decoration: underline; }

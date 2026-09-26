@@ -26,3 +26,26 @@ func TestToolDefinitionsNeverMarshalRequiredNull(t *testing.T) {
 		}
 	}
 }
+
+// 审查 H2：searchDigest 代码接受的 sizeLimit 必须在 ldap_search_digest 的
+// inputSchema 正式声明——严格宿主会丢弃未声明参数，宽松宿主照传，同一个
+// 参数两种命运（"代码接受但 schema 未声明"双态）。
+func TestSearchDigestSchemaDeclaresSizeLimit(t *testing.T) {
+	server := NewServer(ldapconn.NewService(), nil)
+	for _, tool := range server.Tools("")["tools"].([]map[string]any) {
+		if tool["name"] != "ldap_search_digest" {
+			continue
+		}
+		schema := tool["inputSchema"].(map[string]any)
+		properties := schema["properties"].(map[string]any)
+		sizeLimit, ok := properties["sizeLimit"].(map[string]any)
+		if !ok {
+			t.Fatalf("ldap_search_digest schema must declare sizeLimit; properties = %v", properties)
+		}
+		if sizeLimit["type"] != "integer" {
+			t.Errorf("sizeLimit.type = %v, want integer", sizeLimit["type"])
+		}
+		return
+	}
+	t.Fatal("ldap_search_digest not found in tool list")
+}

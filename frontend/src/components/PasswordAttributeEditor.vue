@@ -293,12 +293,13 @@ async function applyExtended() {
   right: 4px;
   transform: translateY(-50%);
 }
-/* 强度粗评（不阻断）：弱=琥珀（与值类型警告同约定），强=主题色。 */
+/* 强度粗评（不阻断）：弱=琥珀（审查 M2：警示语义走 --warning 令牌，与值
+   类型警告同约定），强=主题色。 */
 .password-strength {
   font-size: 11px;
 }
 .password-strength--weak {
-  color: #d97706;
+  color: var(--warning);
 }
 .password-strength--fair {
   color: var(--muted-foreground);

@@ -518,9 +518,9 @@ func (s *Service) deleteSubtree(ctx context.Context, connectionID, dn, source st
 		s.EmitAudit(writeAuditRecord(connectionID, "subtree_delete", dn, "error", err.Error(), source, "deleteSubtree", start))
 		return err
 	}
-	rec := writeAuditRecord(connectionID, "subtree_delete", dn, "ok", "", source, "deleteSubtree", start)
-	rec.DeletedCount = deletedCount
-	s.EmitAudit(rec)
+	// 审查 L4：成功记录收敛到 subtreeDeleteAuditRecord 单一来源（此前此处
+	// 手工重复构造同形状，helper 成了生产死代码）。
+	s.EmitAudit(subtreeDeleteAuditRecord(connectionID, dn, deletedCount, source, "deleteSubtree", start))
 	return nil
 }
 
@@ -649,15 +649,21 @@ func (s *Service) ModifyDN(ctx context.Context, req LDAPModifyDNRequest) error {
 	if err != nil {
 		return err
 	}
-	newRDN := strings.TrimSpace(req.NewRDN)
-	if newRDN == "" {
-		return fmt.Errorf("dn and newRdn are required")
+	// 审查 H1：newRDN/newSuperior 与主 DN 同款控制字符纵深（go-ldap ParseDN
+	// 不报裸换行/空字节，注入风格输入在本地门禁前即被拒绝）。
+	newRDN, err := normalizeLDAPWriteRDN(req.NewRDN)
+	if err != nil {
+		return err
+	}
+	newSuperior, err := normalizeLDAPWriteSuperior(req.NewSuperior)
+	if err != nil {
+		return err
 	}
 	if err := ensureLDAPWriteAllowed(profile, dn, nil); err != nil {
 		s.EmitAudit(writeAuditRecord(req.ConnectionID, "write-policy", dn, "denied", err.Error(), "", "modifyDn", start))
 		return err
 	}
-	destinationDN, err := ldapModifyDNDestinationDN(dn, newRDN, req.NewSuperior)
+	destinationDN, err := ldapModifyDNDestinationDN(dn, newRDN, newSuperior)
 	if err != nil {
 		return err
 	}
@@ -666,7 +672,7 @@ func (s *Service) ModifyDN(ctx context.Context, req LDAPModifyDNRequest) error {
 		return err
 	}
 	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
-		return conn.ModifyDN(ldap.NewModifyDNRequest(dn, newRDN, req.DeleteOldRDN, strings.TrimSpace(req.NewSuperior)))
+		return conn.ModifyDN(ldap.NewModifyDNRequest(dn, newRDN, req.DeleteOldRDN, newSuperior))
 	})
 	if err != nil {
 		s.EmitAudit(writeAuditRecord(req.ConnectionID, "modify-dn", dn, "error", err.Error(), req.Source, "modifyDn", start))
@@ -901,10 +907,27 @@ func (s *Service) schemaCache() *SchemaCache {
 	return s.SchemaCache
 }
 
-// aggregateLimit 聚合上限：sizeLimit 显式给定时用之，否则缺省 500（§10）。
+// maxSearchAggregateLimit 搜索聚合的防御硬上限（2026-09-26 审查 H2：显式
+// sizeLimit 原样透传会让客户端聚合无顶物化进 sidecar 内存；对照 count=5000
+// 与子树删除=1000 都有顶，主搜索也必须有。数值对齐 mcp settings
+// digestScanLimit 的 sanitize 上限 10 万）。超出即 clamp，分页聚合到顶后
+// 以 truncated 标志透出。
+const maxSearchAggregateLimit = 100000
+
+// ClampSearchAggregateLimit 导出聚合上限 clamp 给 MCP searchDigest（显式
+// sizeLimit 透传前 min(值, 上限)，消除"代码接受但无界"面）。
+func ClampSearchAggregateLimit(sizeLimit int) int {
+	if sizeLimit > maxSearchAggregateLimit {
+		return maxSearchAggregateLimit
+	}
+	return sizeLimit
+}
+
+// aggregateLimit 聚合上限：sizeLimit 显式给定时用之（防御 clamp 到
+// maxSearchAggregateLimit，审查 H2），否则缺省 500（§10）。
 func aggregateLimit(sizeLimit int) int {
 	if sizeLimit > 0 {
-		return sizeLimit
+		return ClampSearchAggregateLimit(sizeLimit)
 	}
 	return defaultSearchAggregateLimit
 }

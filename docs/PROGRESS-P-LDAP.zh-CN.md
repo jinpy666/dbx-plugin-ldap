@@ -1796,3 +1796,41 @@ bookmarks 降级 describe 删除 -4）。真机复验建议随下一次 .dbxp �
   JSON 编码；opaque origin 不可用时退化内存），dev/`?mock=1` 恢复刷新持久化，
   walkthrough 断言无需改动；修正后 walkthrough 重跑 **35/35 全过**（exit 0），vitest 1241 用例不受影响。
 
+
+## 2026-09-26 审查修复轮：家族代码审查（shared/REVIEW-FAMILY-2026-09-26）ldap 9 项收口
+
+> 范围：backend（Go）7 项 + frontend 1 项 + MCP schema 1 项；直接在 main 工作区
+> 修改，不涉及 shared/frontend/ 与宿主。审查依据：`shared/REVIEW-FAMILY-2026-09-26.zh-CN.md`
+> （LDAP-H1/H2、LDAP-M1/M2、LDAP-L1/L2/L4/L5/L6）。
+
+| 项 | 修复 | 关键落点 |
+| --- | --- | --- |
+| H1 | modifyDn 的 newRDN/newSuperior 补裸控制字符防护（`hasRawControlChar` 纵深，与主 DN 同款；go-ldap ParseDN 对裸换行/空字节静默通过已实测复证）。收敛为 `normalizeLDAPWriteRDN/normalizeLDAPWriteSuperior`，`ldapModifyDNDestinationDN` 内部统一走 helper；MCP 预检新增导出 `NormalizeWriteRDN/NormalizeWriteSuperior`，preview 签发令牌前早失败 | policy.go、operations.go ModifyDN、mcp/server.go entryWrite(modifydn) |
+| H2 | 搜索聚合防御硬上限 `maxSearchAggregateLimit=100000`（对齐 mcp digestScanLimit sanitize 上限），超出 clamp、分页聚合到顶置 truncated（既有 pagedSearchEntries 语义自动生效）；searchDigest 对显式 sizeLimit 透传前 `ClampSearchAggregateLimit` 单点 clamp；tools.go 的 ldap_search_digest schema 正式声明 sizeLimit（消除"代码接受但 schema 未声明"双态） | operations.go、mcp/server.go、mcp/tools.go |
+| M1 | tls-insecure 审计 `result:"warning"` → `"ok"`，警示语义移入 Detail（"warning: tls_verify=false, …"），恪守 ok/denied/error 三值契约（族内统一决策不引入第四值）；前端 auditFeed.ts 不动 | service.go emitTLSInsecureAudit |
+| M2 | 警示语义散装 hex 改令牌：.command-warn、.value-kind-warnings 改 `color-mix(… var(--warning))`，.password-strength--weak 改 `var(--warning)`（themeSync.ts 兜底 rgb(217 119 6) 与原 #d97706 同值）；.icon-emerald/.icon-amber 属树节点类型装饰色（非状态语义），集中加豁免注释 | style.css、EntryEditorDialog.vue、PasswordAttributeEditor.vue |
+| L1 | WithConn/connectLocked 的 Disconnect 竞态 fd 泄漏：拨号前后对 `s.conns[id] == entry` 身份双检（对齐 search_sessions.go addSearchSession），身份已变则关闭刚拨的连接并返回可重试错误；新增 `connectDialFn` 注入点（对齐 dedicatedDialFn/checkDialFn 单测约束）供竞态路径桩测 | service.go、新增 service_connect_test.go |
+| L2 | filterLDAPEntryBlockedAttributes 顶部一次构建 blocked 集合（原每属性重建整张 map，O(条目×属性×表长)）；Search 聚合与 search_sessions 逐页路径同受益；空属性名语义保持与 firstBlockedLDAPAttribute 一致 | policy.go |
+| L4 | deleteSubtree 成功审计收敛到既有 `subtreeDeleteAuditRecord` helper（此前手工重复构造同形状，helper 成生产死代码） | operations.go |
+| L5 | stdio 内联池 `ids map[string]string` → `map[string]struct{}`（value `TrimPrefix` 死存储，poolHas 只查键、淘汰走 s.hash） | mcp/stdio.go |
+| L6 | randomHex（confirm token）与 newCursorID 的 crypto/rand 失败退化路径补 `log.Printf` WARN（令牌可猜性上升对排障可见），签名不变 | mcp/confirm.go、mcp/cursor.go |
+
+### 测试
+
+- 新增/扩展：policy_test.go（RDN/newSuperior 控制字符矩阵 + 尾随换行 TrimSpace
+  语义 + 转义形态放行 + destination DN 两 case）、operations_test.go（aggregateLimit
+  clamp 边界 + ClampSearchAggregateLimit + 上限值锁定）、auth_dial_m3_test.go（M1
+  三值契约 + Detail 断言重写）、tools_schema_test.go（sizeLimit schema 声明红线）、
+  writegate_test.go（S-WGATE-8 扩展：newRdn/newSuperior 裸换行/空字节预检拒绝
+  不烧令牌 + 转义形态进入 preview 签发）、service_connect_test.go（L1 三场景：
+  正常建连安装 / 拨号前已脱离不拨号 / 拨号后脱离关闭新连接，pipe EOF 证 fd 不泄漏）。
+- 行为语义澄清（测试如实锁定）：newRDN/newSuperior 尾随/前导控制字符与主 DN
+  一致走 TrimSpace 归一化先行（实际下发的是归一化值，无注入面残留）；归一化
+  后仍含控制字符（中间换行/空字节/0x7f）一律拒绝；RFC 4514 转义形态不受影响。
+
+### 验证
+
+- `cd backend && go build ./... && go vet ./... && gofmt -l .`：零输出全净。
+- `go test ./...`：5 包全绿（main/ldapconn/ldapgssapi/lifecycle/mcp/store）。
+- 前端 `pnpm typecheck` 通过、`pnpm test` 86 文件/1241 用例全绿（M2 为纯 CSS，
+  无逻辑面变化）。
