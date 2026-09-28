@@ -130,52 +130,92 @@ func (server *Server) Serve() error {
 		return errors.New("plugin id is invalid")
 	}
 	emitter := &Emitter{writer: server.output, mutex: &sync.Mutex{}}
-	scanner := bufio.NewScanner(server.input)
+	// 单一 bufio.Reader 贯穿整个 Serve：跳过超长行后重建 Scanner 时，reader
+	// 缓冲里已预读的后续请求字节不丢（临时 reader 的预读会随对象被丢弃）。
+	reader := bufio.NewReader(server.input)
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), maxJSONBytes)
 	var workers sync.WaitGroup
-	for scanner.Scan() {
-		payload := bytes.TrimSpace(scanner.Bytes())
-		if len(payload) == 0 {
-			continue
-		}
-		request, err := decodeRequest(payload)
-		if err != nil {
-			fmt.Fprintf(server.errors, "[dbx-plugin-sdk-go] %v\n", err)
-			continue
-		}
-		if request.Method == "plugin/initialize" {
-			if len(request.ID) == 0 {
-				fmt.Fprintln(server.errors, "[dbx-plugin-sdk-go] plugin/initialize must be a request")
+	for {
+		for scanner.Scan() {
+			payload := bytes.TrimSpace(scanner.Bytes())
+			if len(payload) == 0 {
 				continue
 			}
-			result, pluginError := server.initialize(request.Params)
-			if writeError := emitter.respond(request.ID, result, pluginError); writeError != nil {
-				return errors.New(writeError.Message)
+			request, err := decodeRequest(payload)
+			if err != nil {
+				fmt.Fprintf(server.errors, "[dbx-plugin-sdk-go] %v\n", err)
+				continue
 			}
+			if request.Method == "plugin/initialize" {
+				if len(request.ID) == 0 {
+					fmt.Fprintln(server.errors, "[dbx-plugin-sdk-go] plugin/initialize must be a request")
+					continue
+				}
+				result, pluginError := server.initialize(request.Params)
+				if writeError := emitter.respond(request.ID, result, pluginError); writeError != nil {
+					return errors.New(writeError.Message)
+				}
+				continue
+			}
+			workers.Add(1)
+			go func(request protocolRequest) {
+				defer workers.Done()
+				// handler panic 不得杀死插件进程（全连接被拆）：恢复后回
+				// -32603 并继续服务后续请求。
+				defer func() {
+					if r := recover(); r != nil {
+						fmt.Fprintf(server.errors, "[dbx-plugin-sdk-go] recovered handler panic: %v\n", r)
+						if len(request.ID) > 0 {
+							_ = emitter.respond(request.ID, nil, NewError(-32603, fmt.Sprintf("Internal error: %v", r)))
+						}
+					}
+				}()
+				result, pluginError := server.handler.Handle(
+					RequestContext{RequestID: request.ID, Driver: request.Driver},
+					request.Method,
+					request.Params,
+					emitter,
+				)
+				if len(request.ID) == 0 {
+					if pluginError != nil {
+						fmt.Fprintf(server.errors, "[dbx-plugin-sdk-go] %s\n", pluginError.Message)
+					}
+					return
+				}
+				if writeError := emitter.respond(request.ID, result, pluginError); writeError != nil {
+					fmt.Fprintf(server.errors, "[dbx-plugin-sdk-go] failed to write response: %s\n", writeError.Message)
+				}
+			}(request)
+		}
+		err := scanner.Err()
+		if err == nil {
+			break
+		}
+		if errors.Is(err, bufio.ErrTooLong) {
+			// 单行超限：跳过该行剩余部分后重建 Scanner 继续服务（对照
+			// mcp/stdio.go 的「拒绝该行、进程存活」语义），宿主侧失控
+			// 输出不再拆掉插件。
+			fmt.Fprintf(server.errors, "[dbx-plugin-sdk-go] request line exceeds %d bytes; line skipped\n", maxJSONBytes)
+			if skipErr := skipRemainderOfLine(reader); skipErr != nil {
+				break
+			}
+			scanner = bufio.NewScanner(reader)
+			scanner.Buffer(make([]byte, 64*1024), maxJSONBytes)
 			continue
 		}
-		workers.Add(1)
-		go func(request protocolRequest) {
-			defer workers.Done()
-			result, pluginError := server.handler.Handle(
-				RequestContext{RequestID: request.ID, Driver: request.Driver},
-				request.Method,
-				request.Params,
-				emitter,
-			)
-			if len(request.ID) == 0 {
-				if pluginError != nil {
-					fmt.Fprintf(server.errors, "[dbx-plugin-sdk-go] %s\n", pluginError.Message)
-				}
-				return
-			}
-			if writeError := emitter.respond(request.ID, result, pluginError); writeError != nil {
-				fmt.Fprintf(server.errors, "[dbx-plugin-sdk-go] failed to write response: %s\n", writeError.Message)
-			}
-		}(request)
+		return err
 	}
 	workers.Wait()
-	return scanner.Err()
+	return nil
+}
+
+// skipRemainderOfLine 丢弃超长行的剩余字节（到换行为止）。必须在贯穿 Serve
+// 的同一 bufio.Reader 上执行：Scanner 在 ErrTooLong 时已把行前缀读进自身
+// 缓冲，行尾仍留在 input 中；reader 的预读由重建的 Scanner 继续消费。
+func skipRemainderOfLine(reader *bufio.Reader) error {
+	_, err := reader.ReadString('\n')
+	return err
 }
 
 func (server *Server) initialize(params json.RawMessage) (any, *PluginError) {

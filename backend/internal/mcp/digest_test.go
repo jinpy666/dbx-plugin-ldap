@@ -168,3 +168,16 @@ func TestBuildDigestSearchAttrs(t *testing.T) {
 		t.Fatalf("plain projection mismatch: %v", plain)
 	}
 }
+
+// Go 的 strings.ToLower 是简单映射：İ（U+0130，2B）→ i（1B）会缩短字节
+// 长度。旧实现「后缀判定在折叠串、切片按 len(base) 回原串」在折叠缩短的
+// 尾部会把 rest 切多一个字节，孙辈聚合键被截断（uid=x 只剩 O）。切片必须
+// 映射回原串 rune 边界。
+func TestSubtreeKeyUnicodeGrowthAlignment(t *testing.T) {
+	base := "ou=i,dc=a" // İ 折叠后的形态
+	dn := "uid=y,uid=x,OU=\u0130,DC=A"
+	want := "uid=x," + base
+	if got := subtreeKey(dn, base); got != want {
+		t.Fatalf("unicode fold shrinks tail: subtree key got %q, want %q", got, want)
+	}
+}

@@ -168,24 +168,44 @@ func ProjectEntry(entry ldapconn.LDAPEntry, width int) map[string]any {
 	return map[string]any{"dn": entry.DN, "attributes": attributes}
 }
 
-// subtreeKey 返回 entry.DN 相对 base 的直接子 DN（`uid=x,ou=people,dc=a` →
-// `ou=people,dc=a`）；base 为空或 DN 不在 base 内时返回 DN 本身，base 自身
-// 条目归入 base 键。
+// subtreeKey 返回 entry.DN 相对 base 的直接子 DN（base=dc=a 时
+// `uid=x,ou=people,dc=a` → `ou=people,dc=a`）；base 为空或 DN 不在 base 内
+// 时返回 DN 本身，base 自身条目归入 base 键。
+//
+// 匹配沿用 strings.ToLower 语义，但切片必须映射回原串 rune 边界：ToLower
+// 的简单映射可缩短字节长度（U+0130 → i，2B→1B），“后缀判定在折叠串、
+// 切片按 len(base) 回原串”会把 rest 切多、聚合键截断。foldWithOffsets 记录
+// 每个 rune 的原串偏移，切点恒落在 rune 边界。
 func subtreeKey(dn, base string) string {
 	dn = strings.TrimSpace(dn)
 	if base == "" {
 		return dn
 	}
-	lowered := strings.ToLower(dn)
-	if lowered == base {
+	lowered, offsets := foldWithOffsets(dn)
+	if lowered == strings.ToLower(base) {
 		return dn
 	}
-	if !strings.HasSuffix(lowered, ","+base) {
+	suffix := "," + strings.ToLower(base)
+	if !strings.HasSuffix(lowered, suffix) {
 		return dn
 	}
-	rest := dn[:len(dn)-len(base)-1]
+	rest := dn[:offsets[len(lowered)-len(suffix)]]
 	if index := strings.Index(rest, ","); index >= 0 {
 		return rest[index+1:] + "," + base
 	}
 	return dn // base 直接子节点
+}
+
+// foldWithOffsets 返回 s 的 ToLower 折叠串，以及折叠串每个 rune 起点
+// 对应的原串字节偏移（末位为 len(s)）。折叠逐 rune 用 strings.ToLower
+// 复刻原串整体 ToLower 的语义。
+func foldWithOffsets(s string) (string, []int) {
+	var b strings.Builder
+	offsets := make([]int, 0, len(s)+1)
+	for index, r := range s {
+		offsets = append(offsets, index)
+		b.WriteString(strings.ToLower(string(r)))
+	}
+	offsets = append(offsets, len(s))
+	return b.String(), offsets
 }
