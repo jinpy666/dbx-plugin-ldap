@@ -16,7 +16,7 @@
   "source": "https://github.com/jinpy666/dbx-plugin-ldap",
   "homepage": "https://github.com/jinpy666/dbx-plugin-ldap",
   "license": "MIT",
-  "releaseNotes": "结果反馈升级版：搜索结果区空态升级为图标+主副文案的居中引导（未搜索与无匹配双态区分），加载态加旋转指示、错误态加警示图标；导出按钮图标尺寸对齐工具栏规范；新增副文案覆盖七语。",
+  "releaseNotes": "评审加固版：MCP stdio 传输边界加固（超长请求行边读边限、在途请求并发上限、确认令牌随机源不可用时拒绝签发），修复 mcp-settings 并发持久化竞态，审计记录落盘 Detail 警示原文，消除搜索会话锁级联阻塞；前端 LDIF 导入增加连接切换守卫与中断提示，工作集页签去重，修复三处事件监听器泄漏，树会话过期文案接入 i18n，连接面板时间格式跟随工作台语言。",
   "localizations": {
     "zh-CN": {
       "name": "LDAP Studio",
