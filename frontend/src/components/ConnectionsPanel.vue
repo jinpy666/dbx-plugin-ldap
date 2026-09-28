@@ -7,7 +7,7 @@ import { getLdapConnectionId, ldapApi, type LdapConnectionStatus } from "../lib/
 import { describeLdapCheckResult } from "../lib/ldapCheck";
 import { friendlyLdapError } from "../lib/ldapErrors";
 import { useModalA11y } from "../lib/modal";
-import { t } from "../lib/i18n";
+import { t, workbenchLocale } from "../lib/i18n";
 
 const props = defineProps<{
   open: boolean;
@@ -122,7 +122,8 @@ function formatTime(value?: number | string): string {
   if (value === undefined || value === null || value === "") return "";
   const parsed = typeof value === "number" ? value : Date.parse(value);
   if (!Number.isFinite(parsed)) return String(value);
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "medium" }).format(new Date(parsed));
+  // 跟随工作台 locale（与 SearchForm 时间列一致），不用浏览器默认 locale。
+  return new Intl.DateTimeFormat(workbenchLocale.value, { dateStyle: "short", timeStyle: "medium" }).format(new Date(parsed));
 }
 
 watch(

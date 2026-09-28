@@ -344,7 +344,7 @@ async function loadMore(node: DnTreeNode) {
   if (!childSessions.get(nodeSessionKey(node))?.hasMore) {
     // Do not quietly mark a partial node as complete if the server session was
     // lost.  The visible `+` badge remains and the user can refresh explicitly.
-    treeError.value = "The child search session expired; refresh this branch to continue.";
+    treeError.value = t("tree.childSessionExpired");
     treeErrorRaw.value = "";
     return;
   }

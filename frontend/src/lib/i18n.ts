@@ -122,6 +122,7 @@ export const messages = {
         copyFailedList: "Copy failed list",
         retryFailed: "Retry failed",
         changetypeRejected: "LDIF change records (changetype) are not supported here — import add-only LDIF",
+        interrupted: "Connection changed mid-import — the remaining entries were not sent.",
       },
 
       wizard: {
@@ -707,6 +708,7 @@ export const messages = {
         copyFailedList: "复制失败清单",
         retryFailed: "重试失败项",
         changetypeRejected: "不支持 LDIF 变更记录（changetype）——请导入仅包含新增条目的 LDIF",
+        interrupted: "导入过程中连接已切换——剩余条目未发送。",
       },
 
       wizard: {
@@ -1292,6 +1294,7 @@ export const messages = {
         copyFailedList: "複製失敗清單",
         retryFailed: "重試失敗項",
         changetypeRejected: "不支援 LDIF 變更記錄（changetype）——請匯入僅包含新增條目的 LDIF",
+        interrupted: "匯入過程中連線已切換——剩餘條目未送出。",
       },
 
       wizard: {
@@ -1877,6 +1880,7 @@ export const messages = {
         copyFailedList: "Copiar lista de errores",
         retryFailed: "Reintentar las que fallaron",
         changetypeRejected: "No se admiten registros de cambios LDIF (changetype): importa un LDIF de solo altas",
+        interrupted: "La conexión cambió durante la importación: las entradas restantes no se enviaron.",
       },
 
       wizard: {
@@ -2462,6 +2466,7 @@ export const messages = {
         copyFailedList: "Copia l'elenco delle voci non riuscite",
         retryFailed: "Riprova le non riuscite",
         changetypeRejected: "I record di modifica LDIF (changetype) non sono supportati: importa un LDIF di sole aggiunte",
+        interrupted: "La connessione è cambiata durante l'importazione: le voci rimanenti non sono state inviate.",
       },
 
       wizard: {
@@ -3047,6 +3052,7 @@ export const messages = {
         copyFailedList: "失敗一覧をコピー",
         retryFailed: "失敗分を再試行",
         changetypeRejected: "LDIF の変更レコード（changetype）には対応していません。追加のみの LDIF を取り込んでください",
+        interrupted: "インポート中に接続が切り替わりました。残りのエントリは送信されていません。",
       },
 
       wizard: {
@@ -3632,6 +3638,7 @@ export const messages = {
         copyFailedList: "Copiar lista de falhas",
         retryFailed: "Tentar novamente as que falharam",
         changetypeRejected: "Registros de alteração LDIF (changetype) não são suportados — importe um LDIF somente com inclusões",
+        interrupted: "A conexão mudou durante a importação — as entradas restantes não foram enviadas.",
       },
 
       wizard: {

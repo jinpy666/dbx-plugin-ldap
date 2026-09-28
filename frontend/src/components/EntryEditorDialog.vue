@@ -832,14 +832,19 @@ function onDocumentKeydown(event: KeyboardEvent) {
   closeRowMenu(true);
 }
 
+// timer 必须保存并在卸载时清除（审计 K-8 同款），否则挂载同 tick 卸载时
+// 监听器会随回调"复活"泄漏。
+let menuListenerTimer = 0;
+
 onMounted(() => {
-  window.setTimeout(() => {
+  menuListenerTimer = window.setTimeout(() => {
     document.addEventListener("click", onDocumentClick);
     document.addEventListener("keydown", onDocumentKeydown);
   }, 0);
 });
 
 onBeforeUnmount(() => {
+  window.clearTimeout(menuListenerTimer);
   document.removeEventListener("click", onDocumentClick);
   document.removeEventListener("keydown", onDocumentKeydown);
 });

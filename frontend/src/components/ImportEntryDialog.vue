@@ -10,7 +10,7 @@
 // 汇总为失败清单，支持复制（DN\t错误）与只重跑失败项。
 import { computed, ref, watch } from "vue";
 import { FileUp, ListTree, X } from "@lucide/vue";
-import { ldapApi } from "../lib/api";
+import { ldapApi, getLdapConnectionId } from "../lib/api";
 import { parseEntriesFromText, type ParsedEntryDraft } from "../lib/entryFormats";
 import { splitFirstDnRdn, joinRdnAndParent, isLikelyDn } from "../lib/dn";
 import { friendlyLdapError } from "../lib/ldapErrors";
@@ -155,11 +155,19 @@ function finalDn(entry: ParsedEntryDraft): string {
 
 // 逐条执行导入（仅跑 indices 指定的行，全量与重试共用）：
 // changetype 变更记录与缺 DN 在发送前标记失败，不发请求；ldap 错误经
-// friendlyLdapError 转友好文案存入对应行。
-async function runEntries(indices: number[]): Promise<{ ok: number; failed: number }> {
+// friendlyLdapError 转友好文案存入对应行。连接守卫（对齐 App 批量删除的
+// 审计 L-1 模式）：entryAdd 经 lib/api 的模块级 currentConnectionId 取当前
+// 连接，循环中途宿主切换连接时剩余行保持待导入、不再发往新连接，并通知中断。
+async function runEntries(indices: number[]): Promise<{ ok: number; failed: number; interrupted: boolean }> {
   let ok = 0;
   let failed = 0;
+  let interrupted = false;
+  const conn = getLdapConnectionId();
   for (const index of indices) {
+    if (getLdapConnectionId() !== conn) {
+      interrupted = true;
+      break;
+    }
     const entry = entries.value[index];
     const state = rowStates.value[index];
     if (!entry || !state) continue;
@@ -188,7 +196,7 @@ async function runEntries(indices: number[]): Promise<{ ok: number; failed: numb
       failed++;
     }
   }
-  return { ok, failed };
+  return { ok, failed, interrupted };
 }
 
 // 汇总取自逐条状态（而非单次运行计数）：重试后展示的是全部条目的最新成败。
@@ -207,6 +215,9 @@ async function finishRun(indices: number[]) {
   try {
     const run = await runEntries(indices);
     resultSummary.value = summarizeStates();
+    if (run.interrupted) {
+      emit("notify", t("ldap.importEntry.interrupted"));
+    }
     // 复用 imported 事件：App 侧按需刷新树并反馈汇总（重试成功同样要刷新）。
     emit("imported", run.ok, run.failed);
   } finally {

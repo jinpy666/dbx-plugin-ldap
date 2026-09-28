@@ -49,6 +49,7 @@ import type { LdapSchema } from "./lib/newEntryTemplates";
 import { parseAuditEvent, pushAuditItem, type AuditFeedItem } from "./lib/auditFeed";
 import { setupTooltipLayer, teardownTooltipLayer } from "./lib/tooltip";
 import { useUiIntent, type UiIntentOutcome, type UiIntentSummary } from "../../shared/frontend/uiIntent";
+import { applyAppearanceColorVars, subscribeHostEnvironment } from "../../shared/frontend/hostThemeRuntime";
 
 interface ConnectionSummary {
   name?: string;
@@ -64,7 +65,6 @@ interface ConnectionSummary {
 const hostContext = ref<Record<string, unknown>>({});
 const appearance = ref(resolveAppearance());
 const ready = ref(false);
-const busy = ref(false);
 
 const treeRef = ref<InstanceType<typeof DnTree>>();
 const searchRef = ref<InstanceType<typeof SearchForm>>();
@@ -135,6 +135,7 @@ const contextBaseDn = computed(() => {
 const identityText = computed(() => (initError.value ? t("connectionPlaceholder") : connectionIdentityText(connection.value, connectionId.value)));
 const toolbarStyle = computed(() => toolbarTint(connection.value.color, appearance.value.colorScheme));
 
+// 颜色变量 → 宿主令牌名探测/回退循环收敛到 shared 单点（X-P4，kafka 策略为准）。
 function applyAppearance(next?: DbxPluginAppearanceInput | null) {
   // 宿主可能缺字段（1.0 部分下发、1.1 theme 通道只带颜色令牌），按 DBX 规范色板补齐。
   const resolved = resolveAppearance(next);
@@ -142,14 +143,7 @@ function applyAppearance(next?: DbxPluginAppearanceInput | null) {
   const root = document.documentElement;
   root.dataset.theme = resolved.colorScheme;
   root.style.colorScheme = resolved.colorScheme;
-  root.style.setProperty("--background", resolved.colors.background);
-  root.style.setProperty("--foreground", resolved.colors.foreground);
-  root.style.setProperty("--muted", resolved.colors.muted);
-  root.style.setProperty("--muted-foreground", resolved.colors.mutedForeground);
-  root.style.setProperty("--accent", resolved.colors.accent);
-  root.style.setProperty("--accent-foreground", resolved.colors.accentForeground);
-  root.style.setProperty("--border", resolved.colors.border);
-  root.style.setProperty("--destructive", resolved.colors.destructive);
+  applyAppearanceColorVars(root, resolved.colors);
   root.style.setProperty("--popover", DBX_POPOVER[resolved.colorScheme]);
   // 字体不在此内联回写：main.ts 安装的宿主令牌桥已把 --ui-font-family /
   // --mono-font-family 声明为宿主 --font-sans / --font-mono 的 var() 引用，
@@ -326,11 +320,20 @@ const disposeEntryEventWire = onEntryEvent((event) => {
     const base = (event.kind === "moved" && event.previousDn ? event.previousDn : event.dn).toLowerCase();
     return key === base || (event.descendants === true && key.endsWith(`,${base}`));
   };
-  openTabs.value = openTabs.value.flatMap((tab) => {
-    if (!affects(tab)) return [tab];
-    if (event.kind === "moved") return [event.dn];
-    return [];
-  });
+  // moved 命中多个已打开页签（如父子同时打开）会映射出同一个新 DN；移动
+  // 目标本身也可能是已打开页签。统一按小写 DN 去重，避免 openTabs 出现
+  // 重复项（EntryEditorDialog 的 v-for :key="dn" 会撞重复 key）。
+  const seen = new Set<string>();
+  const next: string[] = [];
+  for (const tab of openTabs.value) {
+    if (affects(tab) && event.kind !== "moved") continue;
+    const dn = affects(tab) ? event.dn : tab;
+    const key = dn.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(dn);
+  }
+  openTabs.value = next;
   if (event.kind === "changed") return;
   const affected = (event.kind === "moved" && event.previousDn ? event.previousDn : event.dn).toLowerCase();
   if (entryReplayConnectionId !== event.connectionId) {
@@ -429,7 +432,7 @@ const uiIntentHandlers = {
     return { status: "rejected", reason: t("intent.unknownPanel") };
   },
   search: async (params: Record<string, unknown>): Promise<UiIntentOutcome> => {
-    if (!searchRef.value || busy.value || searching.value) {
+    if (!searchRef.value || searching.value) {
       return { status: "rejected", reason: "search form is not ready" };
     }
     const model = searchRef.value.applyIntentSearch(params);
@@ -455,9 +458,8 @@ const uiIntentHandlers = {
 const uiIntent = useUiIntent("ldap", uiIntentHandlers);
 reportSnapshot = (payload) => uiIntent.reportSnapshot(payload);
 
-const unsubscribeAppearance: Array<() => void> = [];
-const unsubscribeLocale: Array<() => void> = [];
-const unsubscribeContext: Array<() => void> = [];
+// X-P2/P3/P4 收敛：宿主环境订阅聚合句柄（shared/frontend/hostThemeRuntime）。
+const unsubscribeEnvironment: Array<() => void> = [];
 const unsubscribeEvent: Array<() => void> = [];
 
 // -- 树/搜索联动与结果表批量操作 -------------------------------------------------
@@ -486,7 +488,7 @@ function searchMembersAt(dn: string) {
 // 与确认文案一致——仍有子条目的条目会失败并计入 failed，不做半递归的意外删除。
 // 成功条目经事件总线失效缓存并（防抖合并后）重放受影响的结果行。
 async function onBatchDelete(dns: string[]) {
-  if (dns.length === 0 || busy.value || !guardWrite()) return;
+  if (dns.length === 0 || !guardWrite()) return;
   clearBanner();
   // 连接守卫（审计 L-1）：循环中途切换连接就中止，剩余 DN 不再发往新连接；
   // 汇总通知按实际成功/失败数展示，用户可感知中途停止。
@@ -512,7 +514,7 @@ async function onBatchDelete(dns: string[]) {
 // 同为条目顺序的原始大小写 DN）：空数组忽略，只负责打开确认框；真正的移动
 // 在 onBatchMoveConfirm 执行，便于单测与防重入。
 function onBatchMove(dns: string[]) {
-  if (dns.length === 0 || busy.value || !guardWrite()) return;
+  if (dns.length === 0 || !guardWrite()) return;
   batchMoveDns.value = dns;
   batchMoveOpen.value = true;
 }
@@ -523,7 +525,7 @@ function onBatchMove(dns: string[]) {
 // 单条失败计数不中断；成功条目经事件总线失效详情缓存（changed 不重放结果表——
 // 被修改的行仍有效，双击可打开最新值）。
 function onBatchModify(dns: string[]) {
-  if (dns.length === 0 || busy.value || !guardWrite()) return;
+  if (dns.length === 0 || !guardWrite()) return;
   batchModifyDns.value = dns;
   batchModifyOpen.value = true;
 }
@@ -794,10 +796,9 @@ function openRecent(dn: string) {
 // -- 宿主桥与初始化 --------------------------------------------------------------
 
 function handleEvent(event: DbxPluginEvent) {
-  if (event.type === "env") {
-    if (typeof event.locale === "string") setWorkbenchLocale(event.locale || "zh-CN");
-    return;
-  }
+  // env（locale/theme）由 shared/frontend/hostThemeRuntime 的订阅分发；
+  // 此处只做窄化排除，后端事件走下方 method 分派。
+  if (event.type === "env") return;
   if (event.method === "ldap/audit") {
     const params = event.params || {};
     // 数据面：进入最近操作面板（denied/error 高亮）。ok 结果不再弹通知——
@@ -830,15 +831,19 @@ async function initialize() {
   setWorkbenchLocale(api.locale || "zh-CN");
   if (api.appearance) applyAppearance(api.appearance);
   else if (isDbxPluginTheme(api.theme)) applyAppearance(themeToAppearance(api.theme));
-  if (api.onAppearanceChange) unsubscribeAppearance.push(api.onAppearanceChange(applyAppearance));
-  // appearance 契约缺失（当前 1.1 桥只推 theme）时订阅 env 主题推送，两套不同时挂。
-  else unsubscribeAppearance.push(onHostThemeChange((theme) => applyAppearance(themeToAppearance(theme))));
-  if (api.onLocaleChange) unsubscribeLocale.push(api.onLocaleChange((next) => setWorkbenchLocale(next || "zh-CN")));
-  const onContext = api.onContext ?? api.onContextChange;
-  if (onContext) unsubscribeContext.push(onContext.call(api, (context) => {
-    hostContext.value = context;
-    syncConnectionContext();
-  }));
+  // X-P2/P3/P4 收敛：env（locale/theme）+ context + appearance 订阅统一走
+  // shared/frontend/hostThemeRuntime 单点（真桥无 onLocaleChange/onContextChange
+  // 幽灵 API；onContext 旧桥回退 onContextChange；appearance 契约缺失时经
+  // theme 通道兜底，两套不同时挂）。
+  unsubscribeEnvironment.push(subscribeHostEnvironment<DbxPluginAppearance, DbxPluginTheme>(api, {
+    onLocale: (next) => setWorkbenchLocale(next || "zh-CN"),
+    onContext: (context) => {
+      hostContext.value = context;
+      syncConnectionContext();
+    },
+    onAppearance: applyAppearance,
+    onTheme: (theme) => applyAppearance(themeToAppearance(theme)),
+  }, { themeChannel: onHostThemeChange }));
   if (api.onEvent) unsubscribeEvent.push(api.onEvent(handleEvent));
   if (!connectionId.value) throw new Error(t("connectionMissing"));
   setLdapConnectionId(connectionId.value);
@@ -853,6 +858,22 @@ async function initialize() {
 // 连接切换时的状态隔离（UI 扫描 P2-24）：结果表/已开弹窗属于上一个连接，
 // 残留会把写操作发往新连接。树随 baseDn watch 自动重载，无需在此处理。
 let lastSyncedConnectionId = "";
+
+// 服务器徽章数据源预热（前端评审 M-4）：schemaCache 的 serverInfo 只有
+// 向导/详情加载时才回填，不打开它们的用户永远看不到 vendor 徽章。这里在
+// 首屏请求（树根/搜索基/statuses）排队之后做一次低优先级预热——延迟触发
+// 不与用户可见数据抢带宽（保留 syncConnectionContext 原注释的本意）；
+// ensureLoaded 自带 TTL 与 inFlight 去重，重复进入与向导路径零额外代价。
+const SCHEMA_WARMUP_DELAY_MS = 2000;
+let schemaWarmupTimer = 0;
+function scheduleSchemaWarmup() {
+  if (schemaWarmupTimer) window.clearTimeout(schemaWarmupTimer);
+  schemaWarmupTimer = window.setTimeout(() => {
+    schemaWarmupTimer = 0;
+    if (connectionId.value) void wizardSchemaCache.ensureLoaded(connectionId.value);
+  }, SCHEMA_WARMUP_DELAY_MS);
+}
+
 function syncConnectionContext() {
   setLdapConnectionId(connectionId.value);
   const current = connectionId.value;
@@ -896,7 +917,9 @@ function syncConnectionContext() {
   void resolveAutoBaseDn();
   // Schema is intentionally not warmed here: a user-visible entry read must
   // always win over metadata.  The wizard and entry detail loaders request it
-  // lazily after their own primary data is visible.
+  // lazily after their own primary data is visible.  服务器徽章的预热走
+  // scheduleSchemaWarmup 的延迟路径（见上），不在此处同步抢占首屏带宽。
+  scheduleSchemaWarmup();
 }
 
 // 协议徽章与服务器徽章（纯函数见 lib/connectionIdentity.ts）。
@@ -954,7 +977,7 @@ onBeforeUnmount(() => {
   disposeFeedback();
   uiIntent.stop();
   teardownTooltipLayer();
-  for (const dispose of [...unsubscribeAppearance, ...unsubscribeLocale, ...unsubscribeContext, ...unsubscribeEvent]) dispose();
+  for (const dispose of [...unsubscribeEnvironment, ...unsubscribeEvent]) dispose();
 });
 </script>
 
