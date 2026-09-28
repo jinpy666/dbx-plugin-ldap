@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -36,6 +37,9 @@ const EnvDataRoot = "DBX_DATA_DIR"
 // Store 绑定一个数据目录。
 type Store struct {
 	dir string
+
+	// auditMu 串行化 audit.jsonl 追加（AppendAudit）。
+	auditMu sync.Mutex
 }
 
 // ResolveDataDir 按四插件统一顺序解析插件数据目录（取第一个可用项，
@@ -184,7 +188,8 @@ type AuditRecord struct {
 }
 
 // AppendAudit 追加一条审计记录；rec.Time 为空时取当前时间（RFC3339）。
-// append-only，无锁文件写入依赖调用方串行化（sidecar 单进程内由审计回调串行）。
+// append-only；auditMu 串行化追加（stdio 模式每请求一个 goroutine，审计
+// 回调并非天然串行），避免交错写与半行。
 func (s *Store) AppendAudit(rec AuditRecord) error {
 	if strings.TrimSpace(rec.Time) == "" {
 		rec.Time = time.Now().Format(time.RFC3339)
@@ -196,6 +201,8 @@ func (s *Store) AppendAudit(rec AuditRecord) error {
 	if err != nil {
 		return fmt.Errorf("store: encode audit record: %w", err)
 	}
+	s.auditMu.Lock()
+	defer s.auditMu.Unlock()
 	path := filepath.Join(s.dir, "audit.jsonl")
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {

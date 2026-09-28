@@ -1,9 +1,11 @@
 package store
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 )
@@ -244,5 +246,30 @@ func TestReadAuditLinesEmpty(t *testing.T) {
 	}
 	if lines != nil && len(lines) != 0 {
 		t.Errorf("ReadAuditLines() = %v, want nil/empty", lines)
+	}
+}
+
+// 并发追加审计：stdio 模式每请求一个 goroutine，audit.jsonl 追加必须
+// 互斥——每条记录独占一行且可解析（AppendAudit 的 auditMu 回归）。
+func TestAppendAuditConcurrentLinesIntact(t *testing.T) {
+	st := openTestStore(t)
+	const n = 50
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := st.AppendAudit(AuditRecord{ConnectionID: fmt.Sprintf("c-%d", i), Action: "write"}); err != nil {
+				t.Errorf("append %d: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	lines, err := st.ReadAuditLines()
+	if err != nil {
+		t.Fatalf("read audit lines: %v", err)
+	}
+	if len(lines) != n {
+		t.Fatalf("got %d audit records, want %d", len(lines), n)
 	}
 }
