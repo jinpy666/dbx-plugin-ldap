@@ -147,6 +147,69 @@ func TestStdioRobustOversizedLines(t *testing.T) {
 	}
 }
 
+// S-STDIO-R4b 边读边限：超长行不带换行直到 EOF（ReadString 语义下整行入内
+// 存后才查长度）也必须 -32700 拒绝且 Serve 正常返回；超长行后面跟合法请求
+// 时行分帧不被破坏（丢弃只限本行，后续请求照常应答）。
+func TestStdioRobustOversizedLineFraming(t *testing.T) {
+	server := newTestStdioServer()
+	// 场景一：EOF 终止的无换行超长行 → 单条 -32700，无挂死。
+	var out bytes.Buffer
+	if err := server.Serve(strings.NewReader(strings.Repeat("b", maxRequestLineBytes+1)), &out); err != nil {
+		t.Fatal(err)
+	}
+	responses := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(responses) != 1 {
+		t.Fatalf("expect exactly 1 refusal response, got %d:\n%s", len(responses), out.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(responses[0]), &decoded); err != nil {
+		t.Fatalf("refusal not JSON: %q", responses[0])
+	}
+	mustErrCode(t, decoded, -32700)
+
+	// 场景二：无换行超长行 + '\n' + ping → 先拒绝、后应答，帧边界完好。
+	server2 := newTestStdioServer()
+	input := strings.Repeat("c", maxRequestLineBytes+1) + "\n" + `{"jsonrpc":"2.0","id":7,"method":"ping"}` + "\n"
+	var out2 bytes.Buffer
+	if err := server2.Serve(strings.NewReader(input), &out2); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]map[string]any{}
+	for _, line := range strings.Split(strings.TrimSpace(out2.String()), "\n") {
+		var decodedLine map[string]any
+		if err := json.Unmarshal([]byte(line), &decodedLine); err != nil {
+			t.Fatalf("response line not JSON: %q", line)
+		}
+		id, _ := json.Marshal(decodedLine["id"])
+		byID[string(id)] = decodedLine
+	}
+	if len(byID) != 2 {
+		t.Fatalf("expect refusal + ping answer, got %d distinct ids:\n%s", len(byID), out2.String())
+	}
+	mustErrCode(t, byID["null"], -32700)
+	if got := byID["7"]["result"]; got == nil {
+		t.Fatalf("ping after the oversized line must succeed: %v", byID["7"])
+	}
+}
+
+// S-STDIO-R4c 末行无换行（SEC-001 回归）：EOF 终止的合法请求必须照常应答，
+// 与原 ReadString 把尾巴按一行交还的行为一致——不能被静默吞掉后无响应挂起。
+func TestStdioRobustFinalLineWithoutNewline(t *testing.T) {
+	server := newTestStdioServer()
+	input := `{"jsonrpc":"2.0","id":9,"method":"ping"}` // 无尾随 '\n'，EOF 终止
+	var out bytes.Buffer
+	if err := server.Serve(strings.NewReader(input), &out); err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &decoded); err != nil {
+		t.Fatalf("response not JSON: %q", out.String())
+	}
+	if decoded["id"] != float64(9) || decoded["result"] == nil {
+		t.Fatalf("final newline-less request must be answered: %v", decoded)
+	}
+}
+
 // S-STDIO-R5 pipelining：不等待响应连发 5 个不同 id 请求（含 initialize/
 // ping/未知方法/UI 工具/再次 ping）→ 5 条响应、与 id 一一对应、每条合法
 // NDJSON（响应可能乱序，JSON-RPC 以 id 关联）。

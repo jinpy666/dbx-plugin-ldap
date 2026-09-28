@@ -66,25 +66,27 @@ func (s *Server) SettingsGet() map[string]any {
 }
 
 // SettingsSet 处理 `mcp/settings/set`：白名单部分更新 + 持久化 + cursor
-// 会话参数即时生效（下一次 digest 物化按新 TTL/容量/行上限执行）。
+// 会话参数即时生效（下一次 digest 物化按新 TTL/容量/行上限执行）。持久化
+// 放在 settings 锁内：与内存更新同序落盘，两个并发 set 不会把先完成者的
+// 旧值最后写回磁盘（丢失更新）；小文件写入毫秒级，锁内可接受。
 func (s *Server) SettingsSet(updates map[string]any) (map[string]any, error) {
 	if updates == nil {
 		return nil, errors.New("updates object is required")
 	}
 	s.mu.Lock()
 	settings, err := applySettingsUpdate(s.settings, updates)
-	if err == nil {
-		s.settings = settings
-	}
-	s.mu.Unlock()
 	if err != nil {
+		s.mu.Unlock()
 		return nil, err
 	}
-	s.cursors.Configure(time.Duration(settings.CursorTtlSecs)*time.Second, settings.MaxCursorSessions, settings.MaxCursorRows)
-	s.confirms.SetTTL(time.Duration(settings.ConfirmTtlSecs) * time.Second)
+	s.settings = settings
 	if err := SaveSettings(s.st, settings); err != nil {
+		s.mu.Unlock()
 		return nil, fmt.Errorf("persist mcp settings: %w", err)
 	}
+	s.mu.Unlock()
+	s.cursors.Configure(time.Duration(settings.CursorTtlSecs)*time.Second, settings.MaxCursorSessions, settings.MaxCursorRows)
+	s.confirms.SetTTL(time.Duration(settings.ConfirmTtlSecs) * time.Second)
 	return s.SettingsGet(), nil
 }
 
@@ -632,7 +634,10 @@ func (s *Server) twoPhaseWrite(connectionID string, req writeRequest, args map[s
 			}
 			preview["recursive"] = req.Recursive
 		}
-		issued, expiresAt := s.confirms.Issue(paramHash, s.now())
+		issued, expiresAt, err := s.confirms.Issue(paramHash, s.now())
+		if err != nil {
+			return nil, err
+		}
 		return map[string]any{
 			"preview":      preview,
 			"confirmToken": issued,

@@ -68,6 +68,12 @@ const inlineRequiredKey = "host"
 // 不挂死、进程继续服务后续请求（可靠性纵深轮）。
 const maxRequestLineBytes = 16 << 20
 
+// maxConcurrentRequests 同时在途请求上限（SEC-005 纵深）：每行一个
+// goroutine、慢工具（digest/桥兜底）最长可挂 30s，失控宿主流水线灌入可
+// 无界堆积内存与 CPU。超限立即同步回 -32000 忙碌错误——不排队（排队只会
+// 把内存压力换成延迟压力），进程继续服务后续请求。
+const maxConcurrentRequests = 32
+
 // StdioServer 独立 stdio 模式的 MCP 服务器：包装工具面 Server + 内联凭据
 // 连接池 + DBX 桥转发兜底。并发安全（每请求一个 goroutine）。
 type StdioServer struct {
@@ -111,43 +117,65 @@ func (s *StdioServer) Close() {
 // 以 id 关联），EOF 后 drain 在途请求至多 300s（照 ssh run_mcp_stdio）。
 // 单行超 maxRequestLineBytes 时直接 -32700 拒绝该行并继续（进程存活）。
 func (s *StdioServer) Serve(in io.Reader, out io.Writer) error {
-	reader := bufio.NewReader(in)
+	// 64 KiB 读取缓冲：16 MiB 上限恰为整数倍（256 片），累计判定不因
+	// 缓冲切分产生边界抖动。
+	reader := bufio.NewReaderSize(in, 64<<10)
 	var writeMu sync.Mutex
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxConcurrentRequests)
+serveLoop:
 	for {
-		line, err := reader.ReadString('\n')
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			if len(trimmed) > maxRequestLineBytes {
-				payload, _ := json.Marshal(rpcFailure(json.RawMessage("null"), -32700,
-					fmt.Sprintf("Parse error: request line exceeds %d bytes", maxRequestLineBytes)))
+		line, tooLong, err := readBoundedLine(reader)
+		if tooLong {
+			payload, _ := json.Marshal(rpcFailure(json.RawMessage("null"), -32700,
+				fmt.Sprintf("Parse error: request line exceeds %d bytes", maxRequestLineBytes)))
+			writeMu.Lock()
+			if _, werr := out.Write(append(payload, '\n')); werr != nil {
+				log.Printf("mcp stdio: response write failed (host closed stdout?): %v", werr)
+			}
+			writeMu.Unlock()
+		} else if trimmed := strings.TrimSpace(string(line)); trimmed != "" {
+			request := trimmed
+			select {
+			case sem <- struct{}{}:
+			default:
+				// 在途请求已达上限（SEC-005）：同步回忙碌错误，不排队。
+				payload, _ := json.Marshal(rpcFailure(json.RawMessage("null"), -32000,
+					fmt.Sprintf("Server busy: more than %d requests in flight", maxConcurrentRequests)))
 				writeMu.Lock()
-				if _, err := out.Write(append(payload, '\n')); err != nil {
-					log.Printf("mcp stdio: response write failed (host closed stdout?): %v", err)
+				if _, werr := out.Write(append(payload, '\n')); werr != nil {
+					log.Printf("mcp stdio: response write failed (host closed stdout?): %v", werr)
 				}
 				writeMu.Unlock()
-			} else {
-				request := trimmed
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					if response := s.handleLine([]byte(request)); response != nil {
-						payload, marshalErr := json.Marshal(response)
-						if marshalErr != nil {
-							payload, _ = json.Marshal(map[string]any{
-								"jsonrpc": "2.0", "id": nil,
-								"error": map[string]any{"code": -32603, "message": marshalErr.Error()},
-							})
-						}
-						writeMu.Lock()
-						if _, err := out.Write(append(payload, '\n')); err != nil {
-							// stdout 断裂意味着宿主已关闭通道：日志留痕后
-							// 后续请求仍会白算——不再静默吞掉。
-							log.Printf("mcp stdio: response write failed (host closed stdout?): %v", err)
-						}
-						writeMu.Unlock()
-					}
-				}()
+				if err == nil {
+					continue serveLoop
+				}
+				if err != io.EOF {
+					return err
+				}
+				break serveLoop
 			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				if response := s.handleLine([]byte(request)); response != nil {
+					payload, marshalErr := json.Marshal(response)
+					if marshalErr != nil {
+						payload, _ = json.Marshal(map[string]any{
+							"jsonrpc": "2.0", "id": nil,
+							"error": map[string]any{"code": -32603, "message": marshalErr.Error()},
+						})
+					}
+					writeMu.Lock()
+					if _, err := out.Write(append(payload, '\n')); err != nil {
+						// stdout 断裂意味着宿主已关闭通道：日志留痕后
+						// 后续请求仍会白算——不再静默吞掉。
+						log.Printf("mcp stdio: response write failed (host closed stdout?): %v", err)
+					}
+					writeMu.Unlock()
+				}
+			}()
 		}
 		if err != nil {
 			if err != io.EOF {
@@ -166,6 +194,39 @@ func (s *StdioServer) Serve(in io.Reader, out io.Writer) error {
 	case <-time.After(300 * time.Second):
 	}
 	return nil
+}
+
+// readBoundedLine 边读边限地读一行：累计字节一超过 maxRequestLineBytes 立即
+// 停止累积、丢弃该行剩余字节并返回 tooLong=true（行分帧照常消费，后续请求
+// 不受影响）。EOF 时的无换行尾巴按一行返回（与原 ReadString 行为一致）。
+// 不用 ReadString 的原因：它先整行入内存再由调用方查长度，超限检查生效前
+// 内存已无界增长，16 MiB 上限形同虚设（可靠性纵深轮）。
+func readBoundedLine(reader *bufio.Reader) (line []byte, tooLong bool, err error) {
+	var buf []byte
+	for {
+		frag, ferr := reader.ReadSlice('\n')
+		if i := bytes.IndexByte(frag, '\n'); i >= 0 {
+			// 行终止片段：内容长度（不含 '\n'）超限才判超长。
+			if tooLong || len(buf)+i > maxRequestLineBytes {
+				return nil, true, ferr
+			}
+			return append(buf, frag[:i+1]...), false, ferr
+		}
+		if !tooLong {
+			if len(buf)+len(frag) > maxRequestLineBytes {
+				tooLong = true
+				buf = nil
+			} else {
+				buf = append(buf, frag...)
+			}
+		}
+		if ferr != bufio.ErrBufferFull {
+			// io.EOF 或真实读错误：尾巴（若有）按一行交还调用方——与原
+			// ReadString 行为一致，宿主省略末行换行时合法请求不能被静默
+			// 吞掉（SEC-001）；超长时 buf 已置 nil，只回 tooLong。
+			return buf, tooLong, ferr
+		}
+	}
 }
 
 // handleLine 处理一行 JSON-RPC：返回要写回的响应；通知类（notifications/*，

@@ -21,7 +21,7 @@ func TestConfirmChurnBounded(t *testing.T) {
 	const rounds = 600
 	for index := 0; index < rounds; index++ {
 		now = now.Add(time.Second)
-		token, _ := store.Issue(hash, now)
+		token, _, _ := store.Issue(hash, now)
 		switch index % 3 {
 		case 0: // 正常消费（一次性删除）。
 			if got := store.Consume(token, hash, now); got != ConfirmOK {
@@ -62,7 +62,7 @@ func TestConfirmChurnTTLLifecycle(t *testing.T) {
 	store := NewConfirmStore()
 	now := intentBase
 	hash := HashParams([]byte(`{"a":1}`))
-	legacy, _ := store.Issue(hash, now)
+	legacy, _, _ := store.Issue(hash, now)
 	store.SetTTL(10 * time.Second)
 	// 旧令牌在原 60s 窗口内仍可用（若追溯为 10s 就会 expired）。
 	if got := store.Consume(legacy, hash, now.Add(50*time.Second)); got != ConfirmOK {

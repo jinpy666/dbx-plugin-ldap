@@ -197,9 +197,10 @@ func TestSaveJSONIsAtomicAndPrivate(t *testing.T) {
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("presets.json perm = %v, want 0600", perm)
 	}
-	// 无临时文件残留。
-	if _, err := os.Stat(filepath.Join(st.Dir(), "presets.json.tmp")); !os.IsNotExist(err) {
-		t.Errorf("tmp file leftover: %v", err)
+	// 无临时文件残留（唯一临时名 presets.json.tmp-*，rename 后 defer 清理）。
+	leftovers, _ := filepath.Glob(filepath.Join(st.Dir(), "presets.json.tmp*"))
+	if len(leftovers) != 0 {
+		t.Errorf("tmp file leftovers: %v", leftovers)
 	}
 }
 
@@ -235,6 +236,33 @@ func TestAppendAuditFormat(t *testing.T) {
 	}
 	if lines[1].Result != "denied" {
 		t.Errorf("line1 result = %q, want denied", lines[1].Result)
+	}
+}
+
+// Detail 警示原文必须落盘（tls-insecure 记录丢了 Detail 就只剩 action 名，
+// 事后取证无法说明"证书校验已关闭"——审计持久化回归，架构评审 H-3）。
+func TestAppendAuditKeepsDetail(t *testing.T) {
+	st := openTestStore(t)
+	const detail = "warning: tls_verify=false, TLS server certificate verification skipped"
+	if err := st.AppendAudit(AuditRecord{
+		ConnectionID: "conn-1",
+		Action:       "ldap/tls-insecure",
+		Target:       "ldaps://ldap.example.com:636",
+		Result:       "ok",
+		Source:       "mcp",
+		Detail:       detail,
+	}); err != nil {
+		t.Fatalf("AppendAudit() error = %v", err)
+	}
+	lines, err := st.ReadAuditLines()
+	if err != nil {
+		t.Fatalf("ReadAuditLines() error = %v", err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("audit lines = %d, want 1", len(lines))
+	}
+	if lines[0].Detail != detail {
+		t.Fatalf("audit detail lost on disk: %+v", lines[0])
 	}
 }
 

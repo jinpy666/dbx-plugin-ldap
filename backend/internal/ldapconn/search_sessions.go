@@ -349,7 +349,13 @@ func (s *Service) pruneExpiredSearchSessions() {
 	var expired []*ldapSearchSession
 	s.searchSessionsMu.Lock()
 	for id, session := range s.searchSessions {
-		session.mu.Lock()
+		// TryLock：正在翻页/关闭的会话（session.mu 被网络请求持有，最长一
+		// 个读超时）直接跳过本轮。绝不能在持有 searchSessionsMu 时阻塞在
+		// session.mu——否则一条慢搜索会把 SearchStart/Next/Cancel 乃至连接
+		// connect/disconnect 的会话清理整条级联堵死。繁忙会话下一轮再回收。
+		if !session.mu.TryLock() {
+			continue
+		}
 		isExpired := !session.expiresAt.IsZero() && !now.Before(session.expiresAt)
 		session.mu.Unlock()
 		if isExpired {
@@ -407,22 +413,31 @@ func (s *Service) cancelAllSearchSessions() {
 
 func (session *ldapSearchSession) close() {
 	session.mu.Lock()
-	defer session.mu.Unlock()
 	if session.closed {
+		session.mu.Unlock()
 		return
 	}
 	session.closed = true
+	conn := session.conn
+	cookie := append([]byte(nil), session.cookie...)
+	session.conn = nil
+	// baseDN/scope/derefAliases/typesOnly/filter/attributes 构造后只读，
+	// 锁外引用安全。
+	session.mu.Unlock()
+
 	// RFC 2696 cancellation uses paging size zero with the last cookie. Best
 	// effort is intentional: closing the dedicated connection is still enough
 	// to free resources when the server rejects cancellation or is unreachable.
-	if session.conn != nil && len(session.cookie) > 0 {
+	// 取消搜索放锁外执行：它最多耗一个读超时的网络往返，不能把 session.mu
+	// 一起拖住（否则 prune 的 TryLock 整轮跳过，取消期间该会话无法回收，
+	// 等待它的 close 调用方也被级联拖慢）。
+	if conn != nil && len(cookie) > 0 {
 		cancelPaging := ldap.NewControlPaging(0)
-		cancelPaging.SetCookie(session.cookie)
+		cancelPaging.SetCookie(cookie)
 		request := ldap.NewSearchRequest(session.baseDN, session.scope, session.derefAliases, 0, 0, session.typesOnly, session.filter, session.attributes, []ldap.Control{cancelPaging})
-		_, _ = session.conn.Search(request)
+		_, _ = conn.Search(request)
 	}
-	if session.conn != nil {
-		_ = session.conn.Close()
-		session.conn = nil
+	if conn != nil {
+		_ = conn.Close()
 	}
 }

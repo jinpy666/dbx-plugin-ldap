@@ -23,7 +23,7 @@ import (
 // It intentionally defaults to AD Studio's baseline "authentication only"
 // posture instead of forcing mutual/confidentiality on every bind.
 // ClientOptions 控制 GSSAPI 上下文标志。注意：插件装配层
-//（ldapconn.ldapGSSAPIClientOptions）只产生 auth（integrity）——
+// （ldapconn.ldapGSSAPIClientOptions）只产生 auth（integrity）——
 // auth-int/auth-conf 需要的 SASL security layer 在 go-ldap 侧不支持，
 // UseConfidentiality 目前是库层保留字段，无生产装配路径。
 type ClientOptions struct {
@@ -207,7 +207,8 @@ func (client *Client) InitSecContextWithOptions(target string, input []byte, APO
 		}
 
 		if token.IsKRBError() {
-			return nil, !false, token.KRBError
+			// true = 本 token 是 KRB-ERROR（非应答体），原样上抛交上层按错误处理。
+			return nil, true, token.KRBError
 		}
 
 		return make([]byte, 0), !completed, nil

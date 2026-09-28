@@ -78,15 +78,32 @@ func (s *ConfirmStore) TTL() time.Duration {
 // Issue 签发一次性令牌（c-<hex12>，TTL 见 SetTTL/缺省 60s）。签发前顺手
 // 清理已过期未消费的令牌（churn 防线：大量「只要预览不确认」的调用不能
 // 无界撑大令牌表——Consume 只在显式消费时删除，过期即弃的令牌没有别的
-// 删除路径）。
-func (s *ConfirmStore) Issue(paramHash string, now time.Time) (string, time.Time) {
+// 删除路径）。crypto/rand 不可用时返回错误（SEC-003 fail-closed）：一次性
+// 确认令牌宁可不签发，也不退化为可预测的 timestamp 派生值。
+func (s *ConfirmStore) Issue(paramHash string, now time.Time) (string, time.Time, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(now)
-	token := fmt.Sprintf("c-%s", randomHex(6))
+	random, err := cryptoTokenHex(6)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	token := fmt.Sprintf("c-%s", random)
 	expiresAt := now.Add(s.ttl)
 	s.items[token] = ConfirmEntry{ParamHash: paramHash, ExpiresAt: expiresAt}
-	return token, expiresAt
+	return token, expiresAt, nil
+}
+
+// cryptoTokenHex n 字节 crypto/rand 随机 hex；随机源不可用时留痕并报错。
+// 只用于安全敏感的确认令牌——cursor/intent 等非安全 id 仍走 randomHex
+// （可预测无安全后果，可用性优先）。
+func cryptoTokenHex(n int) (string, error) {
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(cryptorand.Reader, buf); err != nil {
+		log.Printf("WARN: [dbx-plugin-ldap] crypto/rand unavailable, refusing to issue one-time confirm token: %v", err)
+		return "", fmt.Errorf("crypto/rand unavailable: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // pruneLocked 清除已过期的未消费令牌（调用方持锁；map 遍历中删除安全）。

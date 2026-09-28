@@ -133,20 +133,31 @@ func (s *Store) LoadJSON(name string, out any) (bool, error) {
 	return true, nil
 }
 
-// SaveJSON 原子写入 dataDir/<name>（临时文件 + rename，权限 0600）。
+// SaveJSON 原子写入 dataDir/<name>（唯一临时文件 + rename，权限 0600）。
+// 临时文件用 os.CreateTemp 取唯一名：并发写同一目标时各自落在独立临时
+// 文件、rename 原子替换（后写者胜）——固定 ".tmp" 名会让两个并发写入
+// 截断同一文件（内容交错/半截 JSON，读侧静默回落默认值）。
 func (s *Store) SaveJSON(name string, value any) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return fmt.Errorf("store: encode %s: %w", name, err)
 	}
 	data = append(data, '\n')
-	path := filepath.Join(s.dir, name)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	tmp, err := os.CreateTemp(s.dir, name+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("store: create temp for %s: %w", name, err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // rename 成功后目标已不存在，失败时清掉残留
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
 		return fmt.Errorf("store: write %s: %w", name, err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("store: close %s: %w", name, err)
+	}
+	path := filepath.Join(s.dir, name)
+	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("store: rename %s: %w", name, err)
 	}
 	return nil
@@ -185,6 +196,9 @@ type AuditRecord struct {
 	// Operation / DurationMs 写操作名与耗时毫秒（F10，可选；旧记录缺省）。
 	Operation  string `json:"operation,omitempty"`
 	DurationMs int64  `json:"durationMs,omitempty"`
+	// Detail 结构化补充说明（可选；如 tls-insecure 记录的"证书校验已关闭"
+	// 警示原文——不落盘的话事后取证只剩 action 名，警示语义丢失）。
+	Detail string `json:"detail,omitempty"`
 }
 
 // AppendAudit 追加一条审计记录；rec.Time 为空时取当前时间（RFC3339）。

@@ -79,6 +79,7 @@ func runMcpStdio() {
 			Source:       rec.Source,
 			Operation:    rec.Operation,
 			DurationMs:   rec.DurationMs,
+			Detail:       rec.Detail,
 		}); err != nil {
 			log.Printf("[dbx-plugin-ldap] audit write failed: %v", err)
 		}
@@ -624,6 +625,7 @@ func (h *pluginHandler) auditRecord(rec ldapconn.AuditRecord) {
 			Source:       rec.Source,
 			Operation:    rec.Operation,
 			DurationMs:   rec.DurationMs,
+			Detail:       rec.Detail,
 		}); err != nil {
 			log.Printf("[dbx-plugin-ldap] audit write failed: %v", err)
 		}
