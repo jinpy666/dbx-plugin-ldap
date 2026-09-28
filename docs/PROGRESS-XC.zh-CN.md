@@ -63,7 +63,7 @@
 | `ldapKerberosConfigPath` :1625 | `auth_gssapi.go` 同名 | 原样（inline realm+kdc → 临时文件；显式路径 → 直用；`/etc/krb5.conf` 兜底） |
 | `ldapWriteTempKrb5Conf` :1649 | `auth_gssapi.go` 同名 | 模板原样；落点 `$DBX_PLUGIN_DATA_DIR/krb5/`（实施文档 §3），不可用退回 os.TempDir；`udp_preference_limit=1` 条件收敛为 `kdcPort != 88`（ForceTCP 仅源于 KDCNetworkAddress 路由，已删）；0600 权限 |
 | `ldapKerberosServicePrincipal` :1676 | `auth_gssapi.go` 同名（收敛版） | 本仓无 ExplicitSPN/ServiceName/BypassHostRewrite 字段（manifest §4 未暴露），SPN = `ldap/<URL 逻辑主机小写>` |
-| `ldapGSSAPIClientOptions` :1690 | `auth_gssapi.go` 同名 | 原样：integrity 恒开、`qop=auth-conf` → confidentiality、mutual 随开关；qop 缺省 auth |
+| `ldapGSSAPIClientOptions` :1690 | `auth_gssapi.go` 同名 | 修订（2026-09-28）：integrity 恒开、mutual 随开关；仅接受 `qop=auth`——auth-int/auth-conf 需 SASL security layer，go-ldap 不支持（bind 后恒 layer=none），静默降级为明文已改为显式拒绝 |
 | `backend/ldapgssapi/client.go`（287 行） | `internal/ldapgssapi/client.go` | **原样搬运**（`diff -w` 与源零差异，仅 gofmt 对齐）；`client_test.go` 同 |
 | go-ldap 绑定调用（NTLMBind/NTLMBindWithHash/MD5Bind/ExternalBind/GSSAPIBind） | dial.go 分发直调（go-ldap v3.4.13 API） | — |
 

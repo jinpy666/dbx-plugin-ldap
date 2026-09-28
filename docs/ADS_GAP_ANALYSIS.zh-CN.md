@@ -45,7 +45,7 @@
 | NTLM / NTLM hash | 🔶（ADS 经 SASL NTLM） | ✅ | ✅ | — |
 | SASL EXTERNAL | ✅ | ✅ | ✅ | — |
 | CRAM-MD5 | ✅ | ❌ 不做（决策记录 2026-09-21：go-ldap v3.4.13 无 CRAM-MD5 实现且 SASL 消息层全私有、无公开扩展点，实现需 fork 依赖库 ~120 行 + 长期维护分叉；机制本身属 RFC 2195 时代遗产，现代等价能力 = simple + TLS，本插件已具备；如未来出现真实需求再评估 fork） | ❌（决策关闭） | — |
-| SASL QoP（auth/auth-int/auth-conf） | ✅ | ✅ sasl_qop（kerberos） | ✅ | — |
+| SASL QoP（auth/auth-int/auth-conf） | ✅ | 🔶 仅 auth（2026-09-28 对抗复核修订：go-ldap 不支持 SASL security layer，auth-int/auth-conf 此前为静默降级明文，后端现显式拒绝；manifest 选项待 integrator 收窄） | 🔶（安全修复） | auth-int/auth-conf |
 | GSSAPI mutual auth | ✅ | ✅ sasl_mutual_auth | ✅ | — |
 | 授权身份（authzid / proxy） | ✅ | ✅ authzId 字段（后端） | ✅ | — |
 

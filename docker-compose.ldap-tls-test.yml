@@ -25,8 +25,8 @@ services:
       LDAP_TLS_KEY_FILE: "/certs/openldap.key"
       LDAP_TLS_CA_FILE: "/certs/openldap-ca.crt"
     ports:
-      - "1389:1389"
-      - "636:636"
+      - "127.0.0.1:1389:1389"
+      - "127.0.0.1:636:636"
     volumes:
       - ./scripts/ldap-seed:/ldifs:ro
       - ${LDAP_TLS_CERTS_DIR:?export LDAP_TLS_CERTS_DIR (ephemeral dir with openldap.crt/.key/-ca.crt)}:/certs:ro
