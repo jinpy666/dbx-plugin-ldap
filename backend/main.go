@@ -85,6 +85,8 @@ func runMcpStdio() {
 	})
 	defer server.Close()
 	if err := server.Serve(os.Stdin, os.Stdout); err != nil {
+		// log.Fatal 走 os.Exit，defer 不会执行：先显式释放连接再退出。
+		server.Close()
 		log.Fatal(err)
 	}
 }
@@ -143,6 +145,8 @@ func main() {
 	// stdin EOF（进程生命周期结束）→ Serve 返回 → 清理全部连接（M0 §3.2）。
 	defer svc.CloseAll()
 	if err := server.Serve(); err != nil {
+		// log.Fatal 走 os.Exit，defer 不会执行：先显式释放连接再退出。
+		svc.CloseAll()
 		log.Fatal(err)
 	}
 }
