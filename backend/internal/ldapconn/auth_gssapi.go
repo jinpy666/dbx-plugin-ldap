@@ -54,7 +54,11 @@ func newLDAPGSSAPIClient(_ context.Context, profile Profile, kerberosPassword st
 	noop := func() {}
 
 	settings := []func(*krbclient.Settings){krbclient.DisablePAFXFAST(true)}
-	options := ldapGSSAPIClientOptions(profile)
+	options, err := ldapGSSAPIClientOptions(profile)
+	if err != nil {
+		cleanup()
+		return nil, noop, err
+	}
 
 	switch krb.CredentialType {
 	case "keytab":
@@ -162,6 +166,15 @@ func ldapWriteTempKrb5Conf(krb LDAPKerberosConfig) (string, error) {
 	if realm == "" || kdcHost == "" {
 		return "", fmt.Errorf("kerberos realm and kdcHost are required")
 	}
+	// 模板注入纵深（与 normalizeLDAPWriteDN 同款控制字符拒绝）：realm/
+	// kdcHost 直接拼进 krb5.conf，裸换行/空字节可注入任意 libdefaults/
+	// realms 指令。
+	if hasRawControlChar(realm) {
+		return "", fmt.Errorf("kerberos realm: raw control characters are not allowed")
+	}
+	if hasRawControlChar(kdcHost) {
+		return "", fmt.Errorf("kerberos kdcHost: raw control characters are not allowed")
+	}
 	kdcPort := krb.KDCPort
 	if kdcPort <= 0 {
 		kdcPort = 88
@@ -234,18 +247,22 @@ func ldapKerberosServicePrincipal(profile Profile, logicalHost string) string {
 }
 
 // ldapGSSAPIClientOptions GSSAPI 上下文选项（tiny-rdm :1690 同构）：
-// integrity 恒开；confidentiality 仅 qop=auth-conf；mutual 随显式开关。
-// qop 缺省 auth。
-func ldapGSSAPIClientOptions(profile Profile) ldapgssapi.ClientOptions {
+// integrity 恒开；mutual 随显式开关。qop 仅接受 auth——auth-int/auth-conf
+// 要求 SASL security layer，go-ldap 明确不支持（bind 后恒 layer=none），
+// 静默降级为明文违背配置语义，显式拒绝。
+func ldapGSSAPIClientOptions(profile Profile) (ldapgssapi.ClientOptions, error) {
 	qop := strings.ToLower(strings.TrimSpace(profile.SASLQoP))
 	if qop == "" {
 		qop = "auth"
 	}
-	return ldapgssapi.ClientOptions{
-		UseIntegrity:       true,
-		UseConfidentiality: qop == "auth-conf",
-		MutualAuth:         profile.SASLMutualAuth,
+	if qop != "auth" {
+		return ldapgssapi.ClientOptions{}, fmt.Errorf(
+			"sasl qop %q is not supported: SASL security layer (auth-int/auth-conf) is unavailable, use qop=auth", profile.SASLQoP)
 	}
+	return ldapgssapi.ClientOptions{
+		UseIntegrity: true,
+		MutualAuth:   profile.SASLMutualAuth,
+	}, nil
 }
 
 // ldapShouldRetryKerberosWithPort88 判定是否应做 KDC 88 回退
