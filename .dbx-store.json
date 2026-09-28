@@ -16,7 +16,7 @@
   "source": "https://github.com/jinpy666/dbx-plugin-ldap",
   "homepage": "https://github.com/jinpy666/dbx-plugin-ldap",
   "license": "MIT",
-  "releaseNotes": "评审加固版：MCP stdio 传输边界加固（超长请求行边读边限、在途请求并发上限、确认令牌随机源不可用时拒绝签发），修复 mcp-settings 并发持久化竞态，审计记录落盘 Detail 警示原文，消除搜索会话锁级联阻塞；前端 LDIF 导入增加连接切换守卫与中断提示，工作集页签去重，修复三处事件监听器泄漏，树会话过期文案接入 i18n，连接面板时间格式跟随工作台语言。",
+  "releaseNotes": "评审加固正式版：MCP stdio 传输边界加固（超长请求行边读边限、在途请求并发上限、确认令牌随机源不可用时拒绝签发），修复 mcp-settings 并发持久化竞态，审计记录落盘 Detail 警示原文，消除搜索会话锁级联阻塞；前端 LDIF 导入增加连接切换守卫与中断提示，工作集页签去重，修复三处事件监听器泄漏，树会话过期文案接入 i18n，连接面板时间格式跟随工作台语言。含 0.1.94-beta.1 全部改动。",
   "localizations": {
     "zh-CN": {
       "name": "LDAP Studio",
