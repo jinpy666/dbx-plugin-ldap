@@ -16,6 +16,14 @@ const CSV_DEFAULTS = Object.freeze({
 
 const QUOTE_TRIGGER_PATTERN = /[",\r\n]/u;
 
+// 公式注入（OWASP CSV Injection）：LDAP 属性值是目录内低权限用户可写的
+// 数据，以 = @ Tab 开头、或 +/- 后跟字母/左括号（可执行操作数形态）的
+// 单元格在 Excel/WPS 打开时会被当公式执行。防御：前缀单引号强制按文本
+// 处理。裸 -5（负数）与 +86…（E.164 电话）只被当数字求值、无代码执行面，
+// 不加前缀以保数据保真。
+const FORMULA_TRIGGER_PATTERN = /^[=@\t]/u;
+const FORMULA_OPERAND_PATTERN = /^[+-][A-Za-z(]/u;
+
 type AttributeMap = Record<string, unknown>;
 
 export interface LdapExportEntry {
@@ -76,7 +84,8 @@ export const extractEntryAttributeNames = (entries: LdapExportEntry[]): string[]
 };
 
 const escapeCsvCell = (value: unknown): string => {
-    const text = String(value ?? '');
+    let text = String(value ?? '');
+    if (FORMULA_TRIGGER_PATTERN.test(text) || FORMULA_OPERAND_PATTERN.test(text)) text = `'${text}`;
     if (!QUOTE_TRIGGER_PATTERN.test(text)) return text;
     return `"${text.replace(/"/gu, '""')}"`;
 };

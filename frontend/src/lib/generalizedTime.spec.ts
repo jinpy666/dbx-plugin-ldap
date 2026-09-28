@@ -132,3 +132,12 @@ describe("wall-clock + zone helpers (timezone-aware picker)", () => {
     expect(localTimeZoneSuffix()).toMatch(/^[+-]\d{4}$/u);
   });
 });
+
+describe("parseGeneralizedTime out-of-range seconds", () => {
+  it("rejects second=60 instead of silently rolling over", () => {
+    expect(parseGeneralizedTime("20240101120060Z")).toBeNull();
+  });
+  it("still accepts second=59", () => {
+    expect(parseGeneralizedTime("20240101120059Z")).not.toBeNull();
+  });
+});

@@ -171,6 +171,10 @@ describe("saveTextFile", () => {
 
         expect(outcome).toEqual({ status: "saved", name: "a.ldif", via: "legacy" });
         expect(legacy.clicks).toBe(1);
+        // 写入失败后直接落 legacy：二次弹出的保存对话框被取消即丢导出。
+        // （回归保护：旧实现会再次调用 showSaveFilePicker。）
+        const pickerAfterFix = window.showSaveFilePicker as unknown as ReturnType<typeof vi.fn>;
+        expect(pickerAfterFix).toHaveBeenCalledTimes(1);
     });
 });
 

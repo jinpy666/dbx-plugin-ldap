@@ -72,3 +72,41 @@ describe("serializeEntriesToJson", () => {
     expect(serializeEntriesToJson([{ dn: "d", attributes: {} }])).toContain('\n');
   });
 });
+
+describe("serializeEntriesToCsv formula injection", () => {
+  it("neutralises spreadsheet formula prefixes in cells", () => {
+    const csv = serializeEntriesToCsv([
+      {
+        dn: "cn=x",
+        attributes: {
+          note: "=cmd|'/c calc'!A0",
+          desc: "+SUM(A1)",
+          title: "-not_a_flag",
+          mail: "@evil",
+        },
+      },
+    ]);
+    expect(csv).toContain("'=cmd");
+    expect(csv).toContain("'+SUM(A1)");
+    expect(csv).toContain("'-not_a_flag");
+    expect(csv).toContain("'@evil");
+  });
+});
+
+describe("serializeEntriesToCsv formula injection scope", () => {
+  it("preserves negative numbers and E.164 phone prefixes", () => {
+    const csv = serializeEntriesToCsv([
+      { dn: "cn=x", attributes: { num: "-5", phone: "+8613800000000" } },
+    ]);
+    expect(csv).toContain(",-5");
+    expect(csv).toContain(",+8613800000000");
+  });
+
+  it("still neutralises executable +/- operands", () => {
+    const csv = serializeEntriesToCsv([
+      { dn: "cn=x", attributes: { f1: "+A1", f2: "-SUM(A1)" } },
+    ]);
+    expect(csv).toContain("'+A1");
+    expect(csv).toContain("'-SUM(A1)");
+  });
+});

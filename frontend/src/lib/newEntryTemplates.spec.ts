@@ -169,3 +169,9 @@ describe("sortTemplatesForDialect (阶段5)", () => {
     expect(sortTemplatesForDialect(listTemplates(), "").map((template) => template.id)).toEqual(listTemplates().map((template) => template.id));
   });
 });
+
+describe("buildDn RFC 4514 edge escapes", () => {
+  it("escapes NUL as \\00 instead of emitting a raw byte", () => {
+    expect(buildDn("cn", "a\u0000b", "dc=x")).toBe("cn=a\\00b,dc=x");
+  });
+});

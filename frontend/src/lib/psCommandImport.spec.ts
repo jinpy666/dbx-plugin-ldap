@@ -92,3 +92,37 @@ describe("identity handling", () => {
     expect(result.search.filter).toBe("(objectClass=user)");
   });
 });
+
+describe("convertPsFilter degraded semantics", () => {
+  it("records a note when degrading -xor to or", () => {
+    const notes: string[] = [];
+    const filter = convertPsFilter('sn -eq "A" -xor sn -eq "B"', notes);
+    expect(filter).toBe("(|(sn=A)(sn=B))");
+    expect(notes).toContain("op:-xor");
+  });
+
+  it("converts Enabled -eq $true to the UAC disabled-bit negation", () => {
+    const notes: string[] = [];
+    expect(convertPsFilter("Enabled -eq $true", notes)).toBe(
+      "(!(userAccountControl:1.2.840.113556.1.4.803:=2))",
+    );
+    expect(notes).toHaveLength(0);
+  });
+
+  it("converts Enabled -eq $false to the UAC disabled-bit match", () => {
+    const notes: string[] = [];
+    expect(convertPsFilter("Enabled -eq $false", notes)).toBe(
+      "(userAccountControl:1.2.840.113556.1.4.803:=2)",
+    );
+  });
+});
+
+describe("convertPsFilter nesting depth", () => {
+  it("degrades absurdly nested filters to null instead of overflowing", () => {
+    let deep = 'sn -eq "A"';
+    for (let i = 0; i < 20000; i += 1) deep = `(${deep})`;
+    const notes: string[] = [];
+    expect(() => convertPsFilter(deep, notes)).not.toThrow();
+    expect(convertPsFilter(deep, notes)).toBeNull();
+  });
+});

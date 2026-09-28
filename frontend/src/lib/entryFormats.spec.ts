@@ -107,6 +107,26 @@ describe("parseEntriesFromText (ps-format-list path)", () => {
     expect(formatObjectSid(base64ToBytes(base64))).toBe("S-1-5-32-544");
   });
 
+  // Data2 ≠ Data3：此前 Data3 复用了 Data2 的下标公式（raw[9-i-4] === raw[5-i]），
+  // 旧用例 Data2/Data3 恰好同为 1234，round-trip 侥幸通过。
+  it("converts objectGUID display string to base64 (Data2 ≠ Data3 round-trip)", () => {
+    const result = parseEntriesFromText(
+      "DistinguishedName : CN=a,DC=x\nObjectGUID        : aabbccdd-1122-3344-5566-778899aabbcc\n",
+    );
+    const base64 = result.entries[0].attributes.objectGUID![0];
+    expect(formatObjectGuid(base64ToBytes(base64))).toBe(
+      "aabbccdd-1122-3344-5566-778899aabbcc",
+    );
+  });
+
+  it("flags an unparseable objectSid authority as a warning without throwing", () => {
+    const result = parseEntriesFromText(
+      "DistinguishedName : CN=a,DC=x\nobjectSid         : S-1-x-500\n",
+    );
+    expect(result.entries[0].attributes.objectSID).toBeUndefined();
+    expect(result.entries[0].warnings.join("\n")).toContain("objectSid");
+  });
+
   it("flags entries without a DN via warnings", () => {
     const result = parseEntriesFromText("GivenName : Alice\n");
     expect(result.entries[0].dn).toBe("");

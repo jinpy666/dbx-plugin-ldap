@@ -137,16 +137,37 @@ interface PsFilterOutcome {
 }
 
 /** 比较/逻辑表达式递归下降。tokens 为展平后的 token 序列。 */
-function parsePsFilterExpression(tokens: string[], start: number, end: number, notes: string[]): PsFilterOutcome | null {
+function parsePsFilterExpression(
+  tokens: string[],
+  start: number,
+  end: number,
+  notes: string[],
+  nesting = 0,
+): PsFilterOutcome | null {
+  // 嵌套上限（与局部括号深度扫描变量区分命名）：粘贴上万层括号嵌套时
+  // 干净判 null（不可解析），不炸递归栈。
+  if (nesting > 100) {
+    notes.push("filter-shape");
+    return null;
+  }
   // 递归处理：or（最低）→ and → not → 原子（括号 / 比较）
   let depth = 0;
   for (let i = end - 1; i >= start; i--) {
     const token = tokens[i];
     if (token === ")") depth++;
     else if (token === "(") depth--;
-    else if (depth === 0 && (token.toLowerCase() === "-or" || token.toLowerCase() === "-xor")) {
-      const left = parsePsFilterExpression(tokens, start, i, notes);
-      const right = parsePsFilterExpression(tokens, i + 1, end, notes);
+    else if (depth === 0 && token.toLowerCase() === "-or") {
+      const left = parsePsFilterExpression(tokens, start, i, notes, nesting + 1);
+      const right = parsePsFilterExpression(tokens, i + 1, end, notes, nesting + 1);
+      if (!left || !right) return null;
+      return { filter: `(|${left.filter}${right.filter})`, notes };
+    }
+    else if (depth === 0 && token.toLowerCase() === "-xor") {
+      // XOR 无 LDAP 等价运算符：按模块契约降级为 OR，但必须记注记，
+      // 不允许静默改写语义。
+      notes.push("op:-xor");
+      const left = parsePsFilterExpression(tokens, start, i, notes, nesting + 1);
+      const right = parsePsFilterExpression(tokens, i + 1, end, notes, nesting + 1);
       if (!left || !right) return null;
       return { filter: `(|${left.filter}${right.filter})`, notes };
     }
@@ -157,21 +178,21 @@ function parsePsFilterExpression(tokens: string[], start: number, end: number, n
     if (token === ")") depth++;
     else if (token === "(") depth--;
     else if (depth === 0 && token.toLowerCase() === "-and") {
-      const left = parsePsFilterExpression(tokens, start, i, notes);
-      const right = parsePsFilterExpression(tokens, i + 1, end, notes);
+      const left = parsePsFilterExpression(tokens, start, i, notes, nesting + 1);
+      const right = parsePsFilterExpression(tokens, i + 1, end, notes, nesting + 1);
       if (!left || !right) return null;
       return { filter: `(&${left.filter}${right.filter})`, notes };
     }
   }
   // -not <atom>
   if (tokens[start]?.toLowerCase() === "-not") {
-    const inner = parsePsFilterExpression(tokens, start + 1, end, notes);
+    const inner = parsePsFilterExpression(tokens, start + 1, end, notes, nesting + 1);
     if (!inner) return null;
     return { filter: `(!${inner.filter})`, notes };
   }
   // 括号原子
   if (tokens[start] === "(" && tokens[end - 1] === ")") {
-    return parsePsFilterExpression(tokens, start + 1, end - 1, notes);
+    return parsePsFilterExpression(tokens, start + 1, end - 1, notes, nesting + 1);
   }
   // 比较：attr -op value
   if (end - start === 3) {
@@ -182,6 +203,15 @@ function parsePsFilterExpression(tokens: string[], start: number, end: number, n
       return null;
     }
     const attr = normalizePsAttribute(attribute);
+    // Enabled 布尔字面量 → UAC disabled 位（1.2.840.113556.1.4.803 为 AD
+    // 位匹配 OID）：直接输出 `$true` 会生成语法非法的过滤器。
+    if (attr === "userAccountControl" && !operator.toLowerCase().includes("like")) {
+      const lowered = value.toLowerCase();
+      if (lowered === "$true" || lowered === "$false") {
+        const disabled = "(userAccountControl:1.2.840.113556.1.4.803:=2)";
+        return { filter: lowered === "$true" ? `(!${disabled})` : disabled, notes };
+      }
+    }
     // -like/-notlike 家族保留 `*` 通配语义；其余（-eq 精确匹配等）转义为字面量
     const escaped = escapeValue(value, !operator.toLowerCase().includes("like"));
     if (spec.negateFallback) {
