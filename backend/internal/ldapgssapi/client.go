@@ -22,6 +22,10 @@ import (
 // ClientOptions controls how the Kerberos GSSAPI context is negotiated.
 // It intentionally defaults to AD Studio's baseline "authentication only"
 // posture instead of forcing mutual/confidentiality on every bind.
+// ClientOptions 控制 GSSAPI 上下文标志。注意：插件装配层
+//（ldapconn.ldapGSSAPIClientOptions）只产生 auth（integrity）——
+// auth-int/auth-conf 需要的 SASL security layer 在 go-ldap 侧不支持，
+// UseConfidentiality 目前是库层保留字段，无生产装配路径。
 type ClientOptions struct {
 	UseIntegrity       bool
 	UseConfidentiality bool
@@ -64,6 +68,10 @@ type Client struct {
 	ekey          types.EncryptionKey
 	Subkey        types.EncryptionKey
 	clientOptions ClientOptions
+	// ctxSent 初始 AP-REQ 已发出。go-ldap 的 bind 循环在服务端直接
+	// Bind-OK（无 continuation token）时会以空输入重入 InitSecContext：
+	// 不设防则重新取票重发 bind，无限循环挂死连接。
+	ctxSent bool
 }
 
 func NewClientWithKeytab(username, realm, keytabPath, krb5confPath string, opts ClientOptions, settings ...func(*krbclient.Settings)) (*Client, error) {
@@ -127,6 +135,18 @@ func (client *Client) Close() error {
 func (client *Client) DeleteSecContext() error {
 	client.ekey = types.EncryptionKey{}
 	client.Subkey = types.EncryptionKey{}
+	client.ctxSent = false
+	return nil
+}
+
+// guardInitialToken 记录初始 AP-REQ 已发出；空输入重入说明服务端未回任何
+// continuation token 就完成了 bind——mutual auth 要求的 AP-REP 校验已不可
+// 能发生，fail-closed 报错（而不是重新取票重发 bind 造成无限循环）。
+func (client *Client) guardInitialToken() error {
+	if client.ctxSent {
+		return errors.New("gssapi: server completed bind without returning a mutual-auth continuation token; refusing to restart the context")
+	}
+	client.ctxSent = true
 	return nil
 }
 
@@ -139,6 +159,9 @@ func (client *Client) InitSecContextWithOptions(target string, input []byte, APO
 
 	switch input {
 	case nil:
+		if err := client.guardInitialToken(); err != nil {
+			return nil, false, err
+		}
 		tkt, ekey, err := client.Client.GetServiceTicket(target)
 		if err != nil {
 			return nil, false, err

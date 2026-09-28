@@ -280,19 +280,32 @@ func TestNewLDAPGSSAPIClientErrorSurface(t *testing.T) {
 
 func TestLDAPGSSAPIClientOptions(t *testing.T) {
 	t.Run("default qop=auth -> integrity only", func(t *testing.T) {
-		options := ldapGSSAPIClientOptions(Profile{})
+		options, err := ldapGSSAPIClientOptions(Profile{})
+		if err != nil {
+			t.Fatalf("qop=auth must be accepted: %v", err)
+		}
 		if !options.UseIntegrity || options.UseConfidentiality || options.MutualAuth {
 			t.Fatalf("options = %+v, want integrity only", options)
 		}
 	})
-	t.Run("qop=auth-conf -> confidentiality", func(t *testing.T) {
-		options := ldapGSSAPIClientOptions(Profile{SASLQoP: "auth-conf"})
-		if !options.UseIntegrity || !options.UseConfidentiality {
-			t.Fatalf("options = %+v, want integrity + confidentiality", options)
+	// SASL security layer（auth-int 的完整性 / auth-conf 的机密性）在 go-ldap
+	// 侧不支持，NegotiateSaslAuth 恒回 layer=none：静默降级为明文违背配置
+	// 语义，必须显式拒绝（fail-closed）。
+	t.Run("qop=auth-int refused (SASL security layer unsupported)", func(t *testing.T) {
+		if _, err := ldapGSSAPIClientOptions(Profile{SASLQoP: "auth-int"}); err == nil {
+			t.Fatal("qop=auth-int must be refused, not silently degraded")
+		}
+	})
+	t.Run("qop=auth-conf refused (SASL security layer unsupported)", func(t *testing.T) {
+		if _, err := ldapGSSAPIClientOptions(Profile{SASLQoP: "auth-conf"}); err == nil {
+			t.Fatal("qop=auth-conf must be refused, not silently degraded")
 		}
 	})
 	t.Run("mutual auth flag forwarded", func(t *testing.T) {
-		options := ldapGSSAPIClientOptions(Profile{SASLMutualAuth: true})
+		options, err := ldapGSSAPIClientOptions(Profile{SASLMutualAuth: true})
+		if err != nil {
+			t.Fatalf("mutual auth must be accepted: %v", err)
+		}
 		if !options.MutualAuth {
 			t.Fatalf("options = %+v, want mutual auth", options)
 		}
@@ -590,4 +603,21 @@ func TestNewProfileFromLifecycleHostAndFormReadOnly(t *testing.T) {
 	if profile.ReadOnly {
 		t.Fatal("writable connection must not be marked read-only")
 	}
+}
+
+// krb5.conf 模板注入：realm/kdcHost 来自连接配置，裸控制字符（换行/空字节）
+// 可注入任意 libdefaults/realms 指令——与写 DN/RDN 的控制字符纵深同款拒绝。
+func TestLdapWriteTempKrb5ConfRejectsControlChars(t *testing.T) {
+	if _, err := ldapWriteTempKrb5Conf(LDAPKerberosConfig{Realm: "CORP\n[libdefaults]\n default_realm = EVIL", KDCHost: "dc1"}); err == nil {
+		t.Fatal("realm with raw newline must be rejected")
+	}
+	if _, err := ldapWriteTempKrb5Conf(LDAPKerberosConfig{Realm: "CORP", KDCHost: "dc1\r\n kdc = evil"}); err == nil {
+		t.Fatal("kdcHost with raw newline must be rejected")
+	}
+	// 合法值不受影响。
+	path, err := ldapWriteTempKrb5Conf(LDAPKerberosConfig{Realm: "CORP.EXAMPLE", KDCHost: "dc1.corp.example"})
+	if err != nil {
+		t.Fatalf("valid realm/kdcHost must pass: %v", err)
+	}
+	_ = os.Remove(path)
 }
