@@ -19,15 +19,8 @@
 | StartTLS | ✅ | ✅ tls_mode=starttls | ✅ | — |
 | LDAPI (Unix socket) | ❌（ADS 无） | ✅ ldapi://（smoke_ldapi_test） | ✅ | 超越项，保持 |
 | 连接测试（只测网络连通） | ✅ Check Network Parameter | ✅ `ldap/check`（network 全新短拨号测延迟 ∥ bind 会话探活两级，无副作用）+ 连接面板每行检查（本轮） | ✅ | — |
-<<<<<<< HEAD
 | 网络超时/读超时 | ✅ | ✅ timeout_secs（读/操作档，缺省 30）+ dial_timeout_secs（拨号档，0 = 回落读档；本轮） | ✅ | — |
 | 引用（referral）跟随策略 | ✅ follow/ignore/manage | ✅ manage/report 形态：搜索（含分页会话）透出延续引用 URI（封顶 20，`ldap/search`/`ldap/search/start` 的 `referrals` 字段），结果表提示条展示；结果码 10 错误带 `[ldap-referral=..]` 前缀与友好文案（✅ 本轮）| ✅（manage） | follow 需向引用目标主机转发凭据，与 DN 白名单安全策略冲突，维持不自动追随；如需再按需设计策略 |
-| 别名处理（browse/search 解引用） | ✅ 分开设置 | ✅ 搜索有 derefAliases；浏览树工具栏解引用下拉（子节点列举请求 derefAliases 透传，缺省 never 零配置无行为变化；DN Picker 弹层按设计沿用 never——DN 查找辅助无需解引用，不与树状态跨层耦合）（本轮） | ✅ | — |
-=======
-| 网络超时/读超时 | ✅ | 🔶 单一 timeout_secs（缺省 30） | 🔶 | P2：拆 dial/read 两档 |
-| 引用（referral）跟随策略 | ✅ follow/ignore/manage | ❌ | ❌ | P1：go-ldap ReferralEnabled + 配置项 |
-| 别名处理（browse/search 解引用） | ✅ 分开设置 | ✅ 搜索有 derefAliases；浏览树工具栏解引用下拉（子节点列举请求 derefAliases 透传，缺省 never 零配置无行为变化；DN Picker 弹层沿用 never，余量留 TODO）（本轮） | ✅ | — |
->>>>>>> codex/ldap/search-sort-deref
 
 ## 2. 加密与证书
 
@@ -146,12 +139,8 @@
 - **M6（扩容后，与 PLA 对账表 N1–N4 并轨）**：LDIF 导入；结果批量操作；
   新条目 objectClass 模板（N4）；二进制属性查看器 + 上传（N3）；
   子树删除（N1）；密码哈希辅助（N2）。任务分解见 PLA 对账表 §7（L6-x）。
-<<<<<<< HEAD
 - **M7（按需）**：~~mTLS 客户端证书~~（✅ 落地，见 §2）；~~dial/read 两档超时~~（✅ 落地，
   见 §1）；~~CRAM-MD5~~（❌ 决策关闭，见 §3：库不支持 + 机制过时）；~~referral 策略~~
   （manage/report 落地，follow 不做——与 DN 白名单安全策略冲突，见 §1）；~~服务器端排序~~
   （RFC 2891 落地，见 §5）；~~digest realm~~（服务端 challenge 驱动即 RFC 正确行为，
   见 §3）；DSML（维持按需不做）。**追赶路线全部闭环。**
-=======
-- **M7（按需）**：mTLS 客户端证书；CRAM-MD5；referral 策略；~~服务器端排序~~（RFC 2891 已落地，见 §5 本轮）；digest realm；DSML。
->>>>>>> codex/ldap/search-sort-deref

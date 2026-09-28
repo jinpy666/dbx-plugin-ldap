@@ -11,13 +11,37 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
+CONFLICT_MARKERS = ("<<<<<<< ", ">>>>>>> ")
+CONFLICT_SEPARATOR = "=" * 7
+TEXT_SUFFIXES = {
+    ".md", ".go", ".ts", ".vue", ".py", ".js", ".mjs", ".json", ".toml",
+    ".yml", ".yaml", ".sh", ".html", ".css", ".ldif", ".svg", ".txt",
+}
+SKIP_DIRS = {".git", ".dbx-dev", "ui", "dist", "node_modules", "media"}
 
 
 def fail(message: str) -> None:
     raise SystemExit(f"FAIL: {message}")
 
 
+def check_conflict_markers() -> None:
+    for path in sorted(ROOT.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in TEXT_SUFFIXES:
+            continue
+        if SKIP_DIRS & set(path.relative_to(ROOT).parts):
+            continue
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+        ):
+            if line.startswith(CONFLICT_MARKERS) or line == CONFLICT_SEPARATOR:
+                fail(
+                    "unresolved merge conflict marker at "
+                    f"{path.relative_to(ROOT)}:{lineno}"
+                )
+
+
 def main() -> int:
+    check_conflict_markers()
     manifest_path = ROOT / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("manifest_version") != 1:
