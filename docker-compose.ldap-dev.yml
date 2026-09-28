@@ -1,6 +1,6 @@
 # Local OpenLDAP dev container for the DBX LDAP workbench (editor-kind fixtures).
 # Separate from docker-compose.ldap-test.yml (smoke tests, port 1389): this one
-# serves on 127.0.0.1:13890 and additionally loads the custom fixture schema.
+# serves on 127.0.0.1:13890 (loopback-pinned) and additionally loads the custom fixture schema.
 # No credential literals here:
 #   docker compose -f docker-compose.ldap-dev.yml --env-file scripts/ldap-dev-seed/.env.dev up -d
 # (.env.dev is gitignored and holds a generated LDAP_DEV_PASSWORD.)
@@ -34,8 +34,8 @@ services:
       LDAP_CUSTOM_SCHEMA_DIR: "/custom-schemas"
       LDAP_CUSTOM_LDIF_DIR: "/ldifs"
     ports:
-      - "13890:1389"
-      - "13936:636"
+      - "127.0.0.1:13890:1389"
+      - "127.0.0.1:13936:636"
     volumes:
       - ./scripts/ldap-dev-seed/schemas:/custom-schemas:ro
       - ./scripts/ldap-dev-seed:/ldifs:ro

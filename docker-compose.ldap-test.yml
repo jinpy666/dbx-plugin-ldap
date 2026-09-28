@@ -14,6 +14,6 @@ services:
       LDAP_PORT_NUMBER: "1389"
       LDAP_CUSTOM_LDIF_DIR: "/ldifs"
     ports:
-      - "1389:1389"
+      - "127.0.0.1:1389:1389"
     volumes:
       - ./scripts/ldap-seed:/ldifs:ro
