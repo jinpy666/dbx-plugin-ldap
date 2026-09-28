@@ -371,12 +371,15 @@ func firstBlockedLDAPAttribute(profile Profile, attrs []string) string {
 	if len(blockedList) == 0 {
 		blockedList = DefaultLDAPBlockedAttributes()
 	}
+	// 归一到基础属性名（剥 ";binary" 等传输选项，ldapAttrNameKey 同款）：
+	// userPassword;binary 与 userPassword 必须同属被屏蔽列，否则属性选项
+	// 即可绕过屏蔽策略。
 	blocked := map[string]struct{}{}
 	for _, attr := range blockedList {
-		blocked[strings.ToLower(strings.TrimSpace(attr))] = struct{}{}
+		blocked[ldapAttrNameKey(attr)] = struct{}{}
 	}
 	for _, attr := range attrs {
-		key := strings.ToLower(strings.TrimSpace(attr))
+		key := ldapAttrNameKey(attr)
 		if key == "" {
 			continue
 		}
@@ -453,6 +456,20 @@ func sanitizeLDAPAttributes(profile Profile, attrs []string) []string {
 	return out
 }
 
+// effectiveReadAttributes 读请求的线上属性清单（Search/GetEntry/RootDSE/
+// SearchStart 共用）：请求非空但全部命中屏蔽属性时改发 ["1.1"]（RFC 4511
+// noAttributes）——空清单会被服务端解释为「返回全部属性」，把屏蔽列的值
+// 完整拉过网络（tls_mode=none 时明文）后才在响应边界丢弃。请求本身为空
+// 保持原语义：返回全部属性，响应侧过滤（§5.2）。
+func effectiveReadAttributes(profile Profile, requested []string) []string {
+	normalized := normalizeLDAPAttributes(requested)
+	sanitized := sanitizeLDAPAttributes(profile, normalized)
+	if len(sanitized) == 0 && len(normalized) > 0 {
+		return []string{"1.1"}
+	}
+	return sanitized
+}
+
 // filterLDAPEntryBlockedAttributes 结果侧屏蔽属性过滤（§5.2 GetEntry"屏蔽属性过滤后返回"、
 // smoke S7：结果中不含 userPassword）。返回剔除后的副本；输入 nil Attributes 时保留 nil。
 // 审查 L2：blocked 集合在顶部构建一次（原先每属性经 firstBlockedLDAPAttribute
@@ -466,13 +483,15 @@ func filterLDAPEntryBlockedAttributes(profile Profile, entry LDAPEntry) LDAPEntr
 	if len(blockedList) == 0 {
 		blockedList = DefaultLDAPBlockedAttributes()
 	}
+	// 归一到基础属性名（剥 ";binary" 等传输选项），与请求侧
+	// firstBlockedLDAPAttribute 同款：属性选项不得绕过屏蔽过滤。
 	blocked := make(map[string]struct{}, len(blockedList))
 	for _, attr := range blockedList {
-		blocked[strings.ToLower(strings.TrimSpace(attr))] = struct{}{}
+		blocked[ldapAttrNameKey(attr)] = struct{}{}
 	}
 	out := make(map[string][]string, len(entry.Attributes))
 	for name, values := range entry.Attributes {
-		if key := strings.ToLower(strings.TrimSpace(name)); key != "" {
+		if key := ldapAttrNameKey(name); key != "" {
 			if _, ok := blocked[key]; ok {
 				continue
 			}

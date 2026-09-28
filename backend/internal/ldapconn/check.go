@@ -144,6 +144,8 @@ func (s *Service) checkDial(ctx context.Context, profile Profile, target connTar
 		return 0, err
 	}
 	defer conn.Close()
+	// tls_verify=false 审计留痕：network 段是真实建连，与共享建连同承诺。
+	s.emitTLSInsecureAudit(profile)
 	return int(time.Since(start).Milliseconds()), nil
 }
 

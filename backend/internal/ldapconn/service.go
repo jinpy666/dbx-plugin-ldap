@@ -65,6 +65,14 @@ type Service struct {
 	searchSessionsMu sync.Mutex
 	searchSessions   map[string]*ldapSearchSession
 
+	// 后台搜索会话回收器（search_sessions.go）：CloseAll 停止并等待退出。
+	searchSessionReapStop chan struct{}
+	searchSessionReapDone chan struct{}
+
+	// presetsMu 串行化预设的 Load→upsert→Save 读改写（operations.go
+	// SavePreset/RemovePreset）：无锁时并发保存互相覆盖（lost update）。
+	presetsMu sync.Mutex
+
 	// SchemaCache 供 ldap/schema 实现使用（L-B schema.go 提供的类型）。
 	SchemaCache *SchemaCache
 
@@ -96,7 +104,7 @@ type Service struct {
 
 // NewService 创建空连接表。
 func NewService() *Service {
-	return &Service{
+	svc := &Service{
 		conns:           map[string]*connEntry{},
 		searchSessions:  map[string]*ldapSearchSession{},
 		SchemaCache:     NewSchemaCache(0), // 0 → schema.go 默认 10 分钟 TTL
@@ -105,6 +113,8 @@ func NewService() *Service {
 		checkDialFn:     dialTransport,
 		checkProbeFn:    probeBindSession,
 	}
+	svc.startSearchSessionReaper(searchSessionReapInterval)
+	return svc
 }
 
 // NewProfileFromLifecycle 把 lifecycle params 映射为 Profile（manifest §4
@@ -323,6 +333,7 @@ func (s *Service) Disconnect(connectionID string) {
 
 // CloseAll 在进程退出前释放全部连接（Serve() 返回后调用，M0 §3.2）。
 func (s *Service) CloseAll() {
+	s.stopSearchSessionReaper()
 	s.mu.Lock()
 	entries := make([]*connEntry, 0, len(s.conns))
 	for id, entry := range s.conns {

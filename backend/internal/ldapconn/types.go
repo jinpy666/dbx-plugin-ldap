@@ -71,7 +71,7 @@ type Profile struct {
 	BindDN      string `json:"bindDn,omitempty"`
 	Username    string `json:"username,omitempty"`
 	Domain      string `json:"domain,omitempty"`
-	NTLMHash    string `json:"ntlmHash,omitempty"`
+	NTLMHash    string `json:"-"` // 凭据：任何序列化路径都不得携带（对抗复核 R3）
 	AuthzID     string `json:"authzId,omitempty"`
 	UseStartTLS bool   `json:"useStartTls,omitempty"`
 	TLSVerify   bool   `json:"tlsVerify"`

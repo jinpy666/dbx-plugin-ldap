@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -177,5 +178,89 @@ func TestWithDedicatedConnUnknownConnection(t *testing.T) {
 	err := s.withDedicatedConn(context.Background(), "missing", func(*ldap.Conn) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "not connected") {
 		t.Fatalf("unknown conn err = %v, want not-connected", err)
+	}
+}
+
+// R1（对抗性复核轮）：tls_verify=false 的审计留痕此前只覆盖 connectLocked
+// 与 Test 两条建连路径；聚合读独立拨号（withDedicatedConn，含断线重试）与
+// ldap/check network 段（checkDial）同样在真实建连，IMPL_PLAN §10 的承诺
+// 是「每次建连一条」。搜索会话（SearchStart 的 dialProfile）为同款一行修，
+// 走真实分页 wire 流程太重，靠代码走查对齐。
+func TestDedicatedDialAndCheckDialLeaveTLSInsecureAudit(t *testing.T) {
+	s := NewService()
+	var mu sync.Mutex
+	actions := map[string]int{}
+	s.Audit = func(rec AuditRecord) {
+		mu.Lock()
+		actions[rec.Action]++
+		mu.Unlock()
+	}
+
+	// 聚合读独立拨号路径。
+	entry := registerCheckEntry(t, s, "c1", true)
+	entry.mu.Lock()
+	entry.profile.TLSVerify = false
+	entry.profile.URL = "ldaps://ldap.example.com"
+	entry.mu.Unlock()
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	dialConn := ldap.NewConn(client, false)
+	dialConn.Start()
+	t.Cleanup(func() { _ = dialConn.Close() })
+	s.dedicatedDialFn = func(context.Context, Profile, connTarget, bindSecrets) (*ldap.Conn, error) {
+		return dialConn, nil
+	}
+	if err := s.withDedicatedConn(context.Background(), "c1", func(*ldap.Conn) error { return nil }); err != nil {
+		t.Fatalf("withDedicatedConn: %v", err)
+	}
+
+	// ldap/check network 段路径。
+	insecure := Profile{ID: "c2", TLSVerify: false, URL: "ldaps://ldap.example.com", TimeoutSeconds: 5}
+	s.checkDialFn = func(Profile, connTarget, time.Duration) (*ldap.Conn, error) {
+		return dialConn, nil
+	}
+	if _, err := s.checkDial(context.Background(), insecure, connTarget{Host: "ldap.example.com", Port: 636}); err != nil {
+		t.Fatalf("checkDial: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if actions["tls-insecure"] < 2 {
+		t.Fatalf("insecure-TLS dedicated dials must each leave a tls-insecure audit record, got %v", actions)
+	}
+}
+
+// 反向：tls_verify=true 的同款拨号不留痕。
+func TestDedicatedDialVerifyOKLeavesNoInsecureAudit(t *testing.T) {
+	s := NewService()
+	var mu sync.Mutex
+	count := 0
+	s.Audit = func(rec AuditRecord) {
+		if rec.Action == "tls-insecure" {
+			mu.Lock()
+			count++
+			mu.Unlock()
+		}
+	}
+	entry := registerCheckEntry(t, s, "c3", true)
+	entry.mu.Lock()
+	entry.profile.TLSVerify = true // 显式开启（零值为 false，缺省 true 只在 lifecycle 建档时应用）
+	entry.profile.URL = "ldaps://ldap.example.com"
+	entry.mu.Unlock()
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	dialConn := ldap.NewConn(client, false)
+	dialConn.Start()
+	t.Cleanup(func() { _ = dialConn.Close() })
+	s.dedicatedDialFn = func(context.Context, Profile, connTarget, bindSecrets) (*ldap.Conn, error) {
+		return dialConn, nil
+	}
+	if err := s.withDedicatedConn(context.Background(), "c3", func(*ldap.Conn) error { return nil }); err != nil {
+		t.Fatalf("withDedicatedConn: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if count != 0 {
+		t.Fatalf("verify-on dial must not emit tls-insecure audit, got %d", count)
 	}
 }

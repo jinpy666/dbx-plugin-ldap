@@ -81,3 +81,38 @@ func TestSearchSessionResultIsPageNotTotal(t *testing.T) {
 		t.Fatalf("unexpected page result: %+v", result)
 	}
 }
+
+// 回收器：被弃游标的过期会话（独立 bind 连接）由后台周期回收，不再依赖
+// 下一次 SearchStart/Next 惰性触发——此前弃游标后连接会驻留到进程退出。
+func TestSearchSessionReaperReclaimsExpiredSessions(t *testing.T) {
+	origInterval := searchSessionReapInterval
+	searchSessionReapInterval = 5 * time.Millisecond
+	defer func() { searchSessionReapInterval = origInterval }()
+
+	svc := NewService()
+	defer svc.CloseAll()
+
+	session := &ldapSearchSession{
+		id:           "s-reap",
+		connectionID: "c1",
+		expiresAt:    time.Now().Add(-time.Second),
+	}
+	svc.searchSessionsMu.Lock()
+	svc.searchSessions[session.id] = session
+	svc.searchSessionsMu.Unlock()
+
+	// -race 全量负载下 ticker 调度可能被显著延迟，放宽等待上限。
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		svc.searchSessionsMu.Lock()
+		gone := len(svc.searchSessions) == 0
+		svc.searchSessionsMu.Unlock()
+		if gone {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reaper did not reclaim the expired session")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
