@@ -57,6 +57,8 @@ func (s *Service) withDedicatedConn(ctx context.Context, connectionID string, fn
 		log.Printf("NOTICE: [dbx-plugin-ldap] dedicated aggregate dial failed for connection %q, falling back to shared connection: %v", connectionID, err)
 		return s.WithConn(ctx, connectionID, fn)
 	}
+	// tls_verify=false 审计留痕：独立拨号与共享建连同承诺（每次建连一条）。
+	s.emitTLSInsecureAudit(profile)
 
 	// dialProfile 成功路径已设过同规则超时；stub 注入路径（单测）可能未设，
 	// 这里统一再设一次（0 归一为 30s，避免 WithConn 的 0=无限等待面）。
@@ -79,6 +81,7 @@ func (s *Service) withDedicatedConn(ctx context.Context, connectionID string, fn
 	if dialErr != nil {
 		return dialErr
 	}
+	s.emitTLSInsecureAudit(profile)
 	defer retryConn.Close()
 	return fn(retryConn)
 }

@@ -116,8 +116,9 @@ func (s *Service) Search(ctx context.Context, req LDAPSearchRequest) (LDAPSearch
 		return LDAPSearchResult{}, err
 	}
 
-	// 请求属性：去重归一 + 屏蔽属性剔除（不主动拉取敏感列）。
-	attrs := sanitizeLDAPAttributes(profile, normalizeLDAPAttributes(req.Attributes))
+	// 请求属性：去重归一 + 屏蔽属性剔除（不主动拉取敏感列；全屏蔽请求
+	// 降级为 noAttributes，避免空清单被服务端解释为返回全部属性）。
+	attrs := effectiveReadAttributes(profile, req.Attributes)
 
 	var entries []LDAPEntry
 	truncated := false
@@ -258,15 +259,11 @@ func (s *Service) count(ctx context.Context, req LDAPCountRequest, dedicated boo
 			nil,
 		)
 		result, searchErr := conn.Search(searchReq)
-		if searchErr != nil {
-			return searchErr
+		c, tr, herr := countFromSearchResult(countLimit, result, searchErr)
+		if herr != nil {
+			return herr
 		}
-		if len(result.Entries) > countLimit {
-			count = countLimit
-			truncated = true
-			return nil
-		}
-		count = len(result.Entries)
+		count, truncated = c, tr
 		return nil
 	}
 	// K-5：dedicated=true（ldap/count 聚合大读）走独立短连接；false
@@ -280,6 +277,24 @@ func (s *Service) count(ctx context.Context, req LDAPCountRequest, dedicated boo
 		return LDAPCountResult{}, err
 	}
 	return LDAPCountResult{Count: count, Truncated: truncated}, nil
+}
+
+// countFromSearchResult 把一次 Search 的原始返回折算为 (count, truncated, err)。
+// 服务端 sizeLimit 截断时 go-ldap 同时返回部分结果与 SizeLimitExceeded 错误码
+// （对照 listSubtreeDNs 的同款转换）：此处解释为 truncated 而非失败，否则
+// 超过 countLimit+1 的目录节点一律报错而非截断计数。
+func countFromSearchResult(countLimit int, result *ldap.SearchResult, searchErr error) (int, bool, error) {
+	if searchErr != nil {
+		var ldapErr *ldap.Error
+		if errors.As(searchErr, &ldapErr) && ldapErr.ResultCode == ldap.LDAPResultSizeLimitExceeded {
+			return countLimit, true, nil
+		}
+		return 0, false, searchErr
+	}
+	if len(result.Entries) > countLimit {
+		return countLimit, true, nil
+	}
+	return len(result.Entries), false, nil
 }
 
 // GetEntry 实现 ldap/entry/get（tiny-rdm GetEntry :426）。
@@ -301,7 +316,7 @@ func (s *Service) GetEntry(ctx context.Context, req LDAPGetEntryRequest) (LDAPEn
 		s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "read-policy", Target: dn, Result: "denied", Detail: err.Error()})
 		return LDAPEntry{}, err
 	}
-	attrs := sanitizeLDAPAttributes(profile, normalizeLDAPAttributes(req.Attributes))
+	attrs := effectiveReadAttributes(profile, req.Attributes)
 	entry, err := s.readEntry(ctx, req.ConnectionID, dn, attrs, req.TypesOnly)
 	if err != nil {
 		return LDAPEntry{}, err
@@ -320,7 +335,7 @@ func (s *Service) RootDSE(ctx context.Context, req LDAPRootDSERequest) (LDAPEntr
 	if err := rootDSEAllowed(profile); err != nil {
 		return LDAPEntry{}, err
 	}
-	entry, err := s.readEntry(ctx, req.ConnectionID, "", sanitizeLDAPAttributes(profile, normalizeLDAPAttributes(req.Attributes)), false)
+	entry, err := s.readEntry(ctx, req.ConnectionID, "", effectiveReadAttributes(profile, req.Attributes), false)
 	if err != nil {
 		return LDAPEntry{}, err
 	}
@@ -827,6 +842,8 @@ func (s *Service) SavePreset(preset LDAPSearchPreset) (LDAPSearchPreset, error) 
 	if preset.ID == "" {
 		preset.ID = uuid.NewString()
 	}
+	s.presetsMu.Lock()
+	defer s.presetsMu.Unlock()
 	presets, err := store.LoadPresets()
 	if err != nil {
 		return LDAPSearchPreset{}, err
@@ -855,6 +872,8 @@ func (s *Service) RemovePreset(id string) error {
 		return fmt.Errorf("preset store is not available")
 	}
 	id = strings.TrimSpace(id)
+	s.presetsMu.Lock()
+	defer s.presetsMu.Unlock()
 	presets, err := store.LoadPresets()
 	if err != nil {
 		return err

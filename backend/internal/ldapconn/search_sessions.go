@@ -21,6 +21,44 @@ const (
 	maxSearchSessions            = 16
 )
 
+// searchSessionReapInterval 后台回收器扫描周期（var 供测试注入短周期）。
+// TTL 2 分钟：被弃游标的独立连接最迟约 2.5 分钟内释放——此前回收只依赖
+// 下一次 SearchStart/Next 惰性触发，客户端弃游标后连接会驻留到进程退出。
+var searchSessionReapInterval = 30 * time.Second
+
+// startSearchSessionReaper 启动后台回收循环；stopSearchSessionReaper 停止
+// 并等待退出（CloseAll 调用，避免 goroutine 与循环泄漏）。周期以参数在
+// 创建时捕获：goroutine 不回读包级变量，杜绝与测试注入的写竞争。
+func (s *Service) startSearchSessionReaper(interval time.Duration) {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	s.searchSessionReapStop = stop
+	s.searchSessionReapDone = done
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				s.pruneExpiredSearchSessions()
+			}
+		}
+	}()
+}
+
+func (s *Service) stopSearchSessionReaper() {
+	if s.searchSessionReapStop == nil {
+		return
+	}
+	close(s.searchSessionReapStop)
+	<-s.searchSessionReapDone
+	s.searchSessionReapStop = nil
+	s.searchSessionReapDone = nil
+}
+
 // ldapSearchSession owns one independently bound LDAP connection. RFC 2696
 // does not permit its opaque cookie to be moved to another connection.
 type ldapSearchSession struct {
@@ -83,6 +121,8 @@ func (s *Service) SearchStart(ctx context.Context, req LDAPSearchSessionRequest)
 	if err != nil {
 		return LDAPSearchSessionResult{}, err
 	}
+	// tls_verify=false 审计留痕：会话专属连接与共享建连同承诺。
+	s.emitTLSInsecureAudit(profile)
 
 	session := &ldapSearchSession{
 		id:           uuid.NewString(),
@@ -182,7 +222,7 @@ func (s *Service) validateSearchSessionRequest(req LDAPSearchSessionRequest) (Pr
 		s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "read-policy", Target: baseDN, Result: "denied", Detail: err.Error()})
 		return Profile{}, "", "", nil, err
 	}
-	return profile, baseDN, filter, sanitizeLDAPAttributes(profile, normalizeLDAPAttributes(req.Attributes)), nil
+	return profile, baseDN, filter, effectiveReadAttributes(profile, req.Attributes), nil
 }
 
 func (s *Service) ensureSearchSessionCapacity() error {

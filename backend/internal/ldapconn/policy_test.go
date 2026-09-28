@@ -326,6 +326,33 @@ func TestFirstBlockedLDAPAttribute(t *testing.T) {
 	}
 }
 
+// 属性选项（RFC 4511 传输选项后缀，如 ;binary）不得绕过屏蔽策略：
+// userPassword;binary 与 userPassword 同属被屏蔽列；反向亦然（屏蔽表
+// 条目带选项时命中裸名，全部归一到基础属性名）。
+func TestFirstBlockedLDAPAttributeStripsAttributeOptions(t *testing.T) {
+	if got := firstBlockedLDAPAttribute(Profile{}, []string{"cn", "userPassword;binary"}); got != "userPassword;binary" {
+		t.Fatalf(";binary option must not bypass default blocked table, got %q", got)
+	}
+	profile := Profile{BlockedAttributes: []string{"userPassword;lang-en"}}
+	if got := firstBlockedLDAPAttribute(profile, []string{"USERPASSWORD"}); got != "USERPASSWORD" {
+		t.Fatalf("blocked list entry with option must match bare name, got %q", got)
+	}
+}
+
+func TestFilterLDAPEntryBlockedAttributesStripsAttributeOptions(t *testing.T) {
+	entry := LDAPEntry{DN: "cn=x", Attributes: map[string][]string{
+		"cn":                  {"a"},
+		"userPassword;binary": {"secret"},
+	}}
+	filtered := filterLDAPEntryBlockedAttributes(Profile{}, entry)
+	if _, ok := filtered.Attributes["userPassword;binary"]; ok {
+		t.Fatalf("userPassword;binary must be filtered, got %v", filtered.Attributes)
+	}
+	if v := filtered.Attributes["cn"]; len(v) != 1 || v[0] != "a" {
+		t.Fatalf("cn must survive filtering, got %v", filtered.Attributes)
+	}
+}
+
 func TestSanitizeLDAPAttributes(t *testing.T) {
 	profile := Profile{BlockedAttributes: []string{"internalRef", "userPassword"}}
 	got := sanitizeLDAPAttributes(profile, []string{"cn", "userPassword", "sn", "InternalRef", "mail"})
@@ -556,5 +583,24 @@ func TestNormalizeProfile(t *testing.T) {
 	}
 	if len(p.BlockedAttributes) != 1 || p.BlockedAttributes[0] != "UserPassword" {
 		t.Errorf("blockedAttributes = %v", p.BlockedAttributes)
+	}
+}
+
+// effectiveReadAttributes：请求非空但全部命中屏蔽属性时改发 ["1.1"]
+// （RFC 4511 noAttributes）——空清单会被服务端解释为「返回全部属性」，把
+// 屏蔽列的值拉过网络后才在响应侧丢弃。请求本身为空保持原语义（返回全部，
+// 响应侧过滤）。
+func TestEffectiveReadAttributes(t *testing.T) {
+	if got := effectiveReadAttributes(Profile{}, []string{"userPassword"}); len(got) != 1 || got[0] != "1.1" {
+		t.Fatalf("all-blocked request must degrade to noAttributes, got %v", got)
+	}
+	if got := effectiveReadAttributes(Profile{}, []string{"cn", "userPassword"}); len(got) != 1 || got[0] != "cn" {
+		t.Fatalf("mixed request keeps unblocked attrs, got %v", got)
+	}
+	if got := effectiveReadAttributes(Profile{}, nil); len(got) != 0 {
+		t.Fatalf("empty request must keep return-all semantics, got %v", got)
+	}
+	if got := effectiveReadAttributes(Profile{}, []string{"cn"}); len(got) != 1 || got[0] != "cn" {
+		t.Fatalf("plain request passes through, got %v", got)
 	}
 }

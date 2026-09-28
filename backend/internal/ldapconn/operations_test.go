@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	ldap "github.com/go-ldap/ldap/v3"
@@ -757,5 +760,71 @@ func TestDecodeBinaryProtocolValues(t *testing.T) {
 	}
 	if got[3] != "" {
 		t.Errorf("empty must pass through, got %q", got[3])
+	}
+}
+
+// countFromSearchResult：服务端 sizeLimit 截断时 go-ldap 同时返回部分结果
+// 与 SizeLimitExceeded 错误码（对照 listSubtreeDNs 的同款转换），Count 必须
+// 解释为 truncated 而非错误上抛——否则 >5001 的目录一律报错。
+func TestCountFromSearchResult(t *testing.T) {
+	res := &ldap.SearchResult{Entries: []*ldap.Entry{
+		ldap.NewEntry("cn=a", nil), ldap.NewEntry("cn=b", nil),
+	}}
+	count, truncated, err := countFromSearchResult(5000, res, nil)
+	if err != nil || truncated || count != 2 {
+		t.Fatalf("countFromSearchResult(normal) = (%d, %v, %v)", count, truncated, err)
+	}
+
+	count, truncated, err = countFromSearchResult(5000, &ldap.SearchResult{Entries: make([]*ldap.Entry, 5001)}, nil)
+	if err != nil || !truncated || count != 5000 {
+		t.Fatalf("countFromSearchResult(over-limit) = (%d, %v, %v)", count, truncated, err)
+	}
+
+	count, truncated, err = countFromSearchResult(5000, nil,
+		&ldap.Error{ResultCode: ldap.LDAPResultSizeLimitExceeded, Err: errors.New("size limit exceeded")})
+	if err != nil || !truncated || count != 5000 {
+		t.Fatalf("countFromSearchResult(size-limit-exceeded) = (%d, %v, %v)", count, truncated, err)
+	}
+
+	count, truncated, err = countFromSearchResult(5000, nil,
+		&ldap.Error{ResultCode: ldap.LDAPResultOperationsError, Err: errors.New("ops")})
+	if err == nil || truncated || count != 0 {
+		t.Fatalf("countFromSearchResult(other-error) = (%d, %v, %v)", count, truncated, err)
+	}
+}
+
+// 并发 SavePreset 的读改写必须整体互斥：Load→upsert→Save 裸奔时并发保存
+// 互相覆盖（lost update），且共享 store 在 -race 下报数据竞争。
+func TestSavePresetConcurrentWritesAllSurvive(t *testing.T) {
+	svc := NewService()
+	store := &memPresetStore{}
+	svc.Presets = store
+	const n = 40
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if _, err := svc.SavePreset(LDAPSearchPreset{Name: fmt.Sprintf("p-%d", i)}); err != nil {
+				t.Errorf("save p-%d: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if len(store.presets) != n {
+		t.Fatalf("lost updates: got %d presets, want %d", len(store.presets), n)
+	}
+}
+
+// R3（对抗性复核轮）：Profile 带凭据字段但注释宣称「不含凭据」——序列化
+// 面必须封死：json.Marshal 永不输出 ntlmHash（tag 改 "-"）。
+func TestProfileMarshalNeverEmitsNTLMHash(t *testing.T) {
+	profile := Profile{ID: "c1", NTLMHash: "aad3b435b51404eeaad3b435b51404ee"}
+	payload, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatalf("marshal profile: %v", err)
+	}
+	if strings.Contains(string(payload), "ntlmHash") || strings.Contains(string(payload), "aad3b435") {
+		t.Fatalf("profile marshal leaks NTLM hash: %s", payload)
 	}
 }
