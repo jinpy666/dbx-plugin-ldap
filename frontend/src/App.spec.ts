@@ -37,7 +37,9 @@ async function mountWithHost(
   invokeImpl?: (method: string, params?: Record<string, unknown>) => Promise<unknown>,
 ) {
   let receiveContext: ((next: Record<string, unknown>) => void) | undefined;
-  let receiveEvent: ((event: DbxPluginEvent) => void) | undefined;
+  // 真桥 onEvent 是多监听器（audit 流 + useUiIntent + shared hostThemeRuntime），
+  // stub 用集合扇出而不是单槽覆盖（X-P2/P3 收敛后为三个订阅）。
+  const eventListeners = new Set<(event: DbxPluginEvent) => void>();
   const offContext = vi.fn();
   const offEvent = vi.fn();
   const subscribe = vi.fn((listener) => { receiveContext = listener; return offContext; });
@@ -50,7 +52,13 @@ async function mountWithHost(
     invoke,
     ...(legacy ? { onContextChange: subscribe } : { onContext: subscribe }),
     ...(both ? { onContextChange: legacySubscribe } : {}),
-    onEvent: (listener: (event: DbxPluginEvent) => void) => { receiveEvent = listener; return offEvent; },
+    onEvent: (listener: (event: DbxPluginEvent) => void) => {
+      eventListeners.add(listener);
+      return () => {
+        eventListeners.delete(listener);
+        offEvent();
+      };
+    },
   } as unknown as DbxPluginApi;
   wrapper = mount(App, { global: { stubs: {
     DnTree: treeStub, SearchForm: searchStub, ResultTable: true, EntryEditorDialog: true,
@@ -63,7 +71,9 @@ async function mountWithHost(
       expect(receiveContext).toBeTypeOf("function");
       receiveContext?.(context("second"));
     },
-    sendEvent: (event: DbxPluginEvent) => receiveEvent?.(event),
+    sendEvent: (event: DbxPluginEvent) => {
+      for (const listener of eventListeners) listener(event);
+    },
   };
 }
 
@@ -379,8 +389,9 @@ describe("App current host bridge contract", () => {
     wrapper?.unmount();
     wrapper = undefined;
     expect(host.offContext).toHaveBeenCalledOnce();
-    // M1：App 挂两个 onEvent 订阅（audit 流 + useUiIntent），卸载各退订一次。
-    expect(host.offEvent).toHaveBeenCalledTimes(2);
+    // M1 + X-P2/P3 收敛：App 挂三个 onEvent 订阅（audit 流 + useUiIntent +
+    // shared hostThemeRuntime），卸载各退订一次。
+    expect(host.offEvent).toHaveBeenCalledTimes(3);
   });
 
   it("accepts the native env locale envelope alongside backend audit events", async () => {

@@ -81,7 +81,6 @@ interface DbxPluginApi {
   onEvent(listener: (event: DbxPluginEvent) => void): () => void;
   onBinary(listener: (event: DbxPluginBinaryEvent) => void): () => void;
   onAppearanceChange?(listener: (appearance: DbxPluginAppearance) => void): () => void;
-  onLocaleChange?(listener: (locale: string) => void): () => void;
   onContext?(listener: (context: Record<string, unknown>) => void): () => void;
   /** Legacy optional callback; current bridges use onContext. */
   onContextChange?(listener: (context: Record<string, unknown>) => void): () => void;

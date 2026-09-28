@@ -637,14 +637,10 @@ window.dbxPlugin = {
     listener(appearance);
     return () => appearanceListeners.delete(listener);
   },
-  onLocaleChange: () => () => undefined,
+  // 镜像真桥 API 面（X-P5 裁剪幽灵 API）：真桥只有 onContext（注册不立即回调，
+  // 初始 context 经 api.ready / host.getContext）；locale 经 onEvent 的 env 推送。
   onContext: (listener) => {
     contextListeners.add(listener);
-    return () => contextListeners.delete(listener);
-  },
-  onContextChange: (listener) => {
-    contextListeners.add(listener);
-    listener(context);
     return () => contextListeners.delete(listener);
   },
   decodeBase64: (value) => Uint8Array.from(atob(value), (character) => character.charCodeAt(0)),

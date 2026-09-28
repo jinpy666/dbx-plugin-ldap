@@ -1874,3 +1874,29 @@ bookmarks 降级 describe 删除 -4）。真机复验建议随下一次 .dbxp �
 - 遗留给集成方：manifest 版本号 bump、store release notes（建议写明"UI 状态
   持久化需 Host API ≥1.2（dbx ≥0.6.18），旧宿主安装会被兼容校验拒绝"）、
   DBX_PREBUILT_UI 的"接线（指纹校验）或删除"决策。
+
+## 2026-09-29 评审跨插件项修复 + hostThemeRuntime 单点收敛（前端批次）
+
+### 做了什么
+
+- **幽灵订阅清理**：App.vue 移除真桥不存在的 `onLocaleChange` 死订阅
+  （env 推送本就由 handleEvent 分发）；env.d.ts 删 `onLocaleChange` 声明；
+  mockDbxHost 裁掉 onLocaleChange/onContextChange 幽灵 API（X-P5）。
+- **X-P4 appearance 修复**：applyAppearance 从无条件 setProperty 改为
+  探测宿主令牌再 removeProperty（原先 appearance 事件后冻结 themeSync 桥
+  引用、停止跟随宿主主题）；循环体收敛 `shared/frontend/hostThemeRuntime.ts`
+  单点（2026-09-29 第二批）。
+- **hostThemeRuntime 接入**：`subscribeHostEnvironment` 统一 env + context +
+  appearance 订阅；App.spec 的 stub 从单槽 onEvent 改为多监听器扇出（对齐
+  真桥 Set 语义），订阅数断言 2→3（audit + uiIntent + hostThemeRuntime）。
+  新增薄 spec `lib/hostThemeRuntime.spec.ts`。
+
+### 结果
+
+- 前端 typecheck 全绿；**87 文件 / 1269 用例全绿**；build 正常。
+
+### 边界与剩余风险
+
+- 未动 host/；未提交未 push；manifest 版本未 bump。
+- 真机复验：宿主切语言跟随、明暗主题切换跟随（此前停跟随的路径）。
+- `lib/hostTheme.ts` 收敛候选与 hostBridge.d.ts 类型单点同 ssh 排期。
