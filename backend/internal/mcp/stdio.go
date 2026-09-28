@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -120,7 +121,9 @@ func (s *StdioServer) Serve(in io.Reader, out io.Writer) error {
 				payload, _ := json.Marshal(rpcFailure(json.RawMessage("null"), -32700,
 					fmt.Sprintf("Parse error: request line exceeds %d bytes", maxRequestLineBytes)))
 				writeMu.Lock()
-				_, _ = out.Write(append(payload, '\n'))
+				if _, err := out.Write(append(payload, '\n')); err != nil {
+					log.Printf("mcp stdio: response write failed (host closed stdout?): %v", err)
+				}
 				writeMu.Unlock()
 			} else {
 				request := trimmed
@@ -136,7 +139,11 @@ func (s *StdioServer) Serve(in io.Reader, out io.Writer) error {
 							})
 						}
 						writeMu.Lock()
-						_, _ = out.Write(append(payload, '\n'))
+						if _, err := out.Write(append(payload, '\n')); err != nil {
+							// stdout 断裂意味着宿主已关闭通道：日志留痕后
+							// 后续请求仍会白算——不再静默吞掉。
+							log.Printf("mcp stdio: response write failed (host closed stdout?): %v", err)
+						}
 						writeMu.Unlock()
 					}
 				}()
@@ -166,7 +173,15 @@ func (s *StdioServer) Serve(in io.Reader, out io.Writer) error {
 // （MCP_ACCEPTANCE §2）：解析失败 -32700、非法请求（缺 id / method 缺失或
 // 非字符串 / id 为 object/array / jsonrpc 版本非 2.0）-32600——全部结构化
 // 报错，进程不崩。纯分派、无 I/O，单测直接喂行。
-func (s *StdioServer) handleLine(line []byte) map[string]any {
+func (s *StdioServer) handleLine(line []byte) (response map[string]any) {
+	// panic 兜底：单个 handler 异常只折算为 -32603 结构化响应，绝不崩掉
+	// 请求 goroutine（否则整个 sidecar 进程退出、全部 LDAP 连接被拆）。
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("mcp stdio: recovered handler panic: %v", r)
+			response = handlerPanicResponse(r)
+		}
+	}()
 	var raw struct {
 		JSONRPC json.RawMessage `json:"jsonrpc"`
 		ID      json.RawMessage `json:"id"`
@@ -179,6 +194,11 @@ func (s *StdioServer) handleLine(line []byte) map[string]any {
 	method, methodErr := decodeMethod(raw.Method)
 	if methodErr == nil && strings.HasPrefix(method, "notifications/") {
 		// notifications/initialized 等通知不回包（MCP 规约），未知通知名容忍。
+		// 带 id 的通知属畸形输入（JSON-RPC 2.0：带 id 即请求），契约钉死
+		// 静默——留 stderr 观测点便于诊断，不污染 stdout 协议通道。
+		if len(raw.ID) > 0 {
+			log.Printf("mcp stdio: ignored malformed notification carrying an id: %s", method)
+		}
 		return nil
 	}
 	id := json.RawMessage("null")
@@ -268,6 +288,12 @@ func rpcFailure(id json.RawMessage, code int, message string) map[string]any {
 		"jsonrpc": "2.0", "id": id,
 		"error": map[string]any{"code": code, "message": message},
 	}
+}
+
+// handlerPanicResponse panic 兜底响应：-32603 + null id（与 parse error 同款
+// null-id 约定；panic 时 id 可能尚未解析，无法关联）。
+func handlerPanicResponse(r any) map[string]any {
+	return rpcFailure(json.RawMessage("null"), -32603, fmt.Sprintf("Internal error: %v", r))
 }
 
 // stdioToolList tools/list：复用注册表全量清单（工具名/描述/语义与

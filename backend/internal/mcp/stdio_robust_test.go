@@ -220,3 +220,14 @@ func TestStdioRobustEmptyLinesAndCRLF(t *testing.T) {
 		}
 	}
 }
+
+// S-STDIO-R7 handler panic 兜底：handleLine 必须把 panic 折算为 -32603 +
+// null id（与 parse error 同款 null-id 约定），Serve 的请求 goroutine 不因
+// 单个 handler 异常崩掉进程。
+func TestStdioHandlerPanicResponse(t *testing.T) {
+	decoded := decodeResponse(t, handlerPanicResponse("boom"))
+	mustErrCode(t, decoded, -32603)
+	if got, _ := json.Marshal(decoded["id"]); string(got) != "null" {
+		t.Fatalf("panic response must carry null id: %s", got)
+	}
+}
