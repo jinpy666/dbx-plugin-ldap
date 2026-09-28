@@ -496,7 +496,10 @@ const skipFilterWhitespace = (cursor: ParseCursor): void => {
     }
 };
 
-const parseFilterItem = (cursor: ParseCursor): BuilderNode | null => {
+const parseFilterItem = (cursor: ParseCursor, depth = 0): BuilderNode | null => {
+    // 深度上限：超深嵌套按「builder 无法展示」降级为 null（调用方回落
+    // 源码模式编辑器），而不是让递归栈溢出把导入流程炸断。
+    if (depth > 100) return null;
     const text = cursor.text;
     if (text[cursor.position] !== "(") return null;
     cursor.position += 1;
@@ -508,7 +511,7 @@ const parseFilterItem = (cursor: ParseCursor): BuilderNode | null => {
         const children: BuilderNode[] = [];
         skipFilterWhitespace(cursor);
         while (text[cursor.position] === "(") {
-            const child = parseFilterItem(cursor);
+            const child = parseFilterItem(cursor, depth + 1);
             if (!child) return null;
             children.push(child);
             skipFilterWhitespace(cursor);
@@ -523,7 +526,7 @@ const parseFilterItem = (cursor: ParseCursor): BuilderNode | null => {
     if (operator === "!") {
         cursor.position += 1;
         skipFilterWhitespace(cursor);
-        const child = parseFilterItem(cursor);
+        const child = parseFilterItem(cursor, depth + 1);
         if (!child) return null;
         skipFilterWhitespace(cursor);
         if (cursor.text[cursor.position] !== ")") return null;
@@ -693,7 +696,10 @@ export const validateLDAPFilter = (filter: string): boolean => {
     let position = 0;
     const peek = () => text[position];
 
-    const parseItem = (): boolean => {
+    // 深度上限：粘贴上万层运算符嵌套（RFC 4515 合法形态）会栈溢出抛
+    // RangeError——预校验必须干净返回 false，而不是把崩溃抛给表单。
+    const parseItem = (depth = 0): boolean => {
+        if (depth > 100) return false;
         // item := "(" ("&"/"|" filterlist / "!" filter / attr filtertype) ")"
         if (peek() !== '(') return false;
         position += 1;
@@ -702,13 +708,13 @@ export const validateLDAPFilter = (filter: string): boolean => {
             position += 1;
             let matched = 0;
             while (peek() === '(') {
-                if (!parseItem()) return false;
+                if (!parseItem(depth + 1)) return false;
                 matched += 1;
             }
             if (matched < 1) return false;
         } else if (operator === '!') {
             position += 1;
-            if (!parseItem()) return false;
+            if (!parseItem(depth + 1)) return false;
         } else {
             // simple item: attr filtertype value — raw parens inside the value
             // are invalid (RFC 4515 requires \28/\29 escaping).

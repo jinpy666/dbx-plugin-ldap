@@ -671,3 +671,26 @@ describe("notEquals builder operator (ADS parity, M5-a)", () => {
     expect(reviveBuilderNode({ kind: "clause", op: "notEquals" })).not.toBeNull();
   });
 });
+
+describe("validateLDAPFilter nesting depth", () => {
+  it("rejects absurdly operator-nested filters instead of overflowing the stack", () => {
+    // 运算符前缀嵌套（RFC 4515 合法形态）超过 ~5000 层会栈溢出：
+    // 必须按深度上限干净拒绝，而非抛 RangeError。
+    let deep = "(a=b)";
+    for (let i = 0; i < 20000; i += 1) deep = `(&${deep})`;
+    expect(() => validateLDAPFilter(deep)).not.toThrow();
+    expect(validateLDAPFilter(deep)).toBe(false);
+  });
+  it("still accepts moderately nested filters", () => {
+    expect(validateLDAPFilter("(&(|(a=b)(c=d))(!(e=f)))")).toBe(true);
+  });
+});
+
+describe("parseFilterStructure nesting depth", () => {
+  it("degrades absurdly nested filters to null instead of overflowing", () => {
+    let deep = "(a=b)";
+    for (let i = 0; i < 20000; i += 1) deep = `(&${deep})`;
+    expect(() => parseFilterStructure(deep)).not.toThrow();
+    expect(parseFilterStructure(deep)).toBeNull();
+  });
+});

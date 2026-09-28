@@ -410,7 +410,7 @@ const AG_LOCALE_TEXT: Record<string, AgLocaleText> = {
     before: "Antes de",
     after: "Después de",
     greaterThanOrEqual: "Mayor o igual",
-    lessThanOrEqual: "Less or equal",
+    lessThanOrEqual: "Menor o igual",
     inRangeStart: "Desde",
     inRangeEnd: "Hasta",
     ariaDateFilterInput: "Entrada de filtro de fecha",

@@ -110,6 +110,9 @@ async function saveBytes(name: string, contentType: string, bytes: Uint8Array): 
     if (!hostSaveFile() && typeof window.showSaveFilePicker === "function") {
         const viaPicker = await saveViaFileSystemAccess(name, bytes);
         if (viaPicker) return viaPicker;
+        // picker 已尝试且未取消（写入失败等）：直接落 legacy 下载。若再走
+        // 下方回退链会二次弹出保存对话框，用户取消即把导出整个丢掉。
+        return saveViaLegacyDownload(name, contentType, bytes);
     }
 
     const viaHost = await saveViaHost(name, contentType, bytes);

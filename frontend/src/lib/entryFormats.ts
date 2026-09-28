@@ -170,7 +170,7 @@ function guidTextToBase64(text: string): string | null {
   const bytes = new Uint8Array(16);
   for (let i = 0; i < 4; i++) bytes[i] = raw[3 - i];
   for (let i = 0; i < 2; i++) bytes[4 + i] = raw[7 - i - 2];
-  for (let i = 0; i < 2; i++) bytes[6 + i] = raw[9 - i - 4];
+  for (let i = 0; i < 2; i++) bytes[6 + i] = raw[7 - i];
   bytes.set(raw.slice(8), 8);
   return bytesToBase64(bytes);
 }
@@ -180,7 +180,11 @@ function sidTextToBase64(text: string): string | null {
   const parts = text.trim().split("-");
   if (parts.length < 3 || parts[0] !== "S") return null;
   const revision = Number(parts[1]);
-  const authority = BigInt(parts[2]);
+  // authority 必须是纯数字（与 revision/subAuthorities 同级校验），
+  // 否则 BigInt 直接抛 SyntaxError 炸出整个导入。
+  const authorityText = parts[2] ?? "";
+  if (!/^\d+$/u.test(authorityText)) return null;
+  const authority = BigInt(authorityText);
   const subAuthorities = parts.slice(3).map(Number);
   if (!Number.isInteger(revision) || revision < 0 || revision > 255) return null;
   if (subAuthorities.some((value) => !Number.isInteger(value) || value < 0 || value > 0xffffffff)) return null;

@@ -318,6 +318,11 @@ function escapeDnValue(value: string): string {
   let escaped = "";
   for (let index = 0; index < text.length; index++) {
     const char = text[index];
+    if (char === "\0") {
+      // RFC 4514 §2.3：NUL 必须转义为 \00（裸 NUL 过不了 dn.ts 的校验）。
+      escaped += "\\00";
+      continue;
+    }
     if (char === "\\" || char === "," || char === "+" || char === '"' || char === "<" || char === ">" || char === ";") {
       escaped += `\\${char}`;
       continue;
