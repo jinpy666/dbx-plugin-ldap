@@ -6,6 +6,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# One run per branch/PR: superseded pushes cancel instead of queueing (same
+# policy as files/kafka; main-branch in-flight runs are kept).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -28,7 +34,7 @@ jobs:
           python-version: "3.x"
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
       - run: python3 scripts/validate_repo.py
       - run: node scripts/connection-forms/verify.mjs ldap
       # Offline unit tests for the smoke harness itself (result attribution,
@@ -47,13 +53,24 @@ jobs:
       # setup-node 的 pnpm 缓存需要 pnpm 已在 PATH 中，故置于 pnpm/action-setup 之后
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm --dir frontend install --frozen-lockfile
       - run: pnpm --dir frontend typecheck
       - run: pnpm --dir frontend test
       - run: pnpm --dir frontend build
+      # UI 构建一次：candidate 矩阵 job 取 artifact 直接打包（DBX_PREBUILT_UI），
+      # 不再每个平台重复三件套。
+      - name: Upload prebuilt UI
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-ui-ldap
+          # Glob pins the artifact root at ui/ so packaging jobs unpack it
+          # straight as ui/index.html.
+          path: ui/**
+          if-no-files-found: error
+          retention-days: 3
       # ui/index.html 已脱库：发布与候选打包各自现构建前端，
       # 不再用「重建后 git diff 必须为空」的 freshness 门卡主仓。
 
@@ -69,7 +86,7 @@ jobs:
           version: 11.24.0
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version-file: .nvmrc
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm --dir frontend install --frozen-lockfile
@@ -164,25 +181,30 @@ jobs:
       SIDECAR_BINARY: backend/bin/dbx-plugin-ldap${{ matrix.os == 'windows' && '.exe' || '' }}
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 11.24.0
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          node-version-file: .nvmrc
       - uses: actions/setup-go@v7
         with:
           go-version: "1.24.x"
           cache-dependency-path: backend/go.sum
-      # build.sh 内部做前端三件套 + go build sidecar + 原生 CLI 打包；
-      # 这里先按 lockfile 装依赖，build.sh 检测到 node_modules 即跳过 install。
-      - run: pnpm --dir frontend install --frozen-lockfile
+      # Warm the module/download cache once so build.sh's go build and the
+      # CLI's own rebuild of the sidecar both run offline-fast.
+      - name: Pre-download Go modules
+        run: (cd backend && go mod download)
+      # UI 三件套由 frontend job 构建一次，矩阵 job 取 artifact 直接打包。
+      - name: Download prebuilt UI
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-ui-ldap
+          path: ui
+      # Install the CLI before build.sh: its packaging step calls the native
+      # plugin-cli directly (resolve_native_plugin_cli).
       - run: npm install --global "@dbx-app/plugin-cli@${PLUGIN_CLI_VERSION}"
       - name: Package .dbxp candidate
         env:
           DBX_PLUGIN_TARGET: ${{ matrix.target }}
+          DBX_PREBUILT_UI: "1"
           NO_COLOR: "1"
         run: bash scripts/build.sh
       - name: Offline MCP smoke

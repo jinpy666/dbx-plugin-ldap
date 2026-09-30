@@ -1900,3 +1900,27 @@ bookmarks 降级 describe 删除 -4）。真机复验建议随下一次 .dbxp �
 - 未动 host/；未提交未 push；manifest 版本未 bump。
 - 真机复验：宿主切语言跟随、明暗主题切换跟随（此前停跟随的路径）。
 - `lib/hostTheme.ts` 收敛候选与 hostBridge.d.ts 类型单点同 ssh 排期。
+
+## CI 提速：候选/发布前端三件套 ×5 去重 + concurrency 补齐（2026-10-01）
+
+改动（本仓 `.github/workflows/`、`scripts/build.sh`、`scripts/test.sh`、新增 `.nvmrc`）：
+
+- **前端三件套去重**：ci candidate 与 release build 原每平台各跑一遍
+  typecheck+test+build（build.sh 未设 DBX_PREBUILT_UI，×5）。现在 frontend
+  job 构建一次并上传 `frontend-ui-ldap` artifact，矩阵 job 下载到 `ui/` 后
+  以 `DBX_PREBUILT_UI=1 bash scripts/build.sh` 打包（build.sh 该分支早已
+  支持）。release 新增 frontend job 承接 typecheck/test——发布门禁强度
+  不变，重复度归一。
+- **ci 加 concurrency**（仅 PR 取消、main 保留，同 files/kafka；原无）。
+- **candidate / release build 补 `go mod download` 预热**（对齐 kafka），
+  build.sh 的 go build 与 CLI 内部重编走热缓存。
+- **Node 版本单一真源**：新增 `.nvmrc`（22.21.0），CI `setup-node` 改
+  `node-version-file`；build.sh/test.sh 的 `v22*` glob 改读 `.nvmrc`
+  （`tr` 写法 BSD/GNU 通用）。
+- **pnpm install 加固**（build.sh/test.sh）：补 lockfile 新鲜度检查
+  （`pnpm-lock.yaml -nt node_modules` 才重装）+ `--frozen-lockfile`，
+  对齐 ssh/files 同款；防 lockfile 漂移静默安装。
+
+验证：actionlint 结构校验全绿；`bash -n` 全过；本地
+`DBX_PREBUILT_UI=1 bash scripts/build.sh` 抽查通过（kafka 同构代表 +
+files）。剩余风险：GitHub runner 真跑待推送观察。
