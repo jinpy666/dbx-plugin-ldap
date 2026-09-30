@@ -11,6 +11,9 @@
  *   ?ro=1               readOnly connection (write actions disabled; write
  *                       attempts emit a denied `ldap/audit` event first, then
  *                       reject — mirrors the backend write-policy branch)
+ *   ?panel=1            bottom-dock log panel fixture: surface=panel +
+ *                       plugin.mode=logs context, ldap/log/tail 回填夹具数据，
+ *                       并周期性推送 ldap/log 事件（LogPanelView 视觉验证）
  */
 import "./style.css";
 import { parseRdnAttributes, splitFirstDnRdn } from "./lib/dn";
@@ -22,11 +25,15 @@ const contextListeners = new Set<(context: Record<string, unknown>) => void>();
 
 const params = new URLSearchParams(location.search);
 const readOnly = params.get("ro") === "1";
+// 底部 dock 日志面板夹具：宿主注入的 surface/plugin 字段（open-ldap-logs 命令
+// 的 context 形状，见 manifest command action），面板 iframe 无 connectionId。
+const panelMode = params.get("panel") === "1";
 
 const context: Record<string, unknown> = {
   connectionId: params.get("noconn") === "1" ? "" : "visual-connection",
   workbenchId: "visual-workbench",
   restored: false,
+  ...(panelMode ? { surface: "panel", plugin: { mode: "logs" } } : {}),
   connection: {
     name: "Demo Directory",
     host: "ldap.demo.internal",
@@ -414,6 +421,24 @@ function denyWrite(target: string): never {
   throw new Error("connection is read-only (fixture)");
 }
 
+// -- 日志面板夹具（?panel=1） ----------------------------------------------------
+// 形状同 backend/internal/logbuf.Entry；seq 由 tail/live 两个通道共享同一条
+// 游标（后端 ring 单调递增的镜像），live 事件在装配后延迟推送（面板挂载并
+// 完成 tail 回填之后到达，验证增量路径）。
+const mockLogEntries: Array<Record<string, unknown>> = [];
+
+function pushMockLog(entry: Record<string, unknown>): Record<string, unknown> {
+  const stored = { seq: mockLogEntries.length + 1, at: Date.now(), ...entry };
+  mockLogEntries.push(stored);
+  return stored;
+}
+
+pushMockLog({ level: "info", method: "connect", connectionId: "visual-connection", target: "ldap.demo.internal:389", result: "ok", source: "system" });
+pushMockLog({ level: "info", method: "ldap/search", connectionId: "visual-connection", target: "ou=people,dc=demo,dc=dbx", detail: "scope=sub filter=(objectClass=person)", result: "ok", durationMs: 42, source: "ui" });
+pushMockLog({ level: "warn", method: "reconnect", connectionId: "visual-connection", target: "ldap.demo.internal:389", result: "ok", source: "system" });
+pushMockLog({ level: "info", method: "mcp/call", connectionId: "visual-connection", detail: "tool=ldap_search_digest", result: "ok", durationMs: 120, source: "mcp" });
+pushMockLog({ level: "error", method: "ldap/entry/modify", connectionId: "visual-connection", target: "cn=alice,ou=people,dc=demo,dc=dbx", detail: "Insufficient access (fixture)", result: "error", durationMs: 9, source: "ui" });
+
 const invoke: DbxPluginApi["invoke"] = async <T = unknown>(method: string, rawParams?: unknown) => {
   const input = (rawParams ?? {}) as Record<string, unknown>;
   let result: unknown = { success: true };
@@ -572,8 +597,16 @@ const invoke: DbxPluginApi["invoke"] = async <T = unknown>(method: string, rawPa
     for (const child of subtree) directory.delete(child.dn.toLowerCase());
     for (const child of subtree) put(child.dn.slice(0, child.dn.length - dn.length) + newDn, child.attributes);
   } else if (method === "ldap/connections/statuses") {
-    // 字段名与后端契约一致：status（三态）+ unix 毫秒 lastUsedAt。
-    result = { statuses: [{ connectionId: String(context.connectionId), status: "connected", readOnly, lastUsedAt: Date.now() }] };
+    // 字段名与后端契约一致：status（三态）+ unix 毫秒 lastUsedAt；name 供
+    // 日志面板连接下拉显示（后端 SnapshotStatuses 恒带）。
+    result = { statuses: [{ connectionId: String(context.connectionId), name: "Demo Directory", status: "connected", readOnly, lastUsedAt: Date.now() }] };
+  } else if (method === "ldap/log/tail") {
+    // 日志面板夹具（?panel=1）：形状同 backend/internal/logbuf Entry；
+    // after 游标语义与后端一致（seq > after），面板周期性收到后续 live 事件。
+    const after = Number(input.after ?? 0);
+    result = {
+      entries: mockLogEntries.filter((entry) => Number(entry.seq) > after),
+    };
   } else if (method === "ldap/presets/list") {
     result = { presets: JSON.parse(localStorage.getItem("ldap-mock-presets") ?? "[]") };
   } else if (method === "ldap/presets/save") {
@@ -626,6 +659,9 @@ window.dbxPlugin = {
   request,
   invoke,
   notify: async () => undefined,
+  // 宿主 executeCommand 桥 mock：真实宿主里 panel 命令路由到底部 dock；mock
+  // 无 dock，命令按成功返回（工具栏按钮可点、特性检测为 true，无可见副作用）。
+  executeCommand: async () => ({}),
   sendBinary: async () => undefined,
   onEvent: (listener) => {
     eventListeners.add(listener);
@@ -707,6 +743,20 @@ window.dbxPlugin = {
 // Object.assign 挂载避免污染 DbxPluginApi 类型（函数声明提升，此处引用安全）。
 const clipboardWrites: string[] = [];
 Object.assign(window.dbxPlugin, { emitUiIntent, clipboardWrites });
+
+// 日志面板夹具的 live 事件流（?panel=1）：tail 回填完成后按节拍推送，覆盖
+// LogPanelView 的增量渲染与自动滚动路径。
+if (panelMode) {
+  const liveFeed: Array<Record<string, unknown>> = [
+    { level: "info", method: "ldap/entry/get", connectionId: "visual-connection", target: "cn=alice,ou=people,dc=demo,dc=dbx", result: "ok", durationMs: 3, source: "ui" },
+    { level: "info", method: "ldap/entry/childrenCount", connectionId: "visual-connection", target: "ou=groups,dc=demo,dc=dbx", result: "ok", durationMs: 5, source: "ui" },
+    { level: "info", method: "ldap/search", connectionId: "visual-connection", target: "dc=demo,dc=dbx", detail: "scope=one filter=(cn=*)", result: "ok", durationMs: 28, source: "ui" },
+    { level: "warn", method: "ldap/count", connectionId: "visual-connection", target: "ou=people,dc=demo,dc=dbx", detail: "size limit reached (fixture)", result: "ok", durationMs: 64, source: "ui" },
+  ];
+  for (const [index, entry] of liveFeed.entries()) {
+    window.setTimeout(() => emitEvent("ldap/log", pushMockLog(entry)), 800 + index * 900);
+  }
+}
 
 export { context, appearance };
 

@@ -4,7 +4,7 @@
 // .context-menu 复用，坐标按按钮位置在打开时算一次；点击外部/Escape/再点
 // 按钮关闭；三个下拉共用文档级点击关闭，键盘处理各自独立且互不误伤）。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { Database, Download, FileText, FileUp, History, Info, Loader2, LocateFixed, Network, RefreshCw, Star, X } from "@lucide/vue";
+import { Database, Download, FileText, FileUp, History, Info, Loader2, LocateFixed, Network, RefreshCw, ScrollText, Star, X } from "@lucide/vue";
 import { t } from "../lib/i18n";
 import { splitFirstDnRdn } from "../lib/dn";
 
@@ -24,6 +24,8 @@ const props = defineProps<{
   /** 结果表当前有完整可导出的结果时才允许一键导出。 */
   exportable: boolean;
   exportTitle: string;
+  /** 宿主 executeCommand 桥可用（面板命令可从工作台触发）；旧宿主隐藏按钮。 */
+  canOpenLogs?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -31,6 +33,7 @@ const emit = defineEmits<{
   openSchema: [];
   openConnections: [];
   openImport: [];
+  openLogs: [];
   openRecent: [dn: string];
   openBookmark: [dn: string];
   removeBookmark: [dn: string];
@@ -263,6 +266,11 @@ onBeforeUnmount(() => {
       </button>
       <button class="toolbar-button" :disabled="!ready" :title="t('connections.title')" @click="emit('openConnections')">
         <Network class="icon-cyan" aria-hidden="true" /><span>{{ t("connections.title") }}</span>
+      </button>
+      <!-- 请求日志面板：经宿主 executeCommand 打开（与菜单执行同径）。旧宿主
+           无该桥时隐藏（入口仍在 appToolbar 图标/命令面板/dock「+」）。 -->
+      <button v-if="canOpenLogs" class="toolbar-button" :disabled="!ready" :title="t('logs.open')" @click="emit('openLogs')">
+        <ScrollText class="icon-violet" aria-hidden="true" /><span>{{ t("logs.open") }}</span>
       </button>
       <!-- 导入是写入口：只读时禁用，title 与 ResultTable 批量条同一只读提示。 -->
       <button class="toolbar-button" :disabled="!ready || !canWrite" :title="!canWrite ? t('editor.readonlyHint') : t('ldap.importEntry.toolbar')" @click="emit('openImport')">

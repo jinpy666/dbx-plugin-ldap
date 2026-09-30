@@ -1,0 +1,5 @@
+<!-- LDAP log panel command icon (open-ldap-logs, bottom dock panel). Licensed under the repository Apache-2.0 license. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="LDAP Logs">
+  <rect x="6" y="10" width="52" height="44" rx="8" fill="none" stroke="#6d5dfc" stroke-width="6"/>
+  <path d="M16 24h20M16 34h28M16 44h14" fill="none" stroke="#6d5dfc" stroke-width="6" stroke-linecap="round"/>
+</svg>

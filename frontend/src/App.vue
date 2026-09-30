@@ -10,7 +10,7 @@ import { X } from "@lucide/vue";
 import { DBX_POPOVER, resolveAppearance, type DbxPluginAppearanceInput } from "./lib/appearance";
 import { isDbxPluginTheme, onHostThemeChange, themeToAppearance } from "./lib/hostTheme";
 import { setWorkbenchLocale, t, workbenchLocale } from "./lib/i18n";
-import { getLdapConnectionId, ldapApi, setLdapConnectionId, type LdapEntry, type LdapSearchRequest } from "./lib/api";
+import { getLdapConnectionId, ldapApi, openLogsPanel, setLdapConnectionId, type LdapEntry, type LdapSearchRequest } from "./lib/api";
 import { appendOpenTab } from "./lib/openTabs";
 import { inferBaseDnFromProfile, pickBaseDnFromRootDse } from "./lib/baseDn";
 import { joinRdnAndParent, splitFirstDnRdn } from "./lib/dn";
@@ -43,6 +43,7 @@ import SchemaPanel from "./components/SchemaPanel.vue";
 import ConnectionsPanel from "./components/ConnectionsPanel.vue";
 import RootDseDialog from "./components/RootDseDialog.vue";
 import AuditFeedPanel from "./components/AuditFeedPanel.vue";
+import LogPanelView from "./components/LogPanelView.vue";
 import { useLdapSchemaCache } from "./lib/schemaCache";
 import { deriveDnValuedAttributes } from "./lib/dnAttributes";
 import type { LdapSchema } from "./lib/newEntryTemplates";
@@ -65,6 +66,19 @@ interface ConnectionSummary {
 const hostContext = ref<Record<string, unknown>>({});
 const appearance = ref(resolveAppearance());
 const ready = ref(false);
+// 宿主 executeCommand 桥可用性（initialize 时特性检测）：决定工具栏是否显示
+// "请求日志"按钮；旧宿主无该桥时隐藏，入口仍在 appToolbar/命令面板/dock「+」。
+const logsCommandSupported = ref(false);
+
+// 底部 dock 日志面板（manifest open-ldap-logs，presentation:"panel"）：宿主把
+// 同一 ui 入口嵌进底部面板 iframe，注入 surface="panel" + plugin.mode="logs"。
+// 面板 context 无 connectionId，不能走工作台初始化（connectionMissing 门必炸），
+// 只渲染 LogPanelView。
+const logPanelMode = computed(() => {
+  const context = hostContext.value;
+  const plugin = context.plugin;
+  return context.surface === "panel" && plugin !== null && typeof plugin === "object" && (plugin as Record<string, unknown>).mode === "logs";
+});
 
 const treeRef = ref<InstanceType<typeof DnTree>>();
 const searchRef = ref<InstanceType<typeof SearchForm>>();
@@ -815,6 +829,14 @@ function clearAuditFeed() {
   auditItems.value = [];
 }
 
+// 工作台内打开底部日志面板：经宿主 executeCommand（与菜单执行同径，singleton）。
+// 旧宿主无该桥 → { ok:false } 无 error，提示不支持；命令业务失败带 error 文本。
+async function onOpenLogsClick() {
+  const result = await openLogsPanel();
+  if (result.ok) return;
+  showNotice(result.error ? `${t("logs.openFailed")}: ${result.error}` : t("logs.openUnsupported"));
+}
+
 async function waitForHostApi(timeoutMs = 8000) {
   const deadline = Date.now() + timeoutMs;
   while (!window.dbxPlugin && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
@@ -845,6 +867,14 @@ async function initialize() {
     onTheme: (theme) => applyAppearance(themeToAppearance(theme)),
   }, { themeChannel: onHostThemeChange }));
   if (api.onEvent) unsubscribeEvent.push(api.onEvent(handleEvent));
+  logsCommandSupported.value = typeof api.executeCommand === "function";
+  // 日志面板分支：locale/主题/事件桥已就绪即可渲染（LogPanelView 自管 tail
+  // 回填与 ldap/log 订阅），跳过整条工作台初始化——面板 iframe 没有
+  // connectionId，往下走只会抛 connectionMissing。
+  if (logPanelMode.value) {
+    ready.value = true;
+    return;
+  }
   if (!connectionId.value) throw new Error(t("connectionMissing"));
   setLdapConnectionId(connectionId.value);
   syncConnectionContext();
@@ -984,6 +1014,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="workbench">
     <WorkbenchToolbar
+      v-if="!logPanelMode"
       :ready="ready"
       :show-spinner="!ready && !initError"
       :identity-text="identityText"
@@ -996,10 +1027,12 @@ onBeforeUnmount(() => {
       :bookmarks="bookmarks"
       :exportable="results.length > 0 && resultsComplete"
       :export-title="resultsComplete ? t('result.exportLdif') : t('result.exportIncomplete')"
+      :can-open-logs="logsCommandSupported"
       @root-dse="rootDseOpen = true"
       @open-schema="schemaOpen = true"
       @open-connections="connectionsOpen = true"
       @open-import="importOpen = true"
+      @open-logs="onOpenLogsClick"
       @open-recent="openRecent"
       @open-bookmark="onOpenBookmark"
       @remove-bookmark="onRemoveBookmark"
@@ -1017,6 +1050,10 @@ onBeforeUnmount(() => {
 
     <div v-if="initError" class="tree-state">{{ initError }}</div>
     <div v-else-if="!ready" class="tree-state">{{ t("tree.loading") }}</div>
+
+    <!-- 底部 dock 日志面板（logPanelMode）：宿主以 surface=panel 嵌入的独立
+         视图，只渲染日志流，不渲染工作台分栏。 -->
+    <LogPanelView v-else-if="logPanelMode" />
 
     <div v-else class="panes">
       <DnTree

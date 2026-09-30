@@ -21,6 +21,7 @@ import (
 	"github.com/go-ldap/ldap/v3"
 
 	"io.dbx.ldap.plugin/internal/lifecycle"
+	"io.dbx.ldap.plugin/internal/logbuf"
 )
 
 // connTarget 是一次拨号需要的运行时端点（方案 D5：一律拨 runtime.host:port）。
@@ -79,6 +80,10 @@ type Service struct {
 	// Audit 是写操作审计回调（§5.3）：由 main 注入（audit.jsonl 落盘 +
 	// ldap/audit 事件）。ldapconn 不直接依赖 store/SDK。nil 时静默跳过。
 	Audit func(rec AuditRecord)
+
+	// Log 是请求/连接生命周期日志回调（日志面板）：由 main 注入（logbuf
+	// 环形缓冲 + ldap/log 事件）。只承载非敏感摘要。nil 时静默跳过。
+	Log func(entry logbuf.Entry)
 
 	// Presets 提供预设持久化（main.go 注入 store-backed 实现，见
 	// operations.go 的 PresetStore 契约）。nil 时 ldap/presets/* 报错。
@@ -327,6 +332,16 @@ func (s *Service) Disconnect(connectionID string) {
 	entry.mu.Lock()
 	entry.closeLocked()
 	entry.mu.Unlock()
+	// profile 构造后不可变，解锁后读安全；主动断开留痕（幂等路径 entry==nil
+	// 不记，避免重复 disconnect 刷屏）。
+	s.EmitLog(logbuf.Entry{
+		Level:        "info",
+		Method:       "disconnect",
+		ConnectionID: connectionID,
+		Target:       entry.profile.URL,
+		Result:       "ok",
+		Source:       "system",
+	})
 	s.cancelSearchSessionsForConnection(connectionID)
 	s.invalidateSchema(connectionID)
 }
@@ -406,6 +421,16 @@ func (s *Service) WithConn(ctx context.Context, connectionID string, fn func(con
 	}
 	entry.status = "connected"
 	entry.lastError = ""
+	// 请求中途透明重连成功：warn 留痕（请求层只会看到本次请求 ok，连接抖动
+	// 只有这里有痕）。
+	s.EmitLog(logbuf.Entry{
+		Level:        "warn",
+		Method:       "reconnect",
+		ConnectionID: entry.profile.ID,
+		Target:       fmt.Sprintf("%s:%d", entry.target.Host, entry.target.Port),
+		Result:       "ok",
+		Source:       "system",
+	})
 	return nil
 }
 
@@ -446,6 +471,15 @@ func (s *Service) EmitAudit(rec AuditRecord) {
 	s.Audit(rec)
 }
 
+// EmitLog 触发生命周期日志回调（nil 安全）。Level/Result 由调用方给定；
+// Seq/At 由 logbuf.Buffer.Append 统一填充，此处无需预置。
+func (s *Service) EmitLog(entry logbuf.Entry) {
+	if s.Log == nil {
+		return
+	}
+	s.Log(entry)
+}
+
 // connectLocked 拨号并 bind（调用方须持 entry.mu），语义对照
 // tiny-rdm connectRuntimeLocked(:1035)。审查 L1：拨号前后对连接表条目做
 // 身份双检（对齐 search_sessions.go addSearchSession）——Disconnect 幂等
@@ -473,6 +507,16 @@ func (s *Service) connectLocked(ctx context.Context, entry *connEntry) error {
 	entry.status = "connected"
 	entry.lastError = ""
 	s.emitTLSInsecureAudit(entry.profile)
+	// 惰性建连成功留痕（首次领域调用/断线重连都会走到这里；失败路径由请求
+	// 层日志覆盖，不在此重复记 error）。
+	s.EmitLog(logbuf.Entry{
+		Level:        "info",
+		Method:       "connect",
+		ConnectionID: entry.profile.ID,
+		Target:       fmt.Sprintf("%s:%d", entry.target.Host, entry.target.Port),
+		Result:       "ok",
+		Source:       "system",
+	})
 	return nil
 }
 

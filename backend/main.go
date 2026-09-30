@@ -14,6 +14,7 @@
 //	ldap/entry/compare | ldap/whoami | ldap/entry/passwdModify      （F3）
 //	ldap/connections/statuses |
 //	ldap/presets/list | ldap/presets/save | ldap/presets/remove    （转发 internal/ldapconn）
+//	ldap/log/tail                                                  （日志面板增量回填，internal/logbuf）
 //	ldap/ui/state/report                                            （MCP intent 回报，前端回调）
 //	mcp/tools | mcp/call | mcp/settings/get | mcp/settings/set      （M1 MCP 工具面，internal/mcp）
 //
@@ -32,11 +33,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	dbxpluginsdk "github.com/t8y2/dbx/plugins/sdk/go/dbx-plugin-sdk"
 
 	"io.dbx.ldap.plugin/internal/ldapconn"
 	"io.dbx.ldap.plugin/internal/lifecycle"
+	"io.dbx.ldap.plugin/internal/logbuf"
 	"io.dbx.ldap.plugin/internal/mcp"
 	"io.dbx.ldap.plugin/internal/store"
 )
@@ -97,9 +100,12 @@ type pluginHandler struct {
 	svc    *ldapconn.Service
 	st     *store.Store
 	mcpSrv *mcp.Server
+	// logs 请求级日志环形缓冲（日志面板数据源；会话级不落盘）。零值
+	// handler（单测直接构造）nil 安全：装饰器与 tail 均判空跳过。
+	logs *logbuf.Buffer
 
 	mu      sync.Mutex
-	emitter *dbxpluginsdk.Emitter // Serve 期间单例，用于 ldap/audit 与 ldap/ui/intent 事件
+	emitter *dbxpluginsdk.Emitter // Serve 期间单例，用于 ldap/audit、ldap/log 与 ldap/ui/intent 事件
 }
 
 func main() {
@@ -117,23 +123,15 @@ func main() {
 	}
 
 	svc := ldapconn.NewService()
-	handler := &pluginHandler{svc: svc, st: st}
+	handler := &pluginHandler{svc: svc, st: st, logs: logbuf.New(logbuf.DefaultMax)}
 	svc.Audit = handler.auditRecord
+	svc.Log = handler.logRecord
 	svc.Presets = newPresetStore(st)
 
 	// MCP 工具面（M1）：mcp/tools|call|settings + ldap/ui/state/report。
-	// intent 事件经当前 Emitter 下发（与 audit 同一条持锁通道）。
+	// intent 事件经当前 Emitter 下发（与 audit/log 同一条持锁通道）。
 	mcpSrv := mcp.NewServer(svc, st)
-	mcpSrv.SetEmitter(func(method string, params any) {
-		handler.mu.Lock()
-		emitter := handler.emitter
-		handler.mu.Unlock()
-		if emitter != nil {
-			if err := emitter.Event(method, params); err != nil {
-				log.Printf("[dbx-plugin-ldap] %s event failed: %v", method, err)
-			}
-		}
-	})
+	mcpSrv.SetEmitter(handler.emitEvent)
 	handler.mcpSrv = mcpSrv
 
 	metadata := dbxpluginsdk.Metadata{
@@ -154,6 +152,9 @@ func main() {
 
 // Handle 方法分发（每请求一个 goroutine，Handler 须并发安全：全部状态在
 // ldapconn.Service 内加锁，本结构体仅 emitter 一个可变字段且持锁访问）。
+// ldap/* 与 mcp/* 请求经计时装饰器进入请求日志（ldap/log）；connection/*
+// 不记——其 params 携带 lifecycle 凭据，装饰器不碰，生命周期留痕由
+// service 层的 Log 回调负责。
 func (h *pluginHandler) Handle(
 	_ dbxpluginsdk.RequestContext,
 	method string,
@@ -164,6 +165,25 @@ func (h *pluginHandler) Handle(
 	h.emitter = emitter
 	h.mu.Unlock()
 
+	if !shouldLogRequest(method) {
+		return h.dispatch(method, params)
+	}
+	start := time.Now()
+	result, perr := h.dispatch(method, params)
+	h.logRequest(method, params, perr, time.Since(start))
+	return result, perr
+}
+
+// shouldLogRequest 报告方法是否进请求日志：领域请求 + MCP 调用。排除
+// ldap/log/tail（面板自身的读通道，记它只会刷屏）。
+func shouldLogRequest(method string) bool {
+	if method == "ldap/log/tail" {
+		return false
+	}
+	return strings.HasPrefix(method, "ldap/") || strings.HasPrefix(method, "mcp/")
+}
+
+func (h *pluginHandler) dispatch(method string, params json.RawMessage) (any, *dbxpluginsdk.PluginError) {
 	switch method {
 	case "connection/test":
 		return h.connectionTest(params)
@@ -208,6 +228,8 @@ func (h *pluginHandler) Handle(
 		return h.forwardPasswordModify(params)
 	case "ldap/connections/statuses":
 		return h.forwardStatuses()
+	case "ldap/log/tail":
+		return h.logTail(params)
 	case "ldap/presets/list":
 		return h.forwardPresetsList()
 	case "ldap/presets/save":
@@ -610,7 +632,21 @@ func (h *pluginHandler) mcpSettingsSet(params json.RawMessage) (any, *dbxplugins
 	return result, nil
 }
 
-// --- 审计与公共 helper ---
+// --- 审计、日志与公共 helper ---
+
+// emitEvent 经当前 Emitter 下发事件（audit/log/intent 共用；Serve 期间单例，
+// 持锁读取）。nil Emitter（未握手/已退出）静默跳过。
+func (h *pluginHandler) emitEvent(method string, params any) {
+	h.mu.Lock()
+	emitter := h.emitter
+	h.mu.Unlock()
+	if emitter == nil {
+		return
+	}
+	if err := emitter.Event(method, params); err != nil {
+		log.Printf("[dbx-plugin-ldap] %s event failed: %v", method, err)
+	}
+}
 
 // auditRecord 是 ldapconn.Service.Audit 回调：audit.jsonl 落盘 +
 // ldap/audit 事件（§5.3，供工作台轻提示；两条通道携带同一份非敏感数据；
@@ -630,14 +666,121 @@ func (h *pluginHandler) auditRecord(rec ldapconn.AuditRecord) {
 			log.Printf("[dbx-plugin-ldap] audit write failed: %v", err)
 		}
 	}
-	h.mu.Lock()
-	emitter := h.emitter
-	h.mu.Unlock()
-	if emitter != nil {
-		if err := emitter.Event("ldap/audit", rec); err != nil {
-			log.Printf("[dbx-plugin-ldap] audit event failed: %v", err)
+	h.emitEvent("ldap/audit", rec)
+}
+
+// logRecord 是 ldapconn.Service.Log 回调（连接生命周期）：logbuf 环形缓冲 +
+// ldap/log 事件，两条通道同一份非敏感数据。h.logs 为 nil（零值 handler，
+// 单测直接构造）时静默跳过。
+func (h *pluginHandler) logRecord(entry logbuf.Entry) {
+	if h.logs == nil {
+		return
+	}
+	h.emitEvent("ldap/log", h.logs.Append(entry))
+}
+
+// logRequest 是 Handle 计时装饰器的落笔端：请求摘要 → 环形缓冲 + ldap/log
+// 事件。结果只有 ok/error 两值——read/write-policy 拒绝的 denied 语义由
+// audit 通道承载（插件请求被拒也会以 error 冒泡到这里，两通道互补）。
+func (h *pluginHandler) logRequest(method string, params json.RawMessage, perr *dbxpluginsdk.PluginError, elapsed time.Duration) {
+	if h.logs == nil {
+		return
+	}
+	connectionID, target, detail := requestSummary(method, params)
+	source := "ui"
+	if strings.HasPrefix(method, "mcp/") {
+		source = "mcp"
+	}
+	entry := logbuf.Entry{
+		Level:        "info",
+		Method:       method,
+		ConnectionID: connectionID,
+		Target:       target,
+		Detail:       detail,
+		Result:       "ok",
+		DurationMs:   elapsed.Milliseconds(),
+		Source:       source,
+	}
+	if perr != nil {
+		entry.Level = "error"
+		entry.Result = "error"
+		entry.Detail = truncateRunes(joinNotEmpty(entry.Detail, perr.Message), 300)
+	}
+	h.logRecord(entry)
+}
+
+// requestSummary 从请求参数提取非敏感摘要，白名单字段之外一律不看——
+// passwdModify 的密码、add/modify 的属性值等敏感键绝不进入日志（凭据不进
+// 日志/事件/审计的红线）；mcp/call 只取 tool 名，arguments 任意形状不碰。
+// 参数非扁平 JSON（connection/test 的 lifecycle 等）时解析失败按空摘要处理。
+func requestSummary(method string, params json.RawMessage) (connectionID, target, detail string) {
+	var flat struct {
+		ConnectionID string `json:"connectionId"`
+		DN           string `json:"dn"`
+		BaseDN       string `json:"baseDn"`
+		Filter       string `json:"filter"`
+		Scope        string `json:"scope"`
+		Tool         string `json:"tool"`
+	}
+	if len(params) > 0 {
+		_ = json.Unmarshal(params, &flat)
+	}
+	if flat.DN != "" {
+		target = truncateRunes(flat.DN, 200)
+	} else {
+		target = truncateRunes(flat.BaseDN, 200)
+	}
+	var parts []string
+	if flat.Scope != "" {
+		parts = append(parts, "scope="+flat.Scope)
+	}
+	if flat.Filter != "" {
+		parts = append(parts, "filter="+truncateRunes(flat.Filter, 200))
+	}
+	if flat.Tool != "" {
+		parts = append(parts, "tool="+flat.Tool)
+	}
+	return flat.ConnectionID, target, joinNotEmpty(parts...)
+}
+
+// logTail 处理 ldap/log/tail：返回 seq > after 的缓冲增量（日志面板打开/
+// 重开时回填，limit<=0 取缓冲容量）。全局视图，不经 decodeParams 的
+// connectionId 门（同 ldap/connections/statuses）。
+func (h *pluginHandler) logTail(params json.RawMessage) (any, *dbxpluginsdk.PluginError) {
+	var body struct {
+		After uint64 `json:"after"`
+		Limit int    `json:"limit"`
+	}
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &body); err != nil {
+			return nil, invalidParams(err)
 		}
 	}
+	entries := []logbuf.Entry{}
+	if h.logs != nil {
+		entries = h.logs.Tail(body.After, body.Limit)
+	}
+	return map[string]any{"entries": entries}, nil
+}
+
+// truncateRunes 按 rune 截断到 max 并以省略号标注（DN/filter 可能含非 ASCII）。
+func truncateRunes(s string, max int) string {
+	runes := []rune(strings.TrimSpace(s))
+	if len(runes) <= max {
+		return string(runes)
+	}
+	return string(runes[:max]) + "…"
+}
+
+// joinNotEmpty 拼接非空片段（"; " 分隔），全空返回空串。
+func joinNotEmpty(parts ...string) string {
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			kept = append(kept, part)
+		}
+	}
+	return strings.Join(kept, "; ")
 }
 
 // auditAction 统一审计 action 命名（ldap/<action>）。

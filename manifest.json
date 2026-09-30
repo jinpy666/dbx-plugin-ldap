@@ -5,7 +5,7 @@
   "name": "LDAP Studio",
   "version": "0.1.94",
   "publisher": "jinpy",
-  "description": "Browse, search, and manage LDAP directories with RFC 4515 filters, schema inspection, entry editing, LDIF/CSV export, and guarded write controls.",
+  "description": "LDAP directory workbench for DBX: DN tree browsing, RFC 4515 search with saved presets, schema inspection, LDIF/CSV export, and guarded entry editing — enterprise auth from anonymous to Kerberos/GSSAPI, NTLM and DIGEST-MD5, over LDAP/StartTLS/LDAPS with mTLS, plus 8 MCP tools for AI automation.",
   "source": "https://github.com/jinpy666/dbx-plugin-ldap",
   "homepage": "https://github.com/jinpy666/dbx-plugin-ldap",
   "icon": "assets/plugin.svg",
@@ -35,7 +35,7 @@
       "label": "LDAP server",
       "icon": "assets/plugin.svg",
       "database_type": "ldap",
-      "description": "LDAP directory connection with simple, anonymous, unauthenticated and advanced authentication.",
+      "description": "Connect to any LDAP v3 directory — OpenLDAP, Active Directory, and beyond — with anonymous, simple, Kerberos/GSSAPI, NTLM, DIGEST-MD5 and SASL EXTERNAL authentication, plus StartTLS/LDAPS with optional client-certificate mTLS.",
       "capabilities": [
         "test",
         "connect",
@@ -572,18 +572,64 @@
       "type": "workbench",
       "id": "io.dbx.ldap.workbench",
       "label": "LDAP Workbench",
-      "description": "Browse and edit LDAP directory entries.",
+      "description": "Browse the DN tree, search with RFC 4515 filters and saved presets, inspect schema, and edit entries behind read-only and Base DN guards; export LDIF/CSV, and let AI drive the same guarded workflow through MCP.",
       "icon": "assets/plugin.svg"
+    },
+    {
+      "type": "workbench",
+      "id": "io.dbx.ldap.logpanel",
+      "label": "LDAP Logs",
+      "description": "Request-level log stream for LDAP operations — every search, entry edit, and connection lifecycle event with duration and result, docked in the bottom panel.",
+      "icon": "assets/log-panel.svg"
+    },
+    {
+      "type": "command",
+      "id": "open-ldap-logs",
+      "label": "LDAP Logs",
+      "description": "Open the LDAP request log panel in the bottom dock.",
+      "icon": "assets/log-panel.svg",
+      "action": {
+        "type": "open-workbench",
+        "workbench": "io.dbx.ldap.logpanel",
+        "presentation": "panel",
+        "reuse": "singleton",
+        "instance_key": "ldap-logs",
+        "restore": "none",
+        "context": {
+          "plugin": {
+            "mode": "logs"
+          }
+        }
+      }
+    },
+    {
+      "type": "menus",
+      "id": "ldap-logs-entrypoints",
+      "items": [
+        {
+          "location": "commandPalette",
+          "command": "open-ldap-logs",
+          "group": "primary",
+          "order": 100
+        },
+        {
+          "location": "appToolbar",
+          "command": "open-ldap-logs",
+          "group": "navigation",
+          "order": 100,
+          "default_visible": true
+        }
+      ]
     }
   ],
   "localizations": {
     "zh-CN": {
       "name": "LDAP Studio",
-      "description": "用于浏览、搜索和管理 LDAP 目录：支持 RFC 4515 过滤器、Schema 检查、条目编辑、LDIF/CSV 导出和受控写入。",
+      "description": "DBX 的 LDAP 目录工作台：DN 树浏览、RFC 4515 搜索与保存预设、Schema 检查、LDIF/CSV 导出，以及受护栏保护的条目编辑——企业级认证从匿名到 Kerberos/GSSAPI、NTLM、DIGEST-MD5，支持 LDAP/StartTLS/LDAPS 与 mTLS，并提供 8 个 MCP 工具供 AI 自动化。",
       "contributions": {
         "io.dbx.ldap.connection": {
           "label": "LDAP 服务器",
-          "description": "支持 simple、匿名、unauthenticated 及进阶认证的 LDAP 目录连接。",
+          "description": "连接任意 LDAP v3 目录（OpenLDAP、Active Directory 等）：支持匿名、Simple、Kerberos/GSSAPI、NTLM、DIGEST-MD5 与 SASL EXTERNAL 认证，StartTLS/LDAPS 可选客户端证书 mTLS。",
           "fields": {
             "display_name": {
               "label": "连接名称"
@@ -732,17 +778,25 @@
         },
         "io.dbx.ldap.workbench": {
           "label": "LDAP 工作台",
-          "description": "浏览与编辑 LDAP 目录条目。"
+          "description": "浏览 DN 树、使用 RFC 4515 过滤器与保存预设搜索、检查 Schema，并在只读与 Base DN 护栏下编辑条目；导出 LDIF/CSV，也可让 AI 通过 MCP 走同样的受护栏工作流。"
+        },
+        "io.dbx.ldap.logpanel": {
+          "label": "LDAP 日志",
+          "description": "LDAP 操作的请求级日志流——每次搜索、条目编辑与连接生命周期事件，含耗时与结果，停靠在底部面板。"
+        },
+        "open-ldap-logs": {
+          "label": "LDAP 日志",
+          "description": "在底部面板打开 LDAP 请求日志。"
         }
       }
     },
     "zh-TW": {
       "name": "LDAP Studio",
-      "description": "DBX 的 LDAP 主控台外掛：DN 樹、RFC 4515 搜尋、條目編輯、Schema 與搜尋預設。",
+      "description": "DBX 的 LDAP 目錄工作台：DN 樹瀏覽、RFC 4515 搜尋與儲存預設、Schema 檢查、LDIF/CSV 匯出，以及受護欄保護的條目編輯——企業級認證從匿名到 Kerberos/GSSAPI、NTLM、DIGEST-MD5，支援 LDAP/StartTLS/LDAPS 與 mTLS，並提供 8 個 MCP 工具供 AI 自動化。",
       "contributions": {
         "io.dbx.ldap.connection": {
           "label": "LDAP 伺服器",
-          "description": "支援 simple、匿名、unauthenticated 及進階認證的 LDAP 目錄連線。",
+          "description": "連線任意 LDAP v3 目錄（OpenLDAP、Active Directory 等）：支援匿名、Simple、Kerberos/GSSAPI、NTLM、DIGEST-MD5 與 SASL EXTERNAL 認證，StartTLS/LDAPS 可選用戶端憑證 mTLS。",
           "fields": {
             "display_name": {
               "label": "連線名稱"
@@ -891,17 +945,25 @@
         },
         "io.dbx.ldap.workbench": {
           "label": "LDAP 工作台",
-          "description": "瀏覽與編輯 LDAP 目錄條目。"
+          "description": "瀏覽 DN 樹、使用 RFC 4515 過濾器與儲存預設搜尋、檢查 Schema，並在唯讀與 Base DN 護欄下編輯條目；匯出 LDIF/CSV，也可讓 AI 透過 MCP 走同樣的受護欄工作流程。"
+        },
+        "io.dbx.ldap.logpanel": {
+          "label": "LDAP 日誌",
+          "description": "LDAP 操作的請求級日誌流——每次搜尋、條目編輯與連線生命週期事件，含耗時與結果，停靠在底部面板。"
+        },
+        "open-ldap-logs": {
+          "label": "LDAP 日誌",
+          "description": "在底部面板開啟 LDAP 請求日誌。"
         }
       }
     },
     "en": {
       "name": "LDAP Studio",
-      "description": "Browse, search, and manage LDAP directories with RFC 4515 filters, schema inspection, entry editing, LDIF/CSV export, and guarded write controls.",
+      "description": "LDAP directory workbench for DBX: DN tree browsing, RFC 4515 search with saved presets, schema inspection, LDIF/CSV export, and guarded entry editing — enterprise auth from anonymous to Kerberos/GSSAPI, NTLM and DIGEST-MD5, over LDAP/StartTLS/LDAPS with mTLS, plus 8 MCP tools for AI automation.",
       "contributions": {
         "io.dbx.ldap.connection": {
           "label": "LDAP server",
-          "description": "LDAP directory connection with simple, anonymous, unauthenticated and advanced authentication.",
+          "description": "Connect to any LDAP v3 directory — OpenLDAP, Active Directory, and beyond — with anonymous, simple, Kerberos/GSSAPI, NTLM, DIGEST-MD5 and SASL EXTERNAL authentication, plus StartTLS/LDAPS with optional client-certificate mTLS.",
           "fields": {
             "display_name": {
               "label": "Connection name"
@@ -1044,17 +1106,25 @@
         },
         "io.dbx.ldap.workbench": {
           "label": "LDAP Workbench",
-          "description": "Browse and edit LDAP directory entries."
+          "description": "Browse the DN tree, search with RFC 4515 filters and saved presets, inspect schema, and edit entries behind read-only and Base DN guards; export LDIF/CSV, and let AI drive the same guarded workflow through MCP."
+        },
+        "io.dbx.ldap.logpanel": {
+          "label": "LDAP Logs",
+          "description": "Request-level log stream for LDAP operations — every search, entry edit, and connection lifecycle event with duration and result, docked in the bottom panel."
+        },
+        "open-ldap-logs": {
+          "label": "LDAP Logs",
+          "description": "Open the LDAP request log panel in the bottom dock."
         }
       }
     },
     "es": {
       "name": "LDAP Studio",
-      "description": "Plugin de consola LDAP para DBX: árbol de DN, búsqueda RFC 4515, edición de entradas, esquema y búsquedas guardadas.",
+      "description": "Banco de trabajo LDAP para DBX: árbol de DN, búsqueda RFC 4515 con preajustes guardados, inspección de esquema, exportación LDIF/CSV y edición protegida de entradas; autenticación empresarial de anónima a Kerberos/GSSAPI, NTLM y DIGEST-MD5, sobre LDAP/StartTLS/LDAPS con mTLS, más 8 herramientas MCP para automatización con IA.",
       "contributions": {
         "io.dbx.ldap.connection": {
           "label": "Servidor LDAP",
-          "description": "Conexión a directorio LDAP con autenticación simple, anónima, unauthenticated y avanzada.",
+          "description": "Conexión a cualquier directorio LDAP v3 (OpenLDAP, Active Directory y más): autenticación anónima, simple, Kerberos/GSSAPI, NTLM, DIGEST-MD5 y SASL EXTERNAL, con StartTLS/LDAPS y mTLS de certificado de cliente opcional.",
           "fields": {
             "display_name": {
               "label": "Nombre de la conexión"
@@ -1203,17 +1273,25 @@
         },
         "io.dbx.ldap.workbench": {
           "label": "Banco de trabajo LDAP",
-          "description": "Explore y edite entradas del directorio LDAP."
+          "description": "Explore el árbol de DN, busque con filtros y preajustes RFC 4515 guardados, inspeccione el esquema y edite entradas bajo modos de solo lectura y DN base permitidos; exporte LDIF/CSV y deje que la IA siga el mismo flujo protegido mediante MCP."
+        },
+        "io.dbx.ldap.logpanel": {
+          "label": "Registros LDAP",
+          "description": "Flujo de registro a nivel de petición para operaciones LDAP: cada búsqueda, edición de entradas y evento del ciclo de conexión, con duración y resultado, acoplado en el panel inferior."
+        },
+        "open-ldap-logs": {
+          "label": "Registros LDAP",
+          "description": "Abre el panel de registros de peticiones LDAP en la base."
         }
       }
     },
     "it": {
       "name": "LDAP Studio",
-      "description": "Plugin console LDAP per DBX: albero DN, ricerca RFC 4515, modifica delle voci, schema e ricerche salvate.",
+      "description": "Banco di lavoro LDAP per DBX: albero DN, ricerca RFC 4515 con preimpostazioni salvate, ispezione dello schema, esportazione LDIF/CSV e modifica protetta delle voci; autenticazione aziendale da anonima a Kerberos/GSSAPI, NTLM e DIGEST-MD5, su LDAP/StartTLS/LDAPS con mTLS, più 8 strumenti MCP per l'automazione con l'IA.",
       "contributions": {
         "io.dbx.ldap.connection": {
           "label": "Server LDAP",
-          "description": "Connessione a directory LDAP con autenticazione simple, anonima, unauthenticated e avanzata.",
+          "description": "Connessione a qualsiasi directory LDAP v3 (OpenLDAP, Active Directory e altri): autenticazione anonima, simple, Kerberos/GSSAPI, NTLM, DIGEST-MD5 e SASL EXTERNAL, con StartTLS/LDAPS e mTLS con certificato client opzionale.",
           "fields": {
             "display_name": {
               "label": "Nome connessione"
@@ -1362,17 +1440,25 @@
         },
         "io.dbx.ldap.workbench": {
           "label": "Banco di lavoro LDAP",
-          "description": "Sfoglia e modifica le voci della directory LDAP."
+          "description": "Sfoglia l'albero DN, cerca con filtri e preimpostazioni RFC 4515 salvate, ispeziona lo schema e modifica le voci con guardie di sola lettura e DN base consentiti; esporta LDIF/CSV e lascia che l'IA segua lo stesso flusso protetto tramite MCP."
+        },
+        "io.dbx.ldap.logpanel": {
+          "label": "Log LDAP",
+          "description": "Flusso di log a livello di richiesta per le operazioni LDAP: ogni ricerca, modifica di voci ed evento del ciclo di connessione, con durata e risultato, agganciato al pannello inferiore."
+        },
+        "open-ldap-logs": {
+          "label": "Log LDAP",
+          "description": "Apre il pannello dei log delle richieste LDAP nella parte inferiore."
         }
       }
     },
     "ja": {
       "name": "LDAP Studio",
-      "description": "DBX 用 LDAP コンソールプラグイン: DN ツリー、RFC 4515 検索、エントリ編集、スキーマ、検索プリセット。",
+      "description": "DBX 用 LDAP ディレクトリワークベンチ: DN ツリー、RFC 4515 検索と保存プリセット、スキーマ検査、LDIF/CSV エクスポート、ガード付きエントリ編集。匿名から Kerberos/GSSAPI・NTLM・DIGEST-MD5 のエンタープライズ認証、LDAP/StartTLS/LDAPS と mTLS に対応し、AI 自動化のための 8 つの MCP ツールを提供。",
       "contributions": {
         "io.dbx.ldap.connection": {
           "label": "LDAP サーバー",
-          "description": "simple・匿名・unauthenticated および高度な認証に対応した LDAP ディレクトリ接続。",
+          "description": "任意の LDAP v3 ディレクトリ（OpenLDAP、Active Directory など）に接続。匿名・Simple・Kerberos/GSSAPI・NTLM・DIGEST-MD5・SASL EXTERNAL 認証に対応し、StartTLS/LDAPS ではクライアント証明書 mTLS も選択できます。",
           "fields": {
             "display_name": {
               "label": "接続名"
@@ -1521,17 +1607,25 @@
         },
         "io.dbx.ldap.workbench": {
           "label": "LDAP ワークベンチ",
-          "description": "LDAP ディレクトリエントリの閲覧と編集。"
+          "description": "DN ツリーの閲覧、RFC 4515 フィルターと保存プリセットによる検索、スキーマ検査、読み取り専用と Base DN ガード下でのエントリ編集。LDIF/CSV エクスポートに加え、MCP 経由なら AI も同じガード付きワークフローを利用できます。"
+        },
+        "io.dbx.ldap.logpanel": {
+          "label": "LDAP ログ",
+          "description": "LDAP 操作のリクエスト単位ログストリーム — 検索・エントリ編集・接続ライフサイクルイベントのすべてを所要時間と結果付きで下部パネルに表示します。"
+        },
+        "open-ldap-logs": {
+          "label": "LDAP ログ",
+          "description": "下部ドックに LDAP リクエストログパネルを開きます。"
         }
       }
     },
     "pt-BR": {
       "name": "LDAP Studio",
-      "description": "Plugin de console LDAP para o DBX: árvore de DN, busca RFC 4515, edição de entradas, schema e buscas salvas.",
+      "description": "Bancada de trabalho LDAP para o DBX: árvore de DN, busca RFC 4515 com predefinições salvas, inspeção de schema, exportação LDIF/CSV e edição protegida de entradas; autenticação corporativa de anônima a Kerberos/GSSAPI, NTLM e DIGEST-MD5, sobre LDAP/StartTLS/LDAPS com mTLS, além de 8 ferramentas MCP para automação com IA.",
       "contributions": {
         "io.dbx.ldap.connection": {
           "label": "Servidor LDAP",
-          "description": "Conexão a diretório LDAP com autenticação simples, anônima, unauthenticated e avançada.",
+          "description": "Conexão a qualquer diretório LDAP v3 (OpenLDAP, Active Directory e mais): autenticação anônima, simples, Kerberos/GSSAPI, NTLM, DIGEST-MD5 e SASL EXTERNAL, com StartTLS/LDAPS e mTLS de certificado de cliente opcional.",
           "fields": {
             "display_name": {
               "label": "Nome da conexão"
@@ -1680,7 +1774,15 @@
         },
         "io.dbx.ldap.workbench": {
           "label": "Bancada de trabalho LDAP",
-          "description": "Navegue e edite entradas do diretório LDAP."
+          "description": "Navegue pela árvore de DN, busque com filtros e predefinições RFC 4515 salvas, inspecione o schema e edite entradas sob guardas de somente leitura e DN base permitidos; exporte LDIF/CSV e deixe a IA seguir o mesmo fluxo protegido via MCP."
+        },
+        "io.dbx.ldap.logpanel": {
+          "label": "Logs LDAP",
+          "description": "Fluxo de logs no nível de requisição para operações LDAP — cada busca, edição de entrada e evento do ciclo de conexão, com duração e resultado, acoplado no painel inferior."
+        },
+        "open-ldap-logs": {
+          "label": "Logs LDAP",
+          "description": "Abre o painel de logs de requisições LDAP na parte inferior."
         }
       }
     }

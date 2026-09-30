@@ -324,3 +324,24 @@ export interface LdapAuditEvent {
   target: string;
   result: "ok" | "denied" | "error";
 }
+
+// -- 底部日志面板命令 ----------------------------------------------------------
+
+/** manifest open-ldap-logs 命令 id（presentation:"panel"、singleton 复用）。 */
+export const LOG_PANEL_COMMAND = "open-ldap-logs";
+
+export interface LogsPanelOpenResult {
+  ok: boolean;
+  /** 宿主返回的业务结果（未知命令 / enablement 拒绝）；桥缺失时缺省。 */
+  error?: string;
+}
+
+/** 经宿主 executeCommand 打开底部日志面板——与菜单执行同径（panel 命令停靠
+ *  底部 dock，singleton 复用）。旧宿主无该桥方法时返回 { ok: false }（无
+ *  error），调用方按"宿主不支持"降级。 */
+export async function openLogsPanel(): Promise<LogsPanelOpenResult> {
+  const api = window.dbxPlugin;
+  if (typeof api?.executeCommand !== "function") return { ok: false };
+  const result = await api.executeCommand(LOG_PANEL_COMMAND);
+  return result?.error ? { ok: false, error: result.error } : { ok: true };
+}

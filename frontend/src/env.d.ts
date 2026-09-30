@@ -77,6 +77,13 @@ interface DbxPluginApi {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
   invoke<T = unknown>(method: string, params?: unknown, options?: { timeoutMs?: number }): Promise<T>;
   notify(method: string, params?: unknown): Promise<void>;
+  /**
+   * 执行本插件 manifest 声明的命令（宿主与菜单执行同径：panel 命令停靠底部
+   * 面板，singleton 复用）。context 合并到命令上下文之上并解析 instance_key
+   * 的 {{connectionId}} 类占位符（每连接一实例的声明方式）。预期业务结果经
+   * { error } 返回；旧宿主为 undefined，调用前需特性检测。
+   */
+  executeCommand?(commandId: string, context?: Record<string, unknown>): Promise<{ error?: string }>;
   sendBinary(channel: string, data: Uint8Array | ArrayBuffer | string): Promise<void>;
   onEvent(listener: (event: DbxPluginEvent) => void): () => void;
   onBinary(listener: (event: DbxPluginBinaryEvent) => void): () => void;
