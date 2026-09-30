@@ -376,10 +376,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .tree-badge--loading { opacity: .7; }
 
 .result-pane { display: flex; min-height: 0; flex: 1; flex-direction: column; }
-.result-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 10px; color: var(--muted-foreground); font-size: 11px; }
+.result-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 32px; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); padding: 4px 10px; background: color-mix(in srgb, var(--muted) 22%, transparent); color: var(--muted-foreground); font-size: 11px; }
+.result-meta > span:first-child { display: inline-flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 6px; }
+.result-status-badge { margin-left: 2px; }
 .result-table { display: flex; min-height: 0; flex: 1; flex-direction: column; }
 .pager { display: flex; align-items: center; gap: 6px; }
-.pager button { border: 1px solid var(--border); border-radius: 4px; background: var(--background); min-height: 22px; padding: 0 8px; cursor: pointer; }
+.pager button { display: inline-grid; width: 26px; height: 24px; place-items: center; border: 1px solid var(--border); border-radius: 5px; background: color-mix(in srgb, var(--background) 88%, var(--foreground)); padding: 0; color: var(--muted-foreground); cursor: pointer; }
+.pager button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--primary) 60%, var(--border)); background: color-mix(in srgb, var(--primary) 12%, var(--background)); color: var(--foreground); }
+.pager button svg { width: 14px; height: 14px; }
 .pager button:disabled { opacity: .4; }
 /* 导出按钮为 icon-only：lucide 默认 24px 会撑满 22px 高的按钮，钉住尺寸 */
 .pager button svg { width: 13px; height: 13px; flex: 0 0 13px; }
@@ -436,6 +440,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   --ag-header-cell-moving-background-color: color-mix(in srgb, var(--accent) 80%, transparent);
   --ag-scrollbar-size: 12px;
 }
+.dbx-grid .ag-header { border-bottom: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border)); }
+.dbx-grid .ag-header-cell-label { font-weight: 600; letter-spacing: .01em; }
+.dbx-grid .ag-row { transition: background-color .12s ease; }
+.dbx-grid .ag-cell { display: flex; align-items: center; border-right: 1px solid color-mix(in srgb, var(--border) 30%, transparent); }
+.dbx-grid .ag-cell.result-cell-value { font-family: var(--mono-font-family); font-size: 11px; }
 .dbx-grid .ag-body-viewport,
 .dbx-grid .ag-center-cols-viewport,
 .dbx-grid .ag-body-horizontal-scroll-viewport {
@@ -495,8 +504,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 /* Modals */
 .modal-backdrop { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: 16px; background: var(--overlay); }
-.modal { position: relative; display: flex; width: min(560px, 100%); max-height: calc(100vh - 32px); flex-direction: column; gap: 16px; border: 1px solid var(--border); border-radius: 8px; padding: 16px; background: var(--popover); color: var(--foreground); box-shadow: 0 16px 48px rgb(0 0 0 / 32%); }
-.modal header { min-height: 24px; justify-content: space-between; gap: 12px; padding: 0; }
+.modal { position: relative; display: flex; width: min(560px, 100%); max-height: calc(100vh - 32px); flex-direction: column; gap: 16px; border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border)); border-radius: 10px; padding: 16px; background: var(--popover); color: var(--foreground); box-shadow: 0 16px 48px rgb(0 0 0 / 32%); }
+.modal header { min-height: 28px; justify-content: space-between; gap: 12px; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); padding: 0 0 8px; }
 .modal header > .icon-button { position: absolute; top: 8px; right: 8px; }
 .modal h2 { min-width: 0; margin: 0; padding-right: 24px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
 .modal > p { line-height: 1.55; }
@@ -587,7 +596,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .destructive-icon svg { width: 16px; height: 16px; }
 .entry-dn-row { display: flex; align-items: center; gap: 4px; }
 .entry-dn-row .entry-dn { min-width: 0; flex: 1; margin: 0; }
-.entry-dn { overflow-wrap: anywhere; font-family: var(--mono-font-family); font-size: 11px; color: var(--muted-foreground); }
+.entry-dn { overflow-wrap: anywhere; border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border)); border-radius: 6px; padding: 7px 9px; background: color-mix(in srgb, var(--background) 75%, var(--primary)); font-family: var(--mono-font-family); font-size: 11px; color: var(--muted-foreground); line-height: 1.45; }
 
 .form-error { margin: 0; color: var(--destructive); font-size: 11px; overflow-wrap: anywhere; }
 .required-attributes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -602,7 +611,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
    intrinsic sizing，长表单时弹窗不再长到封顶值（见 .editor-modal 注释）。 */
 .attr-editor { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; gap: 6px; overflow: auto; }
 .attr-column-labels { display: grid; grid-template-columns: minmax(130px, 210px) 1fr auto; gap: 6px; padding: 0 2px; color: var(--muted-foreground); font-size: 10px; font-weight: 600; letter-spacing: .02em; }
-.attr-row { display: grid; grid-template-columns: minmax(130px, 210px) 1fr auto; gap: 6px; align-items: start; }
+.attr-row { display: grid; grid-template-columns: minmax(130px, 210px) 1fr auto; gap: 6px; align-items: start; border: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: 6px; padding: 6px; background: color-mix(in srgb, var(--muted) 16%, transparent); }
 .attr-name-field, .attr-value-field { min-width: 0; }
 .attr-name-field { display: flex; flex-direction: column; gap: 3px; }
 .attr-meta { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 3px; }
@@ -615,6 +624,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   border: 1px solid var(--border); border-radius: 4px; padding: 4px 7px;
   outline: none; background: var(--background); color: var(--foreground); font-size: 12px;
 }
+.attr-row input[name="attr-name"]:focus, .attr-row textarea:focus, .attr-row .attr-value-cell input:focus, .attr-row .attr-value-cell select:focus { border-color: color-mix(in srgb, var(--primary) 72%, var(--border)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 12%, transparent); }
 .attr-row textarea { min-height: 40px; resize: vertical; font-family: var(--mono-font-family); }
 /* 值格包裹层：textarea + 多值歧义提示（值本身含换行的行） */
 .attr-row .attr-value-cell { display: flex; min-width: 0; flex-direction: column; gap: 2px; }

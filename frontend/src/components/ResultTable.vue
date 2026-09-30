@@ -178,9 +178,9 @@ const referralCount = computed(() => props.referrals?.length ?? 0);
       <span>
         <template v-if="complete">{{ t("result.count", { count }) }}</template>
         <template v-else>{{ t("result.loaded", { count: entries.length }) }}</template>
-        <span v-if="truncated" class="truncated-badge" style="margin-left: 8px">{{ t("result.truncated") }}</span>
-        <span v-else-if="atLimit" class="truncated-badge" style="margin-left: 8px" :title="t('result.atLimit', { limit: sizeLimit ?? 0 })">{{ t("result.atLimitBadge") }}</span>
-        <span v-if="!complete" class="progress-badge" style="margin-left: 8px">{{ loadingMore ? t("search.running") : t("result.loadingMore") }}</span>
+        <span v-if="truncated" class="truncated-badge result-status-badge">{{ t("result.truncated") }}</span>
+        <span v-else-if="atLimit" class="truncated-badge result-status-badge" :title="t('result.atLimit', { limit: sizeLimit ?? 0 })">{{ t("result.atLimitBadge") }}</span>
+        <span v-if="!complete" class="progress-badge result-status-badge">{{ loadingMore ? t("search.running") : t("result.loadingMore") }}</span>
       </span>
       <span class="pager">
         <button v-if="hasEntries" :disabled="disabled || !complete" :title="complete ? t('result.exportLdif') : t('result.exportIncomplete')" @click="emit('export', 'ldif')"><FileDown aria-hidden="true" /></button>

@@ -7,6 +7,7 @@
  */
 import type { ColDef, ColumnState, ValueFormatterParams } from "ag-grid-community";
 import type { LdapEntry } from "./api";
+import { objectGuidDisplay } from "./adValues";
 import { workbenchLocale } from "./i18n";
 import { GRID_COLUMN_STATE_KEY, GRID_PAGE_SIZE_KEY, pluginStore, prunePersistedMap } from "./pluginStore";
 
@@ -42,7 +43,12 @@ export function toResultRows(entries: LdapEntry[]): ResultRow[] {
     if (cached) return cached;
     const row: ResultRow = { id: entry.dn, dn: entry.dn };
     for (const [name, values] of Object.entries(entry.attributes)) {
-      if (!RESERVED_ROW_FIELDS.has(name)) row[name] = joinValues(values);
+      if (!RESERVED_ROW_FIELDS.has(name)) {
+        const displayValues = name.toLowerCase() === "objectguid"
+          ? values.map((value) => objectGuidDisplay(value) || value)
+          : values;
+        row[name] = joinValues(displayValues);
+      }
     }
     rowMemo.set(entry, row);
     return row;

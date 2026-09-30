@@ -563,7 +563,7 @@
           "label": "Blocked attributes",
           "type": "textarea",
           "description": "One attribute name per line; filtered from results and rejected on writes.",
-          "default": "userPassword\nunicodePwd\npassword\npwd\nsecret\ntoken\napiKey\nprivateKey\nobjectSid\nobjectGUID\nmemberOf",
+          "default": "userPassword\nunicodePwd\npassword\npwd\nsecret\ntoken\napiKey\nprivateKey\nobjectSid\nmemberOf",
           "binding": "config"
         }
       ]

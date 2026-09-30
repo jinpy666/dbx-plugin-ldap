@@ -62,6 +62,14 @@ describe("toResultRows", () => {
     expect(fresh).not.toBe(first);
     expect(fresh).toEqual(first);
   });
+
+  it("renders AD objectGUID as a readable UUID in the result list", () => {
+    const rows = toResultRows([{
+      dn: "cn=x,dc=demo,dc=dbx",
+      attributes: { objectGUID: ["eFY0EjQSNBISNBI0VniavA=="] },
+    }]);
+    expect(rows[0].objectGUID).toBe("12345678-1234-1234-1234-123456789abc");
+  });
 });
 
 describe("copyRowText", () => {
