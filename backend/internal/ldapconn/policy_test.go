@@ -217,7 +217,7 @@ func TestEnsureLDAPWriteAllowed(t *testing.T) {
 
 func TestFirstBlockedLDAPAttribute(t *testing.T) {
 	// 未配置时兜底默认表（与 lifecycle 空配置回退一致）。
-	for _, attr := range []string{"userPassword", "unicodePwd", "objectGUID"} {
+	for _, attr := range []string{"userPassword", "unicodePwd", "objectSid"} {
 		if got := firstBlockedLDAPAttribute(Profile{}, []string{"cn", attr}); got != attr {
 			t.Errorf("default table should block %s, got %q", attr, got)
 		}
@@ -244,12 +244,12 @@ func TestFirstBlockedLDAPAttribute(t *testing.T) {
 			t.Errorf("firstBlockedLDAPAttribute(%v) = %q, want %q", c.attrs, got, c.want)
 		}
 	}
-	// 默认表共 11 项
+	// 默认表共 10 项
 	defaults := DefaultLDAPBlockedAttributes()
-	if len(defaults) != 11 {
-		t.Errorf("default blocked attributes len = %d, want 11", len(defaults))
+	if len(defaults) != 10 {
+		t.Errorf("default blocked attributes len = %d, want 10", len(defaults))
 	}
-	for _, name := range []string{"userPassword", "unicodePwd", "password", "pwd", "secret", "token", "apiKey", "privateKey", "objectSid", "objectGUID", "memberOf"} {
+	for _, name := range []string{"userPassword", "unicodePwd", "password", "pwd", "secret", "token", "apiKey", "privateKey", "objectSid", "memberOf"} {
 		found := false
 		for _, d := range defaults {
 			if strings.EqualFold(d, name) {
@@ -259,6 +259,9 @@ func TestFirstBlockedLDAPAttribute(t *testing.T) {
 		if !found {
 			t.Errorf("default table missing %q", name)
 		}
+	}
+	if got := firstBlockedLDAPAttribute(Profile{}, []string{"cn", "objectGUID"}); got != "" {
+		t.Errorf("objectGUID should remain readable, got blocked as %q", got)
 	}
 }
 

@@ -35,7 +35,6 @@ var defaultLDAPBlockedAttributes = []string{
 	"apiKey",
 	"privateKey",
 	"objectSid",
-	"objectGUID",
 	"memberOf",
 }
 

@@ -7,6 +7,7 @@
  */
 import type { ColDef, ColumnState, ValueFormatterParams } from "ag-grid-community";
 import type { LdapEntry } from "./api";
+import { objectGuidDisplay } from "./adValues";
 import { workbenchLocale } from "./i18n";
 
 // -- 结果表行视图模型 --------------------------------------------------------------
@@ -34,7 +35,12 @@ export function toResultRows(entries: LdapEntry[]): ResultRow[] {
   return entries.map((entry) => {
     const row: ResultRow = { id: entry.dn, dn: entry.dn };
     for (const [name, values] of Object.entries(entry.attributes)) {
-      if (!RESERVED_ROW_FIELDS.has(name)) row[name] = joinValues(values);
+      if (!RESERVED_ROW_FIELDS.has(name)) {
+        const displayValues = name.toLowerCase() === "objectguid"
+          ? values.map((value) => objectGuidDisplay(value) || value)
+          : values;
+        row[name] = joinValues(displayValues);
+      }
     }
     return row;
   });

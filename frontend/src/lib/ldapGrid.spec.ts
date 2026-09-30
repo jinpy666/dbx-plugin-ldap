@@ -46,6 +46,14 @@ describe("toResultRows", () => {
     // 保留字段不落 VM，但列仍会渲染（值为空）
     expect(resultColumns(["id", "cn"]).map((def) => def.field)).toEqual(["dn", "cn"]);
   });
+
+  it("renders AD objectGUID as a readable UUID in the result list", () => {
+    const rows = toResultRows([{
+      dn: "cn=x,dc=demo,dc=dbx",
+      attributes: { objectGUID: ["eFY0EjQSNBISNBI0VniavA=="] },
+    }]);
+    expect(rows[0].objectGUID).toBe("12345678-1234-1234-1234-123456789abc");
+  });
 });
 
 describe("copyRowText", () => {
