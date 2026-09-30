@@ -309,9 +309,62 @@ function initFor(mode_: EditorMode, entry?: LdapEntry, parentDn?: string) {
   if (!entry) return;
   dnDraft.value = entry.dn;
   rdnDraft.value = splitFirstDnRdn(entry.dn).rdn;
+  // 审查 H-F1：同一条目的延迟属性回填（useEntryDetail.mergeEditorEntry 用
+  // 合并结果替换 entry 对象，触发本 watch 重入）不得整表重建 rows/LDIF——
+  // 那会把用户未保存的编辑静默清掉（dirty 翻 false）。改为按行合并；
+  // 换条目（preserveTab=false）或 add 态维持整表重建。
+  if (preserveTab) {
+    mergeEntryDraft(entry);
+    return;
+  }
   rows.value = entryToRows(entry);
   ldifText.value = serializeEntriesToLdif([{ dn: entry.dn, attributes: entry.attributes }], { includeVersion: false });
   if (editorTab.value === "assoc") emit("loadDeferred");
+}
+
+// mergeEntryDraft 同一条目草稿合并（H-F1）：未编辑行吸收服务器新值，已
+// 编辑行保留输入（仅基线 sourceValues 前移）；服务器新增属性（延迟加载
+// 到位的 member 等）追加；仅存在于旧草稿的行，未编辑的剔除（服务器已不
+// 返回）、已编辑的保留（显式增删属性同样是未保存的编辑）。LDIF 文本仅在
+// 它仍是旧 rows 的忠实镜像（未被手改）时按合并结果重建，否则一字不动
+//（form/assoc 页签下本就由 switchToLdif 按需重建，不受影响）。
+function mergeEntryDraft(entry: LdapEntry) {
+  const isEdited = (row: AttrRowDraft) => row.valuesText !== (row.sourceValues ?? []).join("\n");
+  const merged: AttrRowDraft[] = [];
+  const present = new Set<string>();
+  for (const row of rows.value) {
+    const next = entry.attributes[row.name];
+    if (next == null) {
+      if (isEdited(row)) merged.push(row);
+      continue;
+    }
+    present.add(row.name);
+    if (isEdited(row)) {
+      merged.push({ ...row, sourceValues: next });
+      continue;
+    }
+    merged.push({
+      name: row.name,
+      valuesText: next.join("\n"),
+      sourceValues: next,
+      multiline: next.some((value) => value.includes("\n")),
+    });
+  }
+  for (const name of Object.keys(entry.attributes).sort((left, right) => left.localeCompare(right))) {
+    if (present.has(name)) continue;
+    const values = entry.attributes[name] ?? [];
+    merged.push({
+      name,
+      valuesText: values.join("\n"),
+      sourceValues: values,
+      multiline: values.some((value) => value.includes("\n")),
+    });
+  }
+  const mirrorBefore = serializeEntriesToLdif([{ dn: dnDraft.value, attributes: rowsToAttributes() }], { includeVersion: false });
+  rows.value = merged;
+  if (ldifText.value === mirrorBefore) {
+    ldifText.value = serializeEntriesToLdif([{ dn: dnDraft.value, attributes: rowsToAttributes() }], { includeVersion: false });
+  }
 }
 
 watch(

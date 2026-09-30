@@ -42,6 +42,16 @@ describe("serializeEntriesToLdif", () => {
     expect(parsed.entries[0].attributes.description[0]).toBe(" leading space");
   });
 
+  it("base64-encodes leading-TAB values so export→import round-trips (M-F4)", () => {
+    // TAB 是 RFC 合法 SAFE-INIT-CHAR，但解析侧会剥冒号后的前导 TAB——
+    // 不编 base64 导出再导入会静默丢字符。
+    const text = serializeEntriesToLdif([{ dn: "cn=x", attributes: { description: ["\tindented"] } }], { includeVersion: false });
+    expect(text).toContain("description::");
+    const parsed = parseLdif(text);
+    expect(parsed.errors).toHaveLength(0);
+    expect(parsed.entries[0].attributes.description[0]).toBe("\tindented");
+  });
+
   it("base64-encodes non-ASCII values and decodes UTF-8 correctly", () => {
     const text = serializeEntriesToLdif([{ dn: "cn=x", attributes: { cn: ["Jürgen-中文"] } }], { includeVersion: false });
     expect(text).toContain("cn::");

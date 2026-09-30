@@ -600,6 +600,26 @@ describe("EntryEditorDialog", () => {
     expect(wrapper.findComponent({ name: "AssociationPanel" }).exists()).toBe(true);
   });
 
+  it("preserves unsaved edits when deferred attributes replace the entry (H-F1)", async () => {
+    const wrapper = mountEditor({ canWrite: true, open: true, entry: demoEntry });
+    // 用户在 cn 行做了未保存的修改。
+    const cnRow = attrRows(wrapper).find((row) => (row.find("input").element as HTMLInputElement).value === "cn")!;
+    await cnRow.find("textarea").setValue("alice-edited");
+    // 延迟属性回填：同 DN 的 entry 被 mergeEditorEntry 的合并结果替换。
+    await wrapper.setProps({
+      entry: { ...demoEntry, attributes: { ...demoEntry.attributes, mail: ["alice@demo.dbx"] } },
+    });
+    const rowsAfter = attrRows(wrapper);
+    // 已编辑行保留输入；未编辑行吸收服务器值；新增属性追加。
+    const cnRowAfter = rowsAfter.find((row) => (row.find("input").element as HTMLInputElement).value === "cn")!;
+    expect((cnRowAfter.find("textarea").element as HTMLTextAreaElement).value).toBe("alice-edited");
+    const mailRow = rowsAfter.find((row) => (row.find("input").element as HTMLInputElement).value === "mail");
+    expect(mailRow).toBeDefined();
+    expect((mailRow!.find("textarea").element as HTMLTextAreaElement).value).toBe("alice@demo.dbx");
+    // 仍有未保存的修改（dirty 不被回填翻 false）。
+    expect(wrapper.emitted("dirtyChange")?.at(-1)).toEqual([true]);
+  });
+
   it("bubbles openEntry emitted by the AssociationPanel", async () => {
     const wrapper = trackEditor({ canWrite: true, open: true, entry: demoEntry });
     await wrapper.findAll(".mode-switch button")[2].trigger("click");

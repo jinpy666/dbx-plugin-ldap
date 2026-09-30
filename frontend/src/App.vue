@@ -378,6 +378,9 @@ const modifyDnSubmitting = ref(false);
 const batchMoveOpen = ref(false);
 const batchMoveDns = ref<string[]>([]);
 const batchMoveSubmitting = ref(false);
+// 批量删除防重入门闩（审查 M-F3：与 batchMove/batchModify 的 submitting
+// 门闩同款；重入会并发两轮删除且汇总通知把已删条目误计为 failed）。
+const batchDeleteSubmitting = ref(false);
 // 批量修改（F6）：状态与批量移动同风格。
 const batchModifyOpen = ref(false);
 const batchModifyDns = ref<string[]>([]);
@@ -502,7 +505,8 @@ function searchMembersAt(dn: string) {
 // 与确认文案一致——仍有子条目的条目会失败并计入 failed，不做半递归的意外删除。
 // 成功条目经事件总线失效缓存并（防抖合并后）重放受影响的结果行。
 async function onBatchDelete(dns: string[]) {
-  if (dns.length === 0 || !guardWrite()) return;
+  if (dns.length === 0 || batchDeleteSubmitting.value || !guardWrite()) return;
+  batchDeleteSubmitting.value = true;
   clearBanner();
   // 连接守卫（审计 L-1）：循环中途切换连接就中止，剩余 DN 不再发往新连接；
   // 汇总通知按实际成功/失败数展示，用户可感知中途停止。
@@ -519,6 +523,7 @@ async function onBatchDelete(dns: string[]) {
       failed.add(dn);
     }
   }
+  batchDeleteSubmitting.value = false;
   showNotice(t("result.batchResult", { ok: deleted.length, failed: failed.size }));
   if (deleted.length === 0) return;
   for (const parent of new Set(deleted.map((dn) => splitFirstDnRdn(dn).parentDn))) treeRef.value?.invalidate(parent);
@@ -940,6 +945,11 @@ function syncConnectionContext() {
     openTabs.value = [];
     tabDirty.value = false;
     clearEntryCache();
+    // 只读门禁属于上一个连接的探测结果（审查 M-F1）：不重置会让旧连接的
+    // readOnly=true 残留到新连接（全部写入口被禁直到重载工作台）。先落
+    // 可写初值再重探；探测失败沿用 refreshBackendReadOnly 的 fail-sticky。
+    backendReadOnly.value = false;
+    void refreshBackendReadOnly();
   }
   // 书签按连接隔离：切换后重载（首次初始化也经此处装载）。
   reloadBookmarks();
@@ -1003,6 +1013,9 @@ onBeforeUnmount(() => {
   disposeReferenceTabs();
   // 先清重放防抖定时器再退订事件总线：挂载同 tick 卸载时回调不会随定时器"复活"。
   window.clearTimeout(entryReplayTimer);
+  // schema 预热定时器同款（审查 M-F2：重排自清只覆盖重排路径，卸载路径
+  // 漏清会让定时器"复活"向已退出的会话发 ldap/schema 请求）。
+  window.clearTimeout(schemaWarmupTimer);
   disposeEntryEventWire();
   disposeFeedback();
   uiIntent.stop();

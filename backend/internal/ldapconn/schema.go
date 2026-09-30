@@ -15,15 +15,16 @@ import (
 )
 
 // parseLDAPSchemaMetadata 解析 subschema 条目（tiny-rdm :773 原样 + 原始定义串保留
-// + F2b 三类补充定义）。
+// + F2b 三类补充定义）。属性读取走 LDAPAttributeValues（M-B2：RFC 4512
+// 属性名不区分大小写，服务器可能以非请求拼写返回）。
 func parseLDAPSchemaMetadata(schemaDN string, entry LDAPEntry) LDAPSchemaMetadata {
-	rawAttributeTypes := append([]string{}, entry.Attributes["attributeTypes"]...)
-	rawObjectClasses := append([]string{}, entry.Attributes["objectClasses"]...)
-	attributeTypes := parseLDAPAttributeTypes(entry.Attributes["attributeTypes"])
-	objectClasses := parseLDAPObjectClasses(entry.Attributes["objectClasses"])
-	matchingRules := parseLDAPMatchingRules(entry.Attributes["matchingRules"])
-	matchingRuleUses := parseLDAPMatchingRuleUses(entry.Attributes["matchingRuleUses"])
-	ldapSyntaxes := parseLDAPLdapSyntaxes(entry.Attributes["ldapSyntaxes"])
+	rawAttributeTypes := append([]string{}, LDAPAttributeValues(entry, "attributeTypes")...)
+	rawObjectClasses := append([]string{}, LDAPAttributeValues(entry, "objectClasses")...)
+	attributeTypes := parseLDAPAttributeTypes(LDAPAttributeValues(entry, "attributeTypes"))
+	objectClasses := parseLDAPObjectClasses(LDAPAttributeValues(entry, "objectClasses"))
+	matchingRules := parseLDAPMatchingRules(LDAPAttributeValues(entry, "matchingRules"))
+	matchingRuleUses := parseLDAPMatchingRuleUses(LDAPAttributeValues(entry, "matchingRuleUses"))
+	ldapSyntaxes := parseLDAPLdapSyntaxes(LDAPAttributeValues(entry, "ldapSyntaxes"))
 	attributeNames := make([]string, 0, len(attributeTypes))
 	seen := map[string]bool{}
 	for _, attr := range attributeTypes {
@@ -467,9 +468,10 @@ func cloneSchemaMetadata(m *LDAPSchemaMetadata) LDAPSchemaMetadata {
 	return out
 }
 
-// subschemaDNFromRootDSE 从 RootDSE 条目提取 subschemaSubentry（tiny-rdm :487 语义）。
+// subschemaDNFromRootDSE 从 RootDSE 条目提取 subschemaSubentry（tiny-rdm :487 语义；
+// 大小写不敏感读取，M-B2）。
 func subschemaDNFromRootDSE(rootDSE LDAPEntry) (string, error) {
-	schemaDN := firstLDAPNonEmpty(rootDSE.Attributes["subschemaSubentry"]...)
+	schemaDN := firstLDAPNonEmpty(LDAPAttributeValues(rootDSE, "subschemaSubentry")...)
 	if schemaDN == "" {
 		return "", fmt.Errorf("RootDSE subschemaSubentry is not available")
 	}

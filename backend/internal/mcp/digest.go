@@ -107,12 +107,13 @@ func AggregateDigest(input DigestInput) DigestResult {
 	distinctAttr := strings.TrimSpace(input.DistinctAttr)
 
 	for _, entry := range input.Entries {
-		for _, class := range entry.Attributes["objectClass"] {
+		// 属性名大小写不敏感查找（M-B2：RFC 4512；go-ldap 按服务器拼写存键）。
+		for _, class := range ldapconn.LDAPAttributeValues(entry, "objectClass") {
 			classCounts[class]++
 		}
 		subtreeCounts[subtreeKey(entry.DN, base)]++
 		if distinctAttr != "" {
-			for _, value := range entry.Attributes[distinctAttr] {
+			for _, value := range ldapconn.LDAPAttributeValues(entry, distinctAttr) {
 				distinctCounts[value]++
 			}
 		}

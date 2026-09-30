@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -248,7 +249,11 @@ func buildLDAPURL(connHost, tlsMode string, legacyStartTLS bool) (string, bool, 
 
 // Connect 处理 connection/connect：解析 lifecycle params → 存连接表。
 // 惰性建连（首个领域调用才 dial+bind，对齐 tiny-rdm withConn 语义）；
-// 幂等：重复 connect 覆盖配置并断开旧实例。
+// 配置变化的重注册覆盖配置并断开旧实例；配置逐字段一致的同 id 重注册
+// （审查 H-B1：宿主桥接的 MCP 调用每次都带 lifecycle 重放 connect）是
+// 无操作——不换条目、不断搜索会话、不失效 schema 缓存。此前无条件替换
+// 会让每次工具调用重置在跑连接：用户进行中的分页搜索全部作废、10 分钟
+// schema 缓存清空、下次操作被迫重连。
 func (s *Service) Connect(params *lifecycle.Params) error {
 	profile, bindPassword, err := NewProfileFromLifecycle(params)
 	if err != nil {
@@ -257,18 +262,25 @@ func (s *Service) Connect(params *lifecycle.Params) error {
 	if profile.ID == "" {
 		return fmt.Errorf("connection.id is required")
 	}
+	target := connTarget{Host: params.Runtime.Host, Port: params.Runtime.Port}
 
 	entry := &connEntry{
 		profile: profile,
 		secrets: bindPassword,
-		target:  connTarget{Host: params.Runtime.Host, Port: params.Runtime.Port},
+		target:  target,
 		status:  "idle",
 	}
 
 	s.mu.Lock()
 	old := s.conns[profile.ID]
-	s.conns[profile.ID] = entry
+	sameConfig := old != nil && !connectionConfigChanged(old, profile, bindPassword, target)
+	if !sameConfig {
+		s.conns[profile.ID] = entry
+	}
 	s.mu.Unlock()
+	if sameConfig {
+		return nil
+	}
 
 	// 覆盖旧实例：断开旧连接（closeLocked 置 closed；条目已被替换，直接丢弃）。
 	if old != nil {
@@ -282,6 +294,17 @@ func (s *Service) Connect(params *lifecycle.Params) error {
 	// 元数据必须失效，否则最长 10 分钟内会拿到上一台服务器的 schema。
 	s.invalidateSchema(profile.ID)
 	return nil
+}
+
+// connectionConfigChanged 判定重注册的连接配置是否变化：凭据与拨号端点
+// 直接比较（均为可比结构体），Profile 逐字段 DeepEqual（含 slice/指针，
+// 两侧都出自 NormalizeProfile，表示法确定）。profile/secrets/target 在
+// connEntry 构造后不可变，无锁读安全（同 Disconnect 处的既有约定）。
+func connectionConfigChanged(old *connEntry, profile Profile, secrets bindSecrets, target connTarget) bool {
+	if old.secrets != secrets || old.target != target {
+		return true
+	}
+	return !reflect.DeepEqual(old.profile, profile)
 }
 
 // Test 处理 connection/test：立即 dial + bind +（有 baseDn 时）base scope
@@ -376,7 +399,21 @@ func (s *Service) Get(connectionID string) (Profile, error) {
 // WithConn 语义对照 tiny-rdm ldap_service.go withConn(:970)：
 // 惰性建连（conn == nil 时 dial+bind）→ 执行 fn → 判定可重连错误时
 // 关闭旧连接并重连一次重试 fn。同一连接的操作经 entry.mu 串行化。
+// 读路径专用：重试对可安全重放的操作；写操作必须走 WithConnOnce（M-B1）。
 func (s *Service) WithConn(ctx context.Context, connectionID string, fn func(conn *ldap.Conn) error) error {
+	return s.withConn(ctx, connectionID, true, fn)
+}
+
+// WithConnOnce 与 WithConn 同语义但不重试：连接级可重连错误只关闭死连接
+// 并原样上抛（审查 M-B1：写操作——Add/Modify/Del/ModifyDN/PasswdModify/
+// 子树删除——的响应包丢失时服务端可能已应用变更，自动重试会把已生效的
+// 写入重放成向用户报 AlreadyExists/NoSuchObject 类错误，且审计同时出现
+// 失败行与真实服务端变更）。关闭后由下一次领域调用惰性重连。
+func (s *Service) WithConnOnce(ctx context.Context, connectionID string, fn func(conn *ldap.Conn) error) error {
+	return s.withConn(ctx, connectionID, false, fn)
+}
+
+func (s *Service) withConn(ctx context.Context, connectionID string, retry bool, fn func(conn *ldap.Conn) error) error {
 	entry := s.lookup(connectionID)
 	if entry == nil {
 		return errConnectionNotFound(connectionID)
@@ -407,8 +444,14 @@ func (s *Service) WithConn(ctx context.Context, connectionID string, fn func(con
 		entry.lastError = err.Error()
 		return err
 	}
-	// 断线重连一次（ldapNeedsReconnect :1963 判定）。
+	// 断线：retry=true 重连一次重试 fn；retry=false 只关死连接上抛
+	//（写路径 at-most-once）。
 	entry.closeLocked()
+	if !retry {
+		entry.status = "error"
+		entry.lastError = err.Error()
+		return err
+	}
 	if reconnectErr := s.connectLocked(ctx, entry); reconnectErr != nil {
 		return reconnectErr
 	}

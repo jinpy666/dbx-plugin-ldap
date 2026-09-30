@@ -277,8 +277,10 @@ func projectCursorAttributes(entry ldapconn.LDAPEntry, projected []string, width
 	}
 	out := make(map[string][]string, len(projected))
 	for _, name := range projected {
-		values, ok := entry.Attributes[name]
-		if !ok {
+		// 大小写不敏感查找（M-B2：RFC 4512 属性名不区分大小写；调用方
+		// 拼写可能与服务器返回拼写不同）。
+		values := ldapconn.LDAPAttributeValues(entry, name)
+		if len(values) == 0 {
 			continue
 		}
 		clamped := make([]string, len(values))

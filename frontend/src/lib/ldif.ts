@@ -41,8 +41,11 @@ export interface LdifSerializeOptions {
 function needsBase64(value: string): boolean {
     if (value === '') return false
     const first = value.charCodeAt(0)
-    // Leading SPACE, COLON, LESS-THAN, or NUL → unsafe-init-char
-    if (first === 0x20 || first === 0x3a || first === 0x3c || first === 0x00) return true
+    // Leading SPACE, COLON, LESS-THAN, or NUL → unsafe-init-char. Leading TAB
+    // is a legal SAFE-INIT-CHAR per RFC 2849, but our lenient parser strips
+    // "[ \t]+" after the colon (review M-F4), so exporting it unencoded would
+    // lose it on re-import — base64-encode to keep the round-trip lossless.
+    if (first === 0x20 || first === 0x09 || first === 0x3a || first === 0x3c || first === 0x00) return true
     // Trailing SPACE — RFC 2849 says safe-string must not end with SPACE
     if (value.charCodeAt(value.length - 1) === 0x20) return true
     for (let i = 0; i < value.length; i++) {

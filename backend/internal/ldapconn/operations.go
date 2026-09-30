@@ -182,7 +182,14 @@ func (s *Service) Search(ctx context.Context, req LDAPSearchRequest) (LDAPSearch
 			return searchErr
 		}
 		collectReferrals(result.Referrals)
-		entries = ldapEntriesToTypes(result.Entries, isBinaryValue)
+		// 审查 SEC-101：非分页路径同样在物化前套用客户端聚合上限——
+		// sizeLimit 未显式给定时服务端不限（normalizeLDAPSizeLimit(0)=0），
+		// 敌意/被中间的服务器可一次推回数百万条目撑爆 sidecar 内存。
+		// 语义与分页路径一致（aggregateLimit：显式 clamp 到
+		// maxSearchAggregateLimit，缺省 500），超限截断置 truncated。
+		rawEntries, clientTruncated := clampSearchEntries(result.Entries, aggregateLimit(req.SizeLimit))
+		truncated = truncated || clientTruncated
+		entries = ldapEntriesToTypes(rawEntries, isBinaryValue)
 		sortResult = sortResultFromControls(result.Controls)
 		return nil
 	})
@@ -402,7 +409,8 @@ func (s *Service) AddEntry(ctx context.Context, req LDAPAddEntryRequest) error {
 		s.EmitAudit(writeAuditRecord(req.ConnectionID, "write-policy", dn, "denied", err.Error(), "", "add", start))
 		return err
 	}
-	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
+	// 写操作走 WithConnOnce（M-B1：断线不自动重试，防重放已提交的 Add）。
+	err = s.WithConnOnce(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
 		// 二进制语法属性值是前端 base64 上传的（见「二进制值协议传输」），
 		// 写入前解码回原始字节。
 		isBinaryValue := s.ldapBinaryValuePredicate(req.ConnectionID)
@@ -444,7 +452,8 @@ func (s *Service) ModifyEntry(ctx context.Context, req LDAPModifyEntryRequest) e
 		s.EmitAudit(writeAuditRecord(req.ConnectionID, "write-policy", dn, "denied", err.Error(), "", "modify", start))
 		return err
 	}
-	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
+	// 写操作走 WithConnOnce（M-B1：断线不自动重试，防重放已提交的 Modify）。
+	err = s.WithConnOnce(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
 		// 二进制语法属性值是前端 base64 上传的（见「二进制值协议传输」），
 		// 写入前解码回原始字节。
 		isBinaryValue := s.ldapBinaryValuePredicate(req.ConnectionID)
@@ -494,7 +503,8 @@ func (s *Service) DeleteEntry(ctx context.Context, req LDAPDeleteEntryRequest) e
 	if req.Recursive {
 		return s.deleteSubtree(ctx, req.ConnectionID, dn, req.Source, start)
 	}
-	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
+	// 写操作走 WithConnOnce（M-B1：断线不自动重试，防重放已提交的 Del）。
+	err = s.WithConnOnce(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
 		return conn.Del(ldap.NewDelRequest(dn, nil))
 	})
 	if err != nil {
@@ -512,7 +522,9 @@ func (s *Service) DeleteEntry(ctx context.Context, req LDAPDeleteEntryRequest) e
 // 最后删目标自身）。两条路径均只发一条聚合审计记录。
 func (s *Service) deleteSubtree(ctx context.Context, connectionID, dn, source string, start time.Time) error {
 	var deletedCount int
-	err := s.WithConn(ctx, connectionID, func(conn *ldap.Conn) error {
+	// 写操作走 WithConnOnce（M-B1：断线不自动重试——子树删除中途断线重放
+	// 可能把已删子树再次当错误上报；重新发起请求即可续删剩余部分）。
+	err := s.WithConnOnce(ctx, connectionID, func(conn *ldap.Conn) error {
 		dns, listErr := listSubtreeDNs(conn, dn)
 		if listErr != nil {
 			return listErr
@@ -695,7 +707,8 @@ func (s *Service) ModifyDN(ctx context.Context, req LDAPModifyDNRequest) error {
 		s.EmitAudit(writeAuditRecord(req.ConnectionID, "write-policy", destinationDN, "denied", err.Error(), "", "modifyDn", start))
 		return err
 	}
-	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
+	// 写操作走 WithConnOnce（M-B1：断线不自动重试，防重放已提交的 ModifyDN）。
+	err = s.WithConnOnce(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
 		return conn.ModifyDN(ldap.NewModifyDNRequest(dn, newRDN, req.DeleteOldRDN, newSuperior))
 	})
 	if err != nil {
@@ -792,7 +805,8 @@ func (s *Service) PasswordModify(ctx context.Context, req LDAPPasswordModifyRequ
 		s.EmitAudit(writeAuditRecord(req.ConnectionID, "write-policy", target, "denied", err.Error(), "", "passwdModify", start))
 		return LDAPPasswordModifyResult{}, err
 	}
-	err = s.WithConn(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
+	// 写操作走 WithConnOnce（M-B1：断线不自动重试，防重放已提交的密码修改）。
+	err = s.WithConnOnce(ctx, req.ConnectionID, func(conn *ldap.Conn) error {
 		_, err := conn.PasswordModify(ldap.NewPasswordModifyRequest(target, req.OldPassword, req.NewPassword))
 		return err
 	})
@@ -963,6 +977,15 @@ func aggregateLimit(sizeLimit int) int {
 	return defaultSearchAggregateLimit
 }
 
+// clampSearchEntries 客户端聚合上限截断（Search 非分页路径与分页路径共用
+// 语义；返回截断后的切片与 truncated 标志，limit<=0 不截断）。
+func clampSearchEntries(entries []*ldap.Entry, limit int) ([]*ldap.Entry, bool) {
+	if limit > 0 && len(entries) > limit {
+		return entries[:limit], true
+	}
+	return entries, false
+}
+
 // pagedSearchEntries 分页搜索聚合（对照 go-ldap Conn.SearchWithPaging 手动展开，
 // 加客户端聚合上限：达到 limit 截断并返回 truncated=true，用于前端提示）。
 // 返回的 referrals 是各页累计的延续引用（封顶 maxReportedReferrals）；sortResult
@@ -995,10 +1018,15 @@ func pagedSearchEntries(conn *ldap.Conn, searchReq *ldap.SearchRequest, pageSize
 			sortResult = pageSort
 		}
 
-		// 聚合上限（limit>0 时生效）：截断并停止翻页。
+		// 聚合上限（limit>0 时生效）：截断并停止翻页。审查 M-B3：退出前
+		// 按 go-ldap SearchWithPaging 的语义发送一次放弃搜索（cookie 置空，
+		// RFC 2696），否则共享连接回退路径（withDedicatedConn 失败回退
+		// WithConn）上连接保持打开，服务端分页结果集滞留到服务器自身 TTL。
 		if limit > 0 && len(entries) >= limit {
 			entries = entries[:limit]
 			truncated = true
+			pagingControl.SetCookie(nil)
+			_, _ = conn.Search(searchReq) // 放弃尽力而为：失败不掩盖截断结果
 			return entries, referrals, truncated, sortResult, nil
 		}
 
@@ -1055,6 +1083,27 @@ func ldapAttrNameKey(name string) string {
 		key = key[:idx]
 	}
 	return key
+}
+
+// LDAPAttributeValues 大小写不敏感取条目属性值（审查 M-B2：RFC 4512 属性名
+// 不区分大小写，go-ldap 按服务器返回的拼写存键——调用方以不同拼写（如
+// "Mail"）或服务器返回非规范拼写时直接 map 查找会静默落空，聚合/投影无
+// 声无息产出空结果）。精确命中走快路径保留原语义；未命中再按
+// ldapAttrNameKey 归一匹配（小写 + 剥 ";binary" 选项后缀）。
+func LDAPAttributeValues(entry LDAPEntry, name string) []string {
+	if values, ok := entry.Attributes[name]; ok {
+		return values
+	}
+	key := ldapAttrNameKey(name)
+	if key == "" {
+		return nil
+	}
+	for attrName, values := range entry.Attributes {
+		if ldapAttrNameKey(attrName) == key {
+			return values
+		}
+	}
+	return nil
 }
 
 func ldapPasswordValueAttribute(name string) bool {
