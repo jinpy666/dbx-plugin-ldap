@@ -1,6 +1,6 @@
 {
   "name": "LDAP Studio",
-  "description": "Browse, search, and manage LDAP directories: RFC 4515 filters, directory tree, schema inspection, guarded entry editing, and LDIF/CSV export.",
+  "description": "LDAP directory workbench for DBX: DN tree browsing, RFC 4515 search with saved presets, schema inspection, LDIF/CSV export, and guarded entry editing — enterprise auth from anonymous to Kerberos/GSSAPI, NTLM and DIGEST-MD5, over LDAP/StartTLS/LDAPS with mTLS, plus 8 MCP tools for AI automation.",
   "icon": "assets/plugin.svg",
   "tags": [
     "ldap",
@@ -16,11 +16,11 @@
   "source": "https://github.com/jinpy666/dbx-plugin-ldap",
   "homepage": "https://github.com/jinpy666/dbx-plugin-ldap",
   "license": "MIT",
-  "releaseNotes": "评审加固正式版：MCP stdio 传输边界加固（超长请求行边读边限、在途请求并发上限、确认令牌随机源不可用时拒绝签发），修复 mcp-settings 并发持久化竞态，审计记录落盘 Detail 警示原文，消除搜索会话锁级联阻塞；前端 LDIF 导入增加连接切换守卫与中断提示，工作集页签去重，修复三处事件监听器泄漏，树会话过期文案接入 i18n，连接面板时间格式跟随工作台语言。含 0.1.94-beta.1 全部改动。",
+  "releaseNotes": "评审修复预发布版：新增日志面板（后端环形缓冲与请求摘要 + 工作台日志视图，凭据红线与脱敏由测试钉死）；全方位代码审查（安全/后端/前端/架构四通道）后修复——连接同配置重注册不再中断搜索会话与 schema 缓存、写操作改为 at-most-once 不自动重试、非分页搜索增加客户端聚合上限防敌意服务端内存耗尽、LDAP 属性名大小写不敏感查找、分页截断发送 RFC 2696 放弃；前端条目编辑器延迟属性回填不再清掉未保存修改、连接切换重探只读门禁、批量删除防重入、LDIF 前导 TAB 值导出保真、卸载清理 schema 预热定时器。",
   "localizations": {
     "zh-CN": {
       "name": "LDAP Studio",
-      "description": "用于浏览、搜索和管理 LDAP 目录：支持 RFC 4515 过滤器、Schema 检查、条目编辑、LDIF/CSV 导出和受控写入。"
+      "description": "DBX 的 LDAP 目录工作台：DN 树浏览、RFC 4515 搜索与保存预设、Schema 检查、LDIF/CSV 导出，以及受护栏保护的条目编辑——企业级认证从匿名到 Kerberos/GSSAPI、NTLM、DIGEST-MD5，支持 LDAP/StartTLS/LDAPS 与 mTLS，并提供 8 个 MCP 工具供 AI 自动化。"
     }
   }
 }
