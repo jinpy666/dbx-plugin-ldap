@@ -1924,3 +1924,12 @@ bookmarks 降级 describe 删除 -4）。真机复验建议随下一次 .dbxp �
 验证：actionlint 结构校验全绿；`bash -n` 全过；本地
 `DBX_PREBUILT_UI=1 bash scripts/build.sh` 抽查通过（kafka 同构代表 +
 files）。剩余风险：GitHub runner 真跑待推送观察。
+
+## CI 实测结果：分支与 dispatch 双跑全绿（2026-10-01 续）
+
+`ci-optimize-prebuilt-ui` draft PR #8 的 pull_request CI 全绿
+（run 36759085524），另以 workflow_dispatch 二次全量验证 11 job 全绿
+（run 36765821545，含容器集成 + 5 平台 candidate + 浏览器 walkthrough）。
+前端三件套 ×5 去重与 concurrency 均经真实 runner 验证。主仓
+build-candidates 的 ldap 5 平台矩阵同批全绿（run 36799950921 部分
+窗口）。
