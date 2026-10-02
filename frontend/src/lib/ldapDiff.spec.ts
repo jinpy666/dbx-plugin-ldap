@@ -95,3 +95,15 @@ describe("attrRowsToAttributes duplicate-name merge (P2-14)", () => {
     ]);
   });
 });
+
+describe("diffChanges case-insensitive attribute matching", () => {
+  it("treats a case-retyped attribute with identical values as no change", () => {
+    expect(diffChanges({ mail: ["a@x"] }, { Mail: ["a@x"] })).toEqual([]);
+  });
+
+  it("emits a single replace (not delete+add) when a case-retyped attribute changes values", () => {
+    expect(diffChanges({ mail: ["a@x"] }, { Mail: ["b@x"] })).toEqual([
+      { operation: "replace", attribute: "Mail", values: ["b@x"] },
+    ]);
+  });
+});

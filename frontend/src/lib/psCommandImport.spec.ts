@@ -45,13 +45,30 @@ describe("PS Filter conversion", () => {
   });
 
   it("converts -not and brace blocks", () => {
-    expect(convertPsFilter('{-not (Enabled -eq "True")}', [])).toBe("(!(userAccountControl=True))");
+    // Enabled -eq "True"（无 $ 形式，分词器已剥引号）与 $true 同义 →
+    // NOT(Not-Disabled 位)；外层 -not 再包一层得到语义等价的双重否定。
+    expect(convertPsFilter('{-not (Enabled -eq "True")}', [])).toBe(
+      "(!(!(userAccountControl:1.2.840.113556.1.4.803:=2)))",
+    );
+  });
+
+  it("maps quoted/unquoted Enabled booleans onto the UAC disabled bit", () => {
+    expect(convertPsFilter('Enabled -eq "True"', [])).toBe("(!(userAccountControl:1.2.840.113556.1.4.803:=2))");
+    expect(convertPsFilter('Enabled -eq "False"', [])).toBe("(userAccountControl:1.2.840.113556.1.4.803:=2)");
+    expect(convertPsFilter("Enabled -eq $true", [])).toBe("(!(userAccountControl:1.2.840.113556.1.4.803:=2))");
+    expect(convertPsFilter("Enabled -eq $false", [])).toBe("(userAccountControl:1.2.840.113556.1.4.803:=2)");
   });
 
   it("downgrades -gt/-lt with a note via negated fallback", () => {
     const notes: string[] = [];
     expect(convertPsFilter("badPwdCount -gt 3", notes)).toBe("(!(badPwdCount<=3))");
     expect(notes.join()).toContain("op:-gt");
+  });
+
+  it("escapes the PS single-char wildcard ? in -like values with a note", () => {
+    const notes: string[] = [];
+    expect(convertPsFilter('sAMAccountName -like "j?hn"', notes)).toBe("(sAMAccountName=j\\3fhn)");
+    expect(notes).toContain("like-?");
   });
 
   it("escapes LDAP special characters in values", () => {

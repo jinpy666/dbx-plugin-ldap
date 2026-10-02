@@ -128,6 +128,11 @@ function escapeValue(value: string, escapeStar: boolean): string {
   let out = value.replace(/\\/gu, "\\5c").replace(/\(/gu, "\\28").replace(/\)/gu, "\\29").replace(/\0/gu, "\\00");
   // -eq 是精确匹配：`*` 必须转义成字面量；-like 保留通配语义（RFC 4515 子串）
   if (escapeStar) out = out.replace(/\*/gu, "\\2a");
+  else {
+    // PS `-like` 的 `?` 是「任意单字符」通配，LDAP 没有对应语法：静默按
+    // 字面量处理会悄悄缩小结果集，转义成 \3f 并留 note 说明。
+    out = out.replace(/\?/gu, "\\3f");
+  }
   return out;
 }
 
@@ -204,16 +209,20 @@ function parsePsFilterExpression(
     }
     const attr = normalizePsAttribute(attribute);
     // Enabled 布尔字面量 → UAC disabled 位（1.2.840.113556.1.4.803 为 AD
-    // 位匹配 OID）：直接输出 `$true` 会生成语法非法的过滤器。
+    // 位匹配 OID）：`$true`/`$false` 与 AD 脚本常见的无 `$` 形式同义（分词
+    // 器已剥引号，`"True"` 落成 `True`）。落到精确匹配会对整数字段生成永假
+    // 过滤器且无任何提示。
     if (attr === "userAccountControl" && !operator.toLowerCase().includes("like")) {
       const lowered = value.toLowerCase();
-      if (lowered === "$true" || lowered === "$false") {
+      if (lowered === "$true" || lowered === "true" || lowered === "$false" || lowered === "false") {
         const disabled = "(userAccountControl:1.2.840.113556.1.4.803:=2)";
-        return { filter: lowered === "$true" ? `(!${disabled})` : disabled, notes };
+        return { filter: lowered === "$true" || lowered === "true" ? `(!${disabled})` : disabled, notes };
       }
     }
     // -like/-notlike 家族保留 `*` 通配语义；其余（-eq 精确匹配等）转义为字面量
-    const escaped = escapeValue(value, !operator.toLowerCase().includes("like"));
+    const likeFamily = operator.toLowerCase().includes("like");
+    const escaped = escapeValue(value, !likeFamily);
+    if (likeFamily && value.includes("?")) notes.push("like-?");
     if (spec.negateFallback) {
       const fallbackOp = spec.op === ">" ? "<=" : ">=";
       notes.push(`op:${operator}`);

@@ -6,7 +6,7 @@
  * arrays or scalars; callers should not have to normalise them.
  */
 
-import { serializeEntriesToLdif, type LdifEntry } from "./ldif";
+import { serializeEntriesToLdif } from "./ldif";
 
 const CSV_DEFAULTS = Object.freeze({
     delimiter: ',',
@@ -69,13 +69,16 @@ export const getEntryAttributeValues = (entry: LdapExportEntry, attribute: strin
 
 /** Collect every distinct attribute name across the entry list, first-seen order. */
 export const extractEntryAttributeNames = (entries: LdapExportEntry[]): string[] => {
+    // 属性名按大小写不敏感去重（保留首次拼法）：取值侧 getEntryAttributeValues
+    // 本就是大小写不敏感回退，精确去重会让 `cn`/`CN` 变体产出两列同值的重复列。
     const seen = new Set<string>();
     const ordered: string[] = [];
     for (const entry of entries || []) {
         const attrs = getAttributeMap(entry);
         for (const key of Object.keys(attrs)) {
-            if (!seen.has(key)) {
-                seen.add(key);
+            const lower = key.toLowerCase();
+            if (!seen.has(lower)) {
+                seen.add(lower);
                 ordered.push(key);
             }
         }
@@ -83,10 +86,12 @@ export const extractEntryAttributeNames = (entries: LdapExportEntry[]): string[]
     return ordered;
 };
 
-const escapeCsvCell = (value: unknown): string => {
+const escapeCsvCell = (value: unknown, multivaluedSeparator: string): string => {
     let text = String(value ?? '');
     if (FORMULA_TRIGGER_PATTERN.test(text) || FORMULA_OPERAND_PATTERN.test(text)) text = `'${text}`;
-    if (!QUOTE_TRIGGER_PATTERN.test(text)) return text;
+    // 含多值分隔符的单元格也加引号：向消费方示意该格可能是多值拼接
+    // （单值 `a|b` 与多值拼接的彻底区分仍不可行，属已知保真度限制）。
+    if (!QUOTE_TRIGGER_PATTERN.test(text) && !text.includes(multivaluedSeparator)) return text;
     return `"${text.replace(/"/gu, '""')}"`;
 };
 
@@ -107,7 +112,7 @@ export const serializeEntriesToCsv = (entries: LdapExportEntry[], options?: CsvS
 
     const rows: string[] = [];
     if (config.includeHeader) {
-        rows.push(headers.map(escapeCsvCell).join(config.delimiter));
+        rows.push(headers.map((cell) => escapeCsvCell(cell, config.multivaluedSeparator)).join(config.delimiter));
     }
     for (const entry of entries || []) {
         const cells = [
@@ -116,7 +121,7 @@ export const serializeEntriesToCsv = (entries: LdapExportEntry[], options?: CsvS
             // ("cn") or user-typed ("CN") names, mirroring the header union.
             ...dataAttributes.map((name) => formatCell(getEntryAttributeValues(entry, name))),
         ];
-        rows.push(cells.map(escapeCsvCell).join(config.delimiter));
+        rows.push(cells.map((cell) => escapeCsvCell(cell, config.multivaluedSeparator)).join(config.delimiter));
     }
     return rows.join('\r\n');
 };
@@ -132,4 +137,14 @@ export const serializeEntriesToJson = (entries: LdapExportEntry[], options?: { p
 };
 
 export const serializeEntriesToLdifText = (entries: LdapExportEntry[], options?: { lineWidth?: number; includeVersion?: boolean }): string =>
-    serializeEntriesToLdif(entries as LdifEntry[], options);
+    serializeEntriesToLdif(
+        // 与 CSV 路径同约定：标量值归一为数组、DN 归一为字符串，不靠裸 cast——
+        // 否则标量属性在 LDIF 导出中整条消失且无任何提示。
+        (Array.isArray(entries) ? entries : []).map((entry) => ({
+            dn: String(getDn(entry) ?? ''),
+            attributes: Object.fromEntries(
+                Object.entries(getAttributeMap(entry)).map(([name, value]) => [name, normaliseToArray(value)]),
+            ),
+        })),
+        options,
+    );

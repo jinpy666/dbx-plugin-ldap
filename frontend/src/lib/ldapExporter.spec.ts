@@ -41,7 +41,8 @@ describe("serializeEntriesToCsv", () => {
     const [header, rowA, rowB] = csv.split("\r\n");
     expect(header).toBe("dn,cn,objectClass,mail,uid");
     // dn contains a comma → RFC 4180 quoting
-    expect(rowA).toBe('"cn=a,dc=com",a,top|person,a@x|a@y,');
+    // 多值拼接含 `|` 分隔符 → 加引号示意结构（见 multivalue separator quoting 用例）。
+    expect(rowA).toBe('"cn=a,dc=com",a,"top|person","a@x|a@y",');
     expect(rowB).toBe('"cn=b,dc=com",b,,,b');
   });
 
@@ -57,7 +58,7 @@ describe("serializeEntriesToCsv", () => {
 
   it("resolves pinned columns case-insensitively", () => {
     const csv = serializeEntriesToCsv(ENTRIES, { columns: ["CN", "Mail"], includeHeader: false });
-    expect(csv.split("\r\n")[0]).toBe('"cn=a,dc=com",a,a@x|a@y');
+    expect(csv.split("\r\n")[0]).toBe('"cn=a,dc=com",a,"a@x|a@y"');
   });
 });
 
@@ -108,5 +109,25 @@ describe("serializeEntriesToCsv formula injection scope", () => {
     ]);
     expect(csv).toContain("'+A1");
     expect(csv).toContain("'-SUM(A1)");
+  });
+});
+
+describe("extractEntryAttributeNames case-insensitive union", () => {
+  it("dedupes case-variant attribute names across entries (keeps first spelling)", () => {
+    expect(
+      extractEntryAttributeNames([
+        { dn: "cn=a,dc=x", attributes: { cn: ["a"], mail: ["a@x"] } },
+        { dn: "cn=b,dc=x", attributes: { CN: ["b"], Mail: ["b@x"] } },
+      ]),
+    ).toEqual(["cn", "mail"]);
+    // 两列不会各自填同一份值（旧实现产出 dn,cn,mail,CN,Mail 五列）。
+  });
+});
+
+describe("serializeEntriesToCsv multivalue separator quoting", () => {
+  it("quotes cells containing the multivalue separator so structure is visible", () => {
+    const csv = serializeEntriesToCsv([{ dn: "cn=a,dc=x", attributes: { cn: ["a|b"] } }]);
+    // 单值 a|b 现在被引号包裹：与无结构文本可区分（彻底区分多值仍是已知限制）。
+    expect(csv).toContain('"a|b"');
   });
 });

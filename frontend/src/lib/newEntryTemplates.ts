@@ -327,6 +327,12 @@ function escapeDnValue(value: string): string {
       escaped += `\\${char}`;
       continue;
     }
+    // 其余 < 0x20 控制符（含粘贴进来的 CR/LF）：RFC 4514 §2.3 要求 \hh 形态，
+    // 裸换行会产出服务端无法解析的畸形 DN。
+    if (text.charCodeAt(index) < 0x20) {
+      escaped += `\\${char.charCodeAt(0).toString(16).padStart(2, "0")}`;
+      continue;
+    }
     if ((index === 0 || index === text.length - 1) && char === " ") {
       escaped += `\\${char}`;
       continue;

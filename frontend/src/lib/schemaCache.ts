@@ -296,6 +296,10 @@ interface CacheEntry {
 
 const sharedCache = new Map<string, CacheEntry>();
 const sharedInFlight = new Map<string, Promise<SchemaMetadata>>();
+// invalidate 代际计数：fetch 发起时快照、落缓存前比对，防止「发起于 invalidate
+// 之前」的在途拉取在 resolve 时把刚被删掉的旧条目写回去（refresh 后最长钉住
+// 一个 TTL 周期的陈旧 schema）。
+let sharedCacheGeneration = 0;
 // loading/error 为共享 refs：任一连接的拉取状态对所有视图可见（原 per-instance
 // 语义的最小共享化；同名 ref 的读写语义不变）。
 const sharedLoading = ref(false);
@@ -397,6 +401,8 @@ export function useLdapSchemaCache(): SchemaCacheView {
         const cached = sharedCache.get(key);
         if (cached && Date.now() - cached.fetchedAt < ttlMs) {
             applyEntry(cached);
+            // 命中即清错误：上一个连接的失败提示不能贴在健康数据旁边。
+            sharedError.value = null;
             return cached.payload;
         }
 
@@ -409,6 +415,7 @@ export function useLdapSchemaCache(): SchemaCacheView {
         const pending = (async () => {
             sharedLoading.value = true;
             sharedError.value = null;
+            const generation = sharedCacheGeneration;
             try {
                 const raw = loaderOverride ? await loaderOverride(key) : await fetchCanonicalSchema();
                 // loader 允许返回 Partial：缺省字段按空值补齐（与旧实现一致）。
@@ -423,8 +430,16 @@ export function useLdapSchemaCache(): SchemaCacheView {
                     matchingRuleUses: raw.matchingRuleUses,
                     ldapSyntaxes: raw.ldapSyntaxes,
                 };
-                const entry: CacheEntry = { payload, fetchedAt: Date.now() };
-                sharedCache.set(key, entry);
+                // 代际不匹配说明拉取途中发生过 invalidate（如 SchemaPanel 的
+                // refresh 强刷）：旧响应不得写回缓存，交给后续新拉取落地。
+                if (generation === sharedCacheGeneration) {
+                    sharedCache.set(key, { payload, fetchedAt: Date.now() });
+                    // 读时过期不删会驻留（长会话逐连接累积）：写入顺手清理全表过期项。
+                    const now = Date.now();
+                    for (const [staleKey, staleEntry] of sharedCache) {
+                        if (now - staleEntry.fetchedAt >= ttlMs) sharedCache.delete(staleKey);
+                    }
+                }
                 return payload;
             } catch (err) {
                 sharedError.value = err;
@@ -439,6 +454,8 @@ export function useLdapSchemaCache(): SchemaCacheView {
     };
 
     const invalidate = (connectionId?: string) => {
+        // 代际推进：让发起于本次失效之前的在途拉取在 resolve 时放弃写回。
+        sharedCacheGeneration++;
         if (connectionId == null) {
             sharedCache.clear();
             return;

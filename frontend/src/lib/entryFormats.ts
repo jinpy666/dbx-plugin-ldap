@@ -230,7 +230,11 @@ function parsePsBlock(block: string[]): PsProperty[] {
     const joined = property.values.map((value) => value.trim()).filter(Boolean).join(" ").trim();
     if (/^\{.*\}$/u.test(joined)) {
       const inner = joined.slice(1, -1).trim();
-      property.values = inner === "" ? [] : inner.split(/,\s*/u).filter(Boolean);
+      // PS 集合的元素分隔符是 ", "（逗号+空格）。只按 ", " 切分：任一片段
+      // 仍含裸逗号即 DN 值形态（如 member 的 `CN=a,DC=x, CN=b,DC=y`），
+      // 继续按逗号切会把 DN 拆碎——整串保留，不静默改写数据。
+      const parts = inner.split(/,\s+/u).filter(Boolean);
+      property.values = inner === "" ? [] : parts.some((part) => part.includes(",")) ? [inner] : parts;
     } else {
       property.values = joined === "" ? [] : [joined];
     }

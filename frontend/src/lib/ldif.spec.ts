@@ -173,6 +173,20 @@ describe("parseLdif", () => {
     expect(parsed.errors[0].message).toContain("before dn");
   });
 
+  it("does not let attributes before dn poison the next valid entry", () => {
+    const parsed = parseLdif("cn: orphan\ndn: cn=a,dc=x\nsn: b\n");
+    expect(parsed.entries).toEqual([{ dn: "cn=a,dc=x", attributes: { sn: ["b"] } }]);
+    expect(parsed.errors).toHaveLength(1);
+    expect(parsed.errors[0].message).toContain("before dn");
+  });
+
+  it("reports malformed attribute names instead of accepting them", () => {
+    const parsed = parseLdif("foo bar: x\ndn: cn=a,dc=x\n");
+    // 畸形行单独报错；其后有效条目不再被前序错误连带丢弃（见孤立项测试）。
+    expect(parsed.entries).toEqual([{ dn: "cn=a,dc=x", attributes: {} }]);
+    expect(parsed.errors[0].message).toContain("malformed line");
+  });
+
   it("reports malformed lines with line numbers", () => {
     const parsed = parseLdif("dn: dc=com\n:novalue\n");
     expect(parsed.errors).toHaveLength(1);

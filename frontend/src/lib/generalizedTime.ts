@@ -107,6 +107,8 @@ export interface GeneralizedTimeWall {
   hour: number;
   minute: number;
   second: number;
+  /** 小数秒原串（含分隔符，如 ".123"）：结构化编辑不丢精度，写回原样保留。 */
+  fraction?: string;
   /** "Z" | "±HHMM" | ""（无后缀容错形态，写回时原样保留）。 */
   zone: string;
 }
@@ -117,6 +119,10 @@ export function parseGeneralizedTimeWall(value: string): GeneralizedTimeWall | n
   const match = SHAPE_RE.exec(text);
   if (!match) return null;
   const [, year, month, day, hour = "00", minute = "00", second = "00", , zone = ""] = match;
+  // 小数秒连分隔符原样保留：SHAPE_RE 的捕获组只含数字，改共享正则会平移
+  // parseGeneralizedTime 的分组序。字符串已通过全串校验，`.123`/`,123` 形态
+  // 只可能出现在小数秒位置，独立提取安全。
+  const fraction = /[.,]\d+/.exec(text)?.[0] ?? "";
   // 日历有效性校验与 parseGeneralizedTime 同款：拿「未加偏移的 UTC 字段」反查。
   const wallMs = Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second));
   const wall = new Date(wallMs);
@@ -136,16 +142,17 @@ export function parseGeneralizedTimeWall(value: string): GeneralizedTimeWall | n
     hour: Number(hour),
     minute: Number(minute),
     second: Number(second),
+    fraction,
     zone,
   };
 }
 
-/** 墙上时钟 + 时区后缀 → GeneralizedTime 串（全字段、秒精度）。 */
+/** 墙上时钟 + 时区后缀 → GeneralizedTime 串（全字段；小数秒原样回写）。 */
 export function formatGeneralizedTimeWall(wall: GeneralizedTimeWall): string {
   const pad = (n: number, width = 2) => String(n).padStart(width, "0");
   return (
     `${pad(wall.year, 4)}${pad(wall.month)}${pad(wall.day)}` +
-    `${pad(wall.hour)}${pad(wall.minute)}${pad(wall.second)}${wall.zone}`
+    `${pad(wall.hour)}${pad(wall.minute)}${pad(wall.second)}${wall.fraction ?? ""}${wall.zone}`
   );
 }
 

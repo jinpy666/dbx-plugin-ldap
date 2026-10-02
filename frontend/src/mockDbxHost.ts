@@ -16,7 +16,7 @@
  *                       并周期性推送 ldap/log 事件（LogPanelView 视觉验证）
  */
 import "./style.css";
-import { parseRdnAttributes, splitFirstDnRdn } from "./lib/dn";
+import { dnWithinBase, parseRdnAttributes, splitFirstDnRdn } from "./lib/dn";
 import { unescapeLdapFilterValue, validateLDAPFilter } from "./lib/ldapFilter";
 
 const eventListeners = new Set<(event: DbxPluginEvent) => void>();
@@ -200,6 +200,16 @@ function compileFilter(filter: string): EntryMatcher {
   return parse();
 }
 
+/** localStorage 里的 mock 预设读取：脏 JSON 回落空表（坏一条不该砸坏列/存/删）。 */
+function readStoredPresets(): Array<Record<string, unknown>> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem("ldap-mock-presets") ?? "[]");
+    return Array.isArray(parsed) ? (parsed as Array<Record<string, unknown>>) : [];
+  } catch {
+    return [];
+  }
+}
+
 function dnInSearchScope(dn: string, baseDn: string, scope: string): boolean {
   if (scope === "base") return dn.toLowerCase() === baseDn.toLowerCase();
   if (scope === "one") return splitFirstDnRdn(dn).parentDn.toLowerCase() === baseDn.toLowerCase();
@@ -222,12 +232,6 @@ function needsAliasDereference(baseDn: string, scope: string, mode: string): boo
     }
   }
   return false;
-}
-
-function dnWithinBase(dn: string, baseDn: string): boolean {
-  const a = dn.toLowerCase();
-  const b = baseDn.toLowerCase();
-  return a === b || a.endsWith(`,${b}`);
 }
 
 function search(params_: Record<string, unknown>) {
@@ -332,11 +336,12 @@ function countChildren(params_: Record<string, unknown>): { count: number; trunc
   for (const entry of directory.values()) {
     if (!dnInSearchScope(entry.dn, baseDn, "one")) continue;
     if (!matches(entry)) continue;
-    count += 1;
+    // 与 search() 同款预读语义：恰好等于上限不算截断，第 limit+1 个命中才置位。
     if (count >= limit) {
       truncated = true;
       break;
     }
+    count += 1;
   }
   return { count, truncated };
 }
@@ -528,7 +533,8 @@ const invoke: DbxPluginApi["invoke"] = async <T = unknown>(method: string, rawPa
     const values = Object.entries(entry.attributes).find(
       ([name]) => name.toLowerCase() === attribute.toLowerCase(),
     )?.[1] ?? [];
-    result = { match: (values[0] ?? "").toLowerCase() === String(input.value ?? "").toLowerCase() };
+    // RFC 4511 Compare：任一值命中即 compareTrue（objectClass 多值 fixture 常态）。
+    result = { match: values.some((value) => value.toLowerCase() === String(input.value ?? "").toLowerCase()) };
   } else if (method === "ldap/whoami") {
     result = { authzId: "dn:cn=admin,dc=demo,dc=dbx" };
   } else if (method === "ldap/entry/passwdModify") {
@@ -608,9 +614,9 @@ const invoke: DbxPluginApi["invoke"] = async <T = unknown>(method: string, rawPa
       entries: mockLogEntries.filter((entry) => Number(entry.seq) > after),
     };
   } else if (method === "ldap/presets/list") {
-    result = { presets: JSON.parse(localStorage.getItem("ldap-mock-presets") ?? "[]") };
+    result = { presets: readStoredPresets() };
   } else if (method === "ldap/presets/save") {
-    const presets = JSON.parse(localStorage.getItem("ldap-mock-presets") ?? "[]") as unknown[];
+    const presets = readStoredPresets();
     const incoming = (input.preset ?? {}) as Record<string, unknown>;
     const name = String(incoming.name ?? "").trim();
     if (!name) throw new Error("preset name is required");
@@ -632,7 +638,7 @@ const invoke: DbxPluginApi["invoke"] = async <T = unknown>(method: string, rawPa
   } else if (method === "ldap/presets/remove") {
     const id = String(input.id ?? "").trim();
     if (!id) throw new Error("Missing preset id");
-    const presets = JSON.parse(localStorage.getItem("ldap-mock-presets") ?? "[]") as Array<Record<string, unknown>>;
+    const presets = readStoredPresets();
     if (!presets.some((preset) => preset.id === id)) throw new Error(`preset ${JSON.stringify(id)} is not found`);
     localStorage.setItem("ldap-mock-presets", JSON.stringify(presets.filter((preset) => preset.id !== id)));
     result = { success: true };
@@ -718,7 +724,9 @@ window.dbxPlugin = {
       if (raw === null) return null;
       try {
         const parsed = JSON.parse(raw);
-        return parsed !== null && typeof parsed === "object" ? parsed : raw;
+        // set(key, null) 序列化为字符串 "null"：读取应还原为 null 而非原始串。
+        if (parsed === null) return null;
+        return typeof parsed === "object" ? parsed : raw;
       } catch {
         return raw;
       }

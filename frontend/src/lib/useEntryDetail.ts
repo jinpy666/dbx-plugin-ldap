@@ -29,7 +29,6 @@ export interface UseEntryDetailOptions {
 
 interface CacheSlot {
   entry: LdapEntry;
-  fetchedAt: number;
 }
 
 /** 详情缓存上限（条，审计 K-4）：无限增长会在长会话里驻留整本目录的条目。 */
@@ -140,7 +139,7 @@ export function useEntryDetail(options: UseEntryDetailOptions) {
       const result = await ldapApi.entryGet(dn, [...ENTRY_PRIORITY_ATTRIBUTES]);
       if (request !== entryRequestSeq || requestedConnection !== getConnectionId()) return;
       editorEntry.value = result.entry;
-      lruSet(entryDetailCache, entryCacheKey(requestedConnection, dn), { entry: result.entry, fetchedAt: Date.now() }, ENTRY_DETAIL_CACHE_LIMIT);
+      lruSet(entryDetailCache, entryCacheKey(requestedConnection, dn), { entry: result.entry }, ENTRY_DETAIL_CACHE_LIMIT);
       onRecent(dn);
       editorParentDn.value = "";
       editorOpen.value = true;
@@ -170,7 +169,7 @@ export function useEntryDetail(options: UseEntryDetailOptions) {
   function mergeEditorEntry(entry: LdapEntry, requestedConnection: string, dn: string) {
     const merged = mergeEntryAttributes(editorEntry.value, entry);
     editorEntry.value = merged;
-    lruSet(entryDetailCache, entryCacheKey(requestedConnection, dn), { entry: merged, fetchedAt: Date.now() }, ENTRY_DETAIL_CACHE_LIMIT);
+    lruSet(entryDetailCache, entryCacheKey(requestedConnection, dn), { entry: merged }, ENTRY_DETAIL_CACHE_LIMIT);
   }
 
   function selectEntryAttributes(entry: LdapEntry, names: string[]): LdapEntry {
@@ -243,6 +242,11 @@ export function useEntryDetail(options: UseEntryDetailOptions) {
         mergeEditorEntry(result.entry, requestedConnection, dn);
       }
       editorDeferredAttributes.value = [];
+    } catch (cause) {
+      // 失败不再静默：不 catch 时 rejection 会从 `void` 调用与模板
+      // @load-deferred 绑定逸出成 unhandled rejection，关联/二进制值悄悄
+      // 缺失且无任何解释。会话仍活跃才上抛，避免串到新打开的条目上。
+      if (activeEntryRequest(request, requestedConnection)) onBannerError(cause);
     } finally {
       if (activeEntryRequest(request, requestedConnection)) editorDeferredLoading.value = false;
     }

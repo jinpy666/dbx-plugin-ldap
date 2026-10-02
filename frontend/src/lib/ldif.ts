@@ -173,6 +173,11 @@ function unfoldLines(text: string): UnfoldedLine[] {
     return out
 }
 
+/** 合法属性名：descr（字母开头 + 字母/数字/连字符）或 OID，可带 `;option`
+ * 段（RFC 2849 attr-type 形态）。文件首行带前导空格、名字里混空格这类
+ * 畸形输入此前被静默接受，一路传到服务器才报出难排查的错误。 */
+const LDIF_ATTR_NAME_RE = /^(?:[A-Za-z][A-Za-z0-9-]*|[0-9]+(?:\.[0-9]+)*)(?:;[A-Za-z0-9-]+)*$/
+
 /**
  * Parse a single `name: value` or `name:: base64` LDIF line.
  * Returns null if the line is malformed.
@@ -181,6 +186,7 @@ function parseAttributeLine(line: string): { name: string; value: string } | nul
     const colonIdx = line.indexOf(':')
     if (colonIdx <= 0) return null
     const name = line.slice(0, colonIdx)
+    if (!LDIF_ATTR_NAME_RE.test(name)) return null
     let rest = line.slice(colonIdx + 1)
     let isBase64 = false
     if (rest.startsWith(':')) {
@@ -257,6 +263,9 @@ export function parseLdif(text: string): LdifParseResult {
         }
         if (lowerName === 'dn') {
             if (entry) flush()
+            // entryHasError 只作用于当前条目：新 dn 必须复位，否则 dn 之前的
+            // 孤立属性会把下一条有效条目连带丢弃（错误仍单独上报）。
+            entryHasError = false
             entry = { dn: parsed.value, attributes: {} }
             continue
         }

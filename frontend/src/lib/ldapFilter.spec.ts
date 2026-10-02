@@ -5,6 +5,7 @@ import {
   buildBuilderClauseFilter,
   buildBinaryEqualityFilter,
   buildClauseFilter,
+  buildComparisonFilter,
   buildEqualityFilter,
   buildObjectGuidEqualityFilter,
   buildGroupFilter,
@@ -131,6 +132,14 @@ describe("binary equality filters", () => {
     });
     expect(equality.toString()).toBe(filter);
     expect(JSON.stringify(equality)).toBe(JSON.stringify(filter));
+  });
+
+  it("rejects filter-syntax attribute names in the build* helpers", () => {
+    // 属性名此前未校验：值侧转义挡不住名字里的过滤器语法（注入陷阱）。
+    expect(buildEqualityFilter("cn)(uid=*", "x")).toBe("");
+    expect(buildPresenceFilter("cn=*)(|(cn=")).toBe("");
+    expect(buildSubstringFilter("cn)(uid=*", "x", "contains")).toBe("");
+    expect(buildComparisonFilter("cn)(uid=*", "x", "gte")).toBe("");
   });
 
   it("escapes malicious text as data instead of filter syntax", () => {
