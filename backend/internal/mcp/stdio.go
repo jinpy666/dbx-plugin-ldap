@@ -140,7 +140,15 @@ serveLoop:
 			case sem <- struct{}{}:
 			default:
 				// 在途请求已达上限（SEC-005）：同步回忙碌错误，不排队。
-				payload, _ := json.Marshal(rpcFailure(json.RawMessage("null"), -32000,
+				// id 尽力回显：行内容可用时提取，让宿主能把 -32000 关联到请求。
+				requestID := json.RawMessage("null")
+				var probe struct {
+					ID json.RawMessage `json:"id"`
+				}
+				if json.Unmarshal(line, &probe) == nil && len(probe.ID) > 0 {
+					requestID = probe.ID
+				}
+				payload, _ := json.Marshal(rpcFailure(requestID, -32000,
 					fmt.Sprintf("Server busy: more than %d requests in flight", maxConcurrentRequests)))
 				writeMu.Lock()
 				if _, werr := out.Write(append(payload, '\n')); werr != nil {
@@ -250,6 +258,12 @@ func (s *StdioServer) handleLine(line []byte) (response map[string]any) {
 		Params  json.RawMessage `json:"params"`
 	}
 	if err := json.Unmarshal(line, &raw); err != nil {
+		// JSON 合法但形状是数组（JSON-RPC 2.0 批处理，MCP 不支持）→ 结构
+		// 层面 -32600 Invalid Request；真正的坏 JSON 才是 -32700。
+		if json.Valid(line) && strings.HasPrefix(strings.TrimSpace(string(line)), "[") {
+			return rpcFailure(json.RawMessage("null"), -32600,
+				"Invalid Request: batch requests are not supported by this server")
+		}
 		return rpcFailure(json.RawMessage("null"), -32700, fmt.Sprintf("Parse error: %v", err))
 	}
 	method, methodErr := decodeMethod(raw.Method)
@@ -549,7 +563,7 @@ func (s *StdioServer) forwardViaBridge(connectionID, name string, args map[strin
 		}
 		timeout = time.Duration(secs) * time.Second
 	}
-	result, err := callPluginTool(port, connectionID, name, args, timeout)
+	result, err := callPluginTool(port, connectionID, name, stripCredentialArgs(args), timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -601,18 +615,29 @@ func (s *StdioServer) pooledConnectionID(inline inlineConn) (string, error) {
 	s.hash[id] = id
 	s.ids[id] = struct{}{}
 	s.order = append(s.order, id)
+	// svc.Connect 只做参数解析与注册表替换（惰性拨号，无网络 I/O），在
+	// s.mu 下同步完成：并发同参数调用从命中路径拿到 id 时，注册必然已
+	// 落地，不会撞 svc.Get 的 "connection not found"。
+	params := inline.toLifecycle(id)
+	connectErr := s.svc.Connect(params)
+	if connectErr != nil {
+		// 注册失败不残留池项（下次同参数调用重试）：hash/ids/order 一并
+		// 清掉——order 只在淘汰时消费，漏删会无界增长。
+		delete(s.hash, id)
+		delete(s.ids, id)
+		for index, pooled := range s.order {
+			if pooled == id {
+				s.order = append(s.order[:index], s.order[index+1:]...)
+				break
+			}
+		}
+	}
 	s.mu.Unlock()
 	for _, stale := range evicted {
 		s.svc.Disconnect(stale)
 	}
-	params := inline.toLifecycle(id)
-	if err := s.svc.Connect(params); err != nil {
-		// 注册失败不残留池项（下次同参数调用重试）。
-		s.mu.Lock()
-		delete(s.hash, id)
-		delete(s.ids, id)
-		s.mu.Unlock()
-		return "", err
+	if connectErr != nil {
+		return "", connectErr
 	}
 	return id, nil
 }
@@ -674,6 +699,21 @@ func parseInlineConn(args map[string]any) (inlineConn, bool) {
 		inline.TLSMode = "starttls"
 	}
 	return inline, inline.Host != ""
+}
+
+// stripCredentialArgs 复制 args 并剥掉凭据键：bridge 侧凭据由 DBX 应用的
+// 连接库按 connectionId 解析；无 host 的孤儿凭据参数（parseInlineConn 不
+// 认领）不该流经明文回环 HTTP，也进不了池化路径，剥掉即 fail-closed。
+func stripCredentialArgs(args map[string]any) map[string]any {
+	forwarded := make(map[string]any, len(args))
+	for key, value := range args {
+		switch key {
+		case "password", "bindPassword", "ntlmHash":
+			continue
+		}
+		forwarded[key] = value
+	}
+	return forwarded
 }
 
 // poolKey 参数 hash → 池化 connectionId（前 16 个 hex 字符；同参数必同键，

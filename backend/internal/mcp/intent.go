@@ -115,7 +115,9 @@ const (
 )
 
 // Get 读取 intent：found（含终态/pending）、expired（存在但过 TTL，读取时
-// 顺手清除）、unknown（从未登记）。
+// 顺手清除）、unknown（从未登记）。found 返回副本：Report 在持锁下覆盖
+// State/Summary/Reason，把内部指针泄出锁外会让 waitIntent/uiState 的读取
+// 与并发 Report 形成数据竞争。
 func (s *IntentStore) Get(id string, now time.Time) (*Intent, LookupStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -127,7 +129,14 @@ func (s *IntentStore) Get(id string, now time.Time) (*Intent, LookupStatus) {
 		s.removeLocked(id)
 		return nil, LookupExpired
 	}
-	return intent, LookupFound
+	copied := *intent
+	if intent.Summary != nil {
+		copied.Summary = make(map[string]any, len(intent.Summary))
+		for key, value := range intent.Summary {
+			copied.Summary[key] = value
+		}
+	}
+	return &copied, LookupFound
 }
 
 // SetSnapshot 覆盖最新 UI 快照（快照型 report，无 intentId）；写入即复制，
