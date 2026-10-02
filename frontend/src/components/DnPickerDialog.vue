@@ -63,10 +63,22 @@ async function loadChildren(node: PickerNode) {
     node.truncated = result.truncated || result.count > TREE_FETCH_PAGE;
     node.loaded = true;
   } catch (cause) {
-    loadError.value = cause instanceof Error ? cause.message : String(cause);
+    // baseDn 变化会整体重建 root：已被替换的旧根子树上的在途失败不再把
+    // 旧错误挂到新树上。
+    if (containsNode(root.value, node)) loadError.value = cause instanceof Error ? cause.message : String(cause);
   } finally {
     node.loading = false;
   }
+}
+
+function containsNode(ancestor: PickerNode | null, target: PickerNode): boolean {
+  let found = false;
+  const walk = (node: PickerNode) => {
+    if (node === target) found = true;
+    node.children.forEach(walk);
+  };
+  if (ancestor) walk(ancestor);
+  return found;
 }
 
 async function toggle(node: PickerNode) {

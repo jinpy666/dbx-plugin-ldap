@@ -5,7 +5,7 @@
 // 内建：排序/列内文本筛选/分页 + 页大小持久化（pluginStore，ldapGrid 存取）、
 // 多行复选框选择（表头全选，批量操作用）、行双击 / 单元格 Enter 激活、
 // 列宽列序持久化（columnStateKey）。
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   ClientSideRowModelApiModule,
   ClientSideRowModelModule,
@@ -24,6 +24,7 @@ import {
   type RowSelectionOptions,
 } from "ag-grid-community";
 import { writeClipboardText } from "../lib/clipboard";
+import { nextFocusIndex } from "../lib/modal";
 import { copyRowText } from "../lib/ldapGrid";
 import { t } from "../lib/i18n";
 import {
@@ -87,6 +88,7 @@ const pageSize = ref(loadPreferredPageSize(props.tableKey));
 let gridApi: GridApi | null = null;
 const contextMenuEl = ref<HTMLElement>();
 const contextMenu = ref<{ x: number; y: number; value: string; row: unknown; fields: string[] }>();
+let contextMenuTrigger: HTMLElement | null = null;
 const effectiveColumnDefs = computed(() =>
   props.clientSideComplete
     ? props.columnDefs
@@ -138,6 +140,7 @@ function onCellContextMenu(event: CellContextMenuEvent) {
     .filter((value): value is string => typeof value === "string" && value.length > 0);
   const menuWidth = 166;
   const menuHeight = 72;
+  contextMenuTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   contextMenu.value = {
     x: Math.min(pointer.clientX, Math.max(8, window.innerWidth - menuWidth - 8)),
     y: Math.min(pointer.clientY, Math.max(8, window.innerHeight - menuHeight - 8)),
@@ -145,6 +148,9 @@ function onCellContextMenu(event: CellContextMenuEvent) {
     row: event.data,
     fields,
   };
+  // 焦点进菜单容器：键盘用户可 ↑/↓ 移项、Esc 关闭（与 DnTree/AssociationPanel
+  // 的三处菜单同一交互口径）。
+  void nextTick(() => contextMenuEl.value?.focus({ preventScroll: true }));
 }
 
 async function copyContext(kind: "value" | "row") {
@@ -159,8 +165,31 @@ function onDocumentClick(event: MouseEvent) {
   if (contextMenu.value && !contextMenuEl.value?.contains(event.target as Node)) closeContextMenu();
 }
 
+function onMenuKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    const restore = contextMenuTrigger;
+    closeContextMenu();
+    restore?.focus({ preventScroll: true });
+    return;
+  }
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const items = Array.from(contextMenuEl.value?.querySelectorAll<HTMLButtonElement>("button:not([disabled])") ?? []);
+  const index = items.indexOf(document.activeElement as HTMLButtonElement);
+  items[nextFocusIndex(items.length, index, event.key === "ArrowUp")]?.focus({ preventScroll: true });
+}
+
 function onDocumentKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") closeContextMenu();
+}
+
+/** 行选择配置：multiRow 复选框仅在前缀态结束后可用（selection 选项与
+ * defaultColDef 的 sortable/filter 都依赖 clientSideComplete）。 */
+function rowSelectionOptions(): RowSelectionOptions | undefined {
+  return (props.rowSelection && props.clientSideComplete
+    ? { mode: "multiRow", checkboxes: true, headerCheckbox: true, enableClickSelection: false }
+    : undefined) as RowSelectionOptions | undefined;
 }
 
 function buildOptions(): GridOptions {
@@ -185,9 +214,7 @@ function buildOptions(): GridOptions {
     headerHeight: 26,
     animateRows: false,
     suppressDragLeaveHidesColumns: true,
-    rowSelection: (props.rowSelection && props.clientSideComplete
-      ? { mode: "multiRow", checkboxes: true, headerCheckbox: true, enableClickSelection: false }
-      : undefined) as RowSelectionOptions | undefined,
+    rowSelection: rowSelectionOptions(),
     getRowId: (params) => resolveRowId(params.data),
     localeText: agGridLocaleText() as GridOptions["localeText"],
     onRowDoubleClicked: (event) => {
@@ -262,6 +289,25 @@ watch(
     gridApi?.setGridOption("paginationPageSize", pageSize.value);
   },
 );
+// rowSelection/clientSideComplete 只在 mount 的 buildOptions 里生效不够：
+// 多页搜索首屏是前缀态（selection 关闭），自动续拉排空后翻成完整态，若不
+// 追加 setGridOption，网格整个会话都没有复选框，批量操作入口全部失效。
+watch(
+  () => [props.rowSelection, props.clientSideComplete] as const,
+  ([selection, complete]) => {
+    if (!gridApi) return;
+    gridApi.setGridOption("rowSelection", rowSelectionOptions());
+    gridApi.setGridOption("defaultColDef", {
+      sortable: complete,
+      resizable: true,
+      filter: complete ? ("agTextColumnFilter" as const) : (false as const),
+      minWidth: 64,
+      suppressHeaderMenuButton: false,
+    });
+    // 前缀态回收选择：建立在不完整数据上的选择不可信。
+    if (!selection || !complete) gridApi.deselectAll();
+  },
+);
 
 /** 清空多选（对外契约：结果集整体变化时批量选择随之失效）。 */
 function deselectAll() {
@@ -272,9 +318,9 @@ defineExpose({ deselectAll });
 
 <template>
   <div ref="host" class="dbx-grid ag-theme-quartz" @contextmenu.prevent />
-  <div v-if="contextMenu" ref="contextMenuEl" class="context-menu grid-context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @click.stop>
-    <button type="button" @click="copyContext('value')">{{ t("result.copyValue") }}</button>
-    <button type="button" @click="copyContext('row')">{{ t("result.copyRow") }}</button>
+  <div v-if="contextMenu" ref="contextMenuEl" class="context-menu grid-context-menu" role="menu" tabindex="-1" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @click.stop @keydown="onMenuKeydown">
+    <button type="button" role="menuitem" @click="copyContext('value')">{{ t("result.copyValue") }}</button>
+    <button type="button" role="menuitem" @click="copyContext('row')">{{ t("result.copyRow") }}</button>
   </div>
 </template>
 

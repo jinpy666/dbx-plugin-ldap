@@ -30,18 +30,24 @@ const label = computed(() => {
 // 不阻塞确认框打开。
 const childCount = ref<number>();
 const recursive = ref(false);
+let childCountSeq = 0;
 watch(
   () => [props.open, props.dn] as const,
   ([open]) => {
     recursive.value = false;
     childCount.value = undefined;
+    const seq = ++childCountSeq;
     if (!open || !props.dn) return;
     ldapApi
       .childrenCount(props.dn)
       .then((result) => {
+        // 打开态下 dn 变更时，旧 DN 的晚到响应不再污染新 DN 的计数展示
+        // （最坏情形会把「有子条目」显示成「无」→ 递归勾选被隐藏）。
+        if (seq !== childCountSeq) return;
         childCount.value = result.count;
       })
       .catch(() => {
+        if (seq !== childCountSeq) return;
         childCount.value = undefined;
       });
   },

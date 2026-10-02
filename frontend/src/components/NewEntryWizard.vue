@@ -72,8 +72,14 @@ const showOptional = ref(false);
 // 的 [open, parentDn] watch 语义）。
 watch(
   () => [props.open, props.parentDn] as const,
-  ([open]) => {
+  ([open], previous) => {
     if (!open) return;
+    // 打开态下 parentDn 变化只跟随父 DN，不再把整个向导重置回第 ① 步
+    // （原实现会清掉已选模板/已填属性表单）；整体重置仅在 false→true 迁移。
+    if (previous?.[0]) {
+      parentDnDraft.value = props.parentDn || "";
+      return;
+    }
     step.value = 1;
     templateId.value = "";
     objectClasses.value = [];
@@ -189,6 +195,14 @@ function submit() {
   for (const attr of mayAttrs.value) {
     const value = (attrValues.value[attr] ?? "").trim();
     if (value) attributes[attr] = [value];
+  }
+  // RDN 属性兜底：rdnAttrDraft 是自由输入，不在 must/may 聚合结果里（或
+  // may 区未填）时值不会出现在 attributes——DN 引用了条目中不存在的属性，
+  // 服务器将以 naming violation 拒绝。
+  const rdnAttr = rdnAttrDraft.value.trim();
+  const rdnValue = rdnValueDraft.value.trim();
+  if (rdnAttr && rdnValue && !Object.keys(attributes).some((name) => name.toLowerCase() === rdnAttr.toLowerCase())) {
+    attributes[rdnAttr] = [rdnValue];
   }
   emit("submit", { dn: dnPreview.value, attributes });
 }

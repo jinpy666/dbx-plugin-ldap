@@ -391,7 +391,13 @@ defineExpose({ applyBaseDn, runSubtreeAt, runFilterAt, applyIntentSearch, expand
 // 构建器存在半填/未填子句（表单本身不可运行）时回退匹配全部
 // (objectClass=*)——右键动作是浏览意图，必须保证出结果集而不是静默失败。
 function runSubtreeAt(dn: string) {
-  if (props.disabled || !numericValid.value) return;
+  if (props.disabled) return;
+  // 数值字段（sizeLimit/pageSize）非法时不再静默返回：右键直达零反馈会让
+  // 用户以为点了没生效。
+  if (!numericValid.value) {
+    emit("error", t("search.invalidNumber"));
+    return;
+  }
   applyBaseDn(dn);
   draft.value.scope = "sub";
   const model = toModel();
@@ -402,7 +408,11 @@ function runSubtreeAt(dn: string) {
  * 过滤器由调用方组织（如 (memberOf=<组DN>)）；源码模式承载该过滤器，
  * 用户可在结果区继续改；Base/范围语义同 runSubtreeAt。 */
 function runFilterAt(baseDn: string, filter: string) {
-  if (props.disabled || !numericValid.value) return;
+  if (props.disabled) return;
+  if (!numericValid.value) {
+    emit("error", t("search.invalidNumber"));
+    return;
+  }
   // 防呆：空过滤器视为匹配全部，与 toModel 的兜底语义一致，保证必出结果集。
   const effectiveFilter = filter.trim() === "" ? "(objectClass=*)" : filter;
   // 切到源码模式承载调用方过滤器（源码是唯一权威表示，构建器无需逆向解析）。
@@ -928,7 +938,7 @@ const sortOrderOptions = computed(() => [
           </div>
           <p v-if="searchHistory.length === 0" class="history-empty">{{ t("search.historyEmpty") }}</p>
           <ul v-else class="history-list">
-            <li v-for="(entry, index) in searchHistory" :key="`${entry.timestamp}-${index}`">
+            <li v-for="(entry, index) in searchHistory" :key="`${entry.timestamp}-${entry.filter}-${entry.baseDn}`">
               <button type="button" class="history-item" :title="entry.filter" @click="applyHistory(entry)">
                 <span class="history-index" aria-hidden="true">{{ index + 1 }}</span>
                 <span class="history-content">

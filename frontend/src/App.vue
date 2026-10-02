@@ -81,6 +81,8 @@ const logPanelMode = computed(() => {
 });
 
 const treeRef = ref<InstanceType<typeof DnTree>>();
+// ResultTable 引用：批量移动/修改确认执行后清空勾选（对话框取消保留选择）。
+const resultTableRef = ref<InstanceType<typeof ResultTable>>();
 const searchRef = ref<InstanceType<typeof SearchForm>>();
 
 const baseDn = ref("");
@@ -450,7 +452,7 @@ const uiIntentHandlers = {
   },
   search: async (params: Record<string, unknown>): Promise<UiIntentOutcome> => {
     if (!searchRef.value || searching.value) {
-      return { status: "rejected", reason: "search form is not ready" };
+      return { status: "rejected", reason: t("intent.searchNotReady") };
     }
     const model = searchRef.value.applyIntentSearch(params);
     await runSearch(model);
@@ -571,6 +573,7 @@ async function onBatchModifyConfirm(payload: { operation: "add" | "replace" | "d
   }
   batchModifySubmitting.value = false;
   batchModifyOpen.value = false;
+  resultTableRef.value?.clearSelection();
   showNotice(t("batchModify.result", { ok: modified.length, failed: failed.size }));
 }
 
@@ -589,17 +592,18 @@ function onRemoveBookmark(dn: string) {
 }
 
 async function onOpenBookmark(dn: string) {
-  const revealed = (await treeRef.value?.revealDn(dn)) === true;
-  if (!revealed) {
-    showNotice(t("goto.notFound"));
+  const revealed = await treeRef.value?.revealDn(dn);
+  if (revealed !== "ok") {
+    // failed 时树错误横幅已给出原因，不再误报「未找到」。
+    if (revealed !== "failed") showNotice(t("goto.notFound"));
     return;
   }
   void openEntry(dn);
 }
 
 async function onGotoDn(dn: string) {
-  const revealed = (await treeRef.value?.revealDn(dn)) === true;
-  if (!revealed) showNotice(t("goto.notFound"));
+  const revealed = await treeRef.value?.revealDn(dn);
+  if (revealed === "notFound") showNotice(t("goto.notFound"));
 }
 
 // 比较（条目对比）：树右键 → 打开 CompareDialog（弹窗内两次 entryGet 拉取
@@ -636,6 +640,7 @@ async function onBatchMoveConfirm(targetParentDn: string) {
   }
   batchMoveSubmitting.value = false;
   batchMoveOpen.value = false;
+  resultTableRef.value?.clearSelection();
   showNotice(t("batchMove.result", { ok: moved.length, failed: failed.size }));
   if (moved.length === 0) return;
   const affectedParents = new Set<string>([targetParentDn, ...moved.map((dn) => splitFirstDnRdn(dn).parentDn)]);
@@ -651,7 +656,9 @@ function openAddChild(parentDn: string) {
   if (!guardWrite()) return;
   wizardParentDn.value = parentDn || baseDn.value;
   wizardOpen.value = true;
-  void wizardSchemaCache.ensureLoaded(connectionId.value);
+  // 向导自带内置模板兜底，schema 拉取失败静默降级即可，但 rejection 必须
+  // 接住（schemaCache 会 rethrow，裸 void 会成 unhandled rejection）。
+  void wizardSchemaCache.ensureLoaded(connectionId.value).catch(() => undefined);
 }
 
 // 向导提交 = 空白新增的模板化版本：payload 由向导铺好 must 属性。
@@ -825,7 +832,11 @@ function handleEvent(event: DbxPluginEvent) {
     auditItems.value = pushAuditItem(auditItems.value, parseAuditEvent(params, auditSeq++, Date.now()));
     const result = String(params.result ?? "");
     if (result === "denied" || result === "error") {
-      showError(`${params.action ?? "ldap"}: ${result}`);
+      // 横幅给本地化文案，`action: result` 原始技术串放 detail（悬浮可见），
+      // 不再把未翻译的拼接串直接怼给用户。
+      const raw = `${params.action ?? "ldap"}: ${result}`;
+      ldapError.value = t(result === "denied" ? "audit.result.denied" : "audit.result.error");
+      ldapErrorDetail.value = raw;
     }
   }
 }
@@ -905,7 +916,8 @@ function scheduleSchemaWarmup() {
   if (schemaWarmupTimer) window.clearTimeout(schemaWarmupTimer);
   schemaWarmupTimer = window.setTimeout(() => {
     schemaWarmupTimer = 0;
-    if (connectionId.value) void wizardSchemaCache.ensureLoaded(connectionId.value);
+    // 预热是尽力而为：失败静默降级（rethrow 接住，避免 unhandled rejection）。
+    if (connectionId.value) void wizardSchemaCache.ensureLoaded(connectionId.value).catch(() => undefined);
   }, SCHEMA_WARMUP_DELAY_MS);
 }
 
@@ -1100,6 +1112,7 @@ onBeforeUnmount(() => {
         />
         <p v-if="!baseDn" class="hint" style="padding: 0 10px">{{ t("tree.missingBaseDn") }}</p>
         <ResultTable
+          ref="resultTableRef"
           :entries="results"
           :count="resultCount"
           :truncated="resultTruncated"
@@ -1116,6 +1129,7 @@ onBeforeUnmount(() => {
           :error="searchError"
           :error-detail="searchErrorDetail"
           :can-write="canWrite"
+          :batch-busy="batchDeleteSubmitting || batchMoveSubmitting || batchModifySubmitting"
           @retry="retrySearch"
           @load-more="requestNextSearchPage"
           @retry-more="requestNextSearchPage"

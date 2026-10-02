@@ -85,8 +85,12 @@ async function runWhoami(connectionId: string) {
   whoamiStates.value[connectionId] = { running: true };
   try {
     const result = await ldapApi.whoami();
+    // whoami 跟随执行时刻的全局当前连接：在途期间切走后结果已不属于该行，
+    // 丢弃，避免把新连接的 authzId 显示到旧行上。
+    if (!isCurrentConnection(connectionId)) return;
     whoamiStates.value[connectionId] = { running: false, message: t("connections.whoamiOk", { authzId: result?.authzId ?? "" }) };
   } catch (cause) {
+    if (!isCurrentConnection(connectionId)) return;
     // 错误文案过 friendlyLdapError 映射（与树/检查的提示口径一致）。
     const raw = cause instanceof Error ? cause.message : String(cause);
     whoamiStates.value[connectionId] = { running: false, message: t("connections.whoamiFailed", { error: friendlyLdapError(raw) }), failed: true };
@@ -147,8 +151,8 @@ useModalA11y(
       <header>
         <h2><Network aria-hidden="true" style="width: 14px; height: 14px" /> {{ t("connections.title") }}</h2>
         <span class="actions" style="display: flex; gap: 2px">
-          <button class="icon-button" :title="t('refresh')" @click="load"><RefreshCw :class="{ spinning: loading }" /></button>
-          <button class="icon-button" :title="t('close')" @click="emit('close')"><X /></button>
+          <button class="icon-button" :aria-label="t('refresh')" :title="t('refresh')" @click="load"><RefreshCw :class="{ spinning: loading }" /></button>
+          <button class="icon-button" :aria-label="t('close')" :title="t('close')" @click="emit('close')"><X /></button>
         </span>
       </header>
       <ul v-if="statuses.length > 0" class="settings-list">

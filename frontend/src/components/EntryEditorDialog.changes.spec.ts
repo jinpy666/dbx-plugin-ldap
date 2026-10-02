@@ -135,7 +135,13 @@ describe("changes preview before save (edit mode)", () => {
     await rowFor(wrapper, "title").find("button[title='移除属性']").trigger("click");
     await saveButton(wrapper).trigger("click");
     const groups = preview(wrapper).findAll(".changes-group");
-    expect(groups.map((group) => group.find(".change-badge").text())).toEqual(["add", "replace", "delete"]);
+    // 徽章走 i18n（editor.changeOp.*，spec 环境为 zh-CN），class 仍保留原 op 供样式锚定。
+    expect(groups.map((group) => group.find(".change-badge").text())).toEqual(["新增", "替换", "删除"]);
+    expect(groups.map((group) => group.find(".change-badge").classes())).toEqual([
+      ["change-badge", "change-badge--add"],
+      ["change-badge", "change-badge--replace"],
+      ["change-badge", "change-badge--delete"],
+    ]);
     expect(groups[0].text()).toContain("mail");
     expect(groups[1].text()).toContain("description");
     // delete 的 values 恒为空:只有属性名,没有值预览。

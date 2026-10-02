@@ -178,11 +178,16 @@ async function downloadValue(card: BinaryCard, index: number): Promise<void> {
   if (props.disabled || card.invalid) return;
   const baseName = props.attributeName.split(";")[0]?.trim() || "value";
   const mime = IMAGE_MIME[card.kind] ?? (card.kind === "pem" ? "text/plain" : "application/octet-stream");
-  await saveBinaryFile({
-    name: `${baseName}-${index + 1}.${DOWNLOAD_EXT[card.kind] ?? "bin"}`,
-    contentType: mime,
-    bytes: base64ToBytes(card.value),
-  });
+  try {
+    await saveBinaryFile({
+      name: `${baseName}-${index + 1}.${DOWNLOAD_EXT[card.kind] ?? "bin"}`,
+      contentType: mime,
+      bytes: base64ToBytes(card.value),
+    });
+  } catch (cause) {
+    // 下载失败不再静默（未处理 rejection 逸出）：与 copyDecoded 同口径通知。
+    emit("notify", cause instanceof Error ? cause.message : String(cause));
+  }
 }
 
 const uploadError = ref("");

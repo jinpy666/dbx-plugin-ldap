@@ -4,7 +4,7 @@
 // 目标 DN 的输入校验与确认/关闭交互（与 DeleteEntryDialog/ModifyDnDialog 同款骨架）。
 import { computed, ref, watch } from "vue";
 import { X } from "@lucide/vue";
-import { isLikelyDn, splitFirstDnRdn } from "../lib/dn";
+import { dnWithinBase, isLikelyDn, splitFirstDnRdn } from "../lib/dn";
 import { decideBackdropClose, useModalA11y } from "../lib/modal";
 import { t } from "../lib/i18n";
 
@@ -32,7 +32,21 @@ watch(
 // 空或非法 DN 都视为无效：行内 aria-invalid + 文案 + 禁用确认，
 // 不等服务器报 invalid DN（与 ModifyDnDialog 的 RDN 预检同一动机，此处空值也算错）。
 const targetInvalid = computed(() => !isLikelyDn(targetDraft.value.trim()));
-const canConfirm = computed(() => !props.submitting && !targetInvalid.value);
+
+// 廉价预检（客户端可判的必败形态）：目标是任一所选条目自身、位于其子树内
+// （dnWithinBase 转义感知），或与某条目的当前父 DN 相同（原地移动）。
+// 命中即行内提示并禁用确认，不等 N 条请求逐条失败。
+const doomedTarget = computed(() => {
+  const target = targetDraft.value.trim();
+  if (!target || targetInvalid.value) return false;
+  const targetLower = target.toLowerCase();
+  for (const dn of props.dns) {
+    if (dnWithinBase(target, dn) && targetLower !== dn.toLowerCase()) return true;
+    if (splitFirstDnRdn(dn).parentDn.toLowerCase() === targetLower) return true;
+  }
+  return false;
+});
+const canConfirm = computed(() => !props.submitting && !targetInvalid.value && !doomedTarget.value);
 
 // 确认文案实时取当前输入值：用户能在点确认前看清"移到哪里"。
 const confirmCopy = computed(() => t("batchMove.confirm", { count: props.dns.length, dn: targetDraft.value.trim() }));
@@ -47,7 +61,7 @@ const overflowCount = computed(() => Math.max(0, props.dns.length - VISIBLE_LIMI
 
 function confirm() {
   const target = targetDraft.value.trim();
-  if (props.submitting || !isLikelyDn(target)) return;
+  if (props.submitting || !isLikelyDn(target) || doomedTarget.value) return;
   emit("confirm", target);
 }
 
@@ -72,6 +86,7 @@ function onBackdropClick() {
         <button class="icon-button" :title="t('close')" @click="emit('close')"><X /></button>
       </header>
       <p class="confirm-copy">{{ confirmCopy }}</p>
+      <p v-if="doomedTarget" class="form-error" role="alert">{{ t("batchMove.doomedTarget") }}</p>
       <label class="settings-field">
         <span>{{ t("batchMove.target") }}</span>
         <input

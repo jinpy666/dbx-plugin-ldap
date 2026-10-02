@@ -39,9 +39,13 @@ const props = withDefaults(defineProps<{
   /** 延续引用 URI（referral report 语义，referral 不追随）：非空时结果表
    * 顶部提示条展示（ADS manage 行为的轻量对位）。 */
   referrals?: string[];
+  /** 批量写进行中（App 侧删除/移动/修改循环未结束）：禁用三个批量入口，
+   * 防止二次触发被 App 门闩静默吞掉。 */
+  batchBusy?: boolean;
 }>(), {
   complete: true,
   canWrite: true,
+  batchBusy: false,
 });
 
 const emit = defineEmits<{
@@ -127,7 +131,7 @@ function disarmBatchDelete() {
 // 确认删除：行内两步确认；确认后清空选择。只读连接（canWrite=false）直接
 // 拦截：按钮虽已禁用，键盘/自动化仍可能触达（与 App 侧守卫同语义）。
 function confirmBatchDelete() {
-  if (!props.canWrite) return;
+  if (!props.canWrite || props.batchBusy) return;
   const count = selectedDns.value.size;
   if (count === 0) return;
   if (!batchDeleteArmed.value) {
@@ -141,20 +145,18 @@ function confirmBatchDelete() {
   clearSelection();
 }
 
-// 批量移动：目标父 DN 的选择与确认在 App 侧对话框完成，这里直接 emit，
-// payload 与 batchDelete 同序同大小写；随后与 batchDelete 一致地清空选择。
+// 批量移动：目标父 DN 的选择与确认在 App 侧对话框完成，这里只 emit（payload
+// 与 batchDelete 同序同大小写）。不在 emit 后清空选择：用户在对话框点取消时
+// 勾选集保留；App 确认执行后经 expose 的 clearSelection 收尾。
 function batchMoveSelection() {
-  if (!props.canWrite || selectedDns.value.size === 0) return;
+  if (!props.canWrite || props.batchBusy || selectedDns.value.size === 0) return;
   emit("batchMove", collectSelectedDns());
-  clearSelection();
 }
 
-// 批量修改：操作类型/属性名/值的选择与确认在 App 侧 BatchModifyDialog 完成，
-// 这里直接 emit，payload 与 batchDelete/batchMove 同序同大小写；随后同样清空选择。
+// 批量修改：同 batchMoveSelection——对话框取消不丢勾选，确认后由 App 清空。
 function batchModifySelection() {
-  if (!props.canWrite || selectedDns.value.size === 0) return;
+  if (!props.canWrite || props.batchBusy || selectedDns.value.size === 0) return;
   emit("batchModify", collectSelectedDns());
-  clearSelection();
 }
 
 watch(
@@ -170,6 +172,9 @@ const complete = computed(() => props.complete);
 /** referral 提示：标题列出前 5 条 URI（与后端错误前缀封顶一致），溢出省略。 */
 const referralHint = computed(() => (props.referrals ?? []).slice(0, 5).join("\n"));
 const referralCount = computed(() => props.referrals?.length ?? 0);
+
+// App 在批量移动/修改确认执行后调用：对话框取消时勾选保留，执行后才清空。
+defineExpose({ clearSelection });
 </script>
 
 <template>
@@ -183,9 +188,9 @@ const referralCount = computed(() => props.referrals?.length ?? 0);
         <span v-if="!complete" class="progress-badge result-status-badge">{{ loadingMore ? t("search.running") : t("result.loadingMore") }}</span>
       </span>
       <span class="pager">
-        <button v-if="hasEntries" :disabled="disabled || !complete" :title="complete ? t('result.exportLdif') : t('result.exportIncomplete')" @click="emit('export', 'ldif')"><FileDown aria-hidden="true" /></button>
-        <button v-if="hasEntries" :disabled="disabled || !complete" :title="complete ? t('result.exportCsv') : t('result.exportIncomplete')" @click="emit('export', 'csv')"><FileSpreadsheet aria-hidden="true" /></button>
-        <button v-if="hasEntries" :disabled="disabled || !complete" :title="complete ? t('result.exportJson') : t('result.exportIncomplete')" @click="emit('export', 'json')"><FileJson aria-hidden="true" /></button>
+        <button v-if="hasEntries" :disabled="disabled || !complete" :aria-label="complete ? t('result.exportLdif') : t('result.exportIncomplete')" :title="complete ? t('result.exportLdif') : t('result.exportIncomplete')" @click="emit('export', 'ldif')"><FileDown aria-hidden="true" /></button>
+        <button v-if="hasEntries" :disabled="disabled || !complete" :aria-label="complete ? t('result.exportCsv') : t('result.exportIncomplete')" :title="complete ? t('result.exportCsv') : t('result.exportIncomplete')" @click="emit('export', 'csv')"><FileSpreadsheet aria-hidden="true" /></button>
+        <button v-if="hasEntries" :disabled="disabled || !complete" :aria-label="complete ? t('result.exportJson') : t('result.exportIncomplete')" :title="complete ? t('result.exportJson') : t('result.exportIncomplete')" @click="emit('export', 'json')"><FileJson aria-hidden="true" /></button>
       </span>
     </div>
     <p v-if="!loading && !error && referralCount > 0" class="referral-hint" :title="referralHint" data-qa="result-referrals">
@@ -228,14 +233,14 @@ const referralCount = computed(() => props.referrals?.length ?? 0);
           type="button"
           class="toolbar-button batch-delete"
           :class="{ 'is-armed': batchDeleteArmed }"
-          :disabled="disabled || !canWrite"
+          :disabled="disabled || !canWrite || batchBusy"
           :title="!canWrite ? t('editor.readonlyHint') : (batchDeleteArmed ? t('confirm') : t('result.batchDelete'))"
           @click="confirmBatchDelete"
         >{{ batchDeleteArmed ? t("confirm") : t("result.batchDelete") }}</button>
         <!-- 移动所选：不弹确认，目标父 DN 由 App 侧对话框选择 -->
-        <button type="button" class="toolbar-button batch-move" :disabled="disabled || !canWrite" :title="!canWrite ? t('editor.readonlyHint') : t('result.batchMove')" @click="batchMoveSelection">{{ t("result.batchMove") }}</button>
+        <button type="button" class="toolbar-button batch-move" :disabled="disabled || !canWrite || batchBusy" :title="!canWrite ? t('editor.readonlyHint') : t('result.batchMove')" @click="batchMoveSelection">{{ t("result.batchMove") }}</button>
         <!-- 修改所选：不弹确认，操作类型/属性名/值由 App 侧 BatchModifyDialog 选择 -->
-        <button type="button" class="toolbar-button batch-modify" :disabled="disabled || !canWrite" :title="!canWrite ? t('editor.readonlyHint') : t('result.batchModify')" @click="batchModifySelection">{{ t("result.batchModify") }}</button>
+        <button type="button" class="toolbar-button batch-modify" :disabled="disabled || !canWrite || batchBusy" :title="!canWrite ? t('editor.readonlyHint') : t('result.batchModify')" @click="batchModifySelection">{{ t("result.batchModify") }}</button>
         <button type="button" class="toolbar-button batch-clear" @click="clearSelection">{{ t("result.batchClear") }}</button>
       </div>
       <DbxAgGrid
