@@ -140,14 +140,19 @@ describe("SearchForm search history", () => {
     expect(wrapper.emitted("run")).toBeUndefined();
   });
 
-  it("clears the history immediately and persists the empty state", async () => {
+  it("clears the history via a two-step confirm and persists the empty state", async () => {
+    // 审查修复钉死：清空历史与预设删除同一 J-5 两步确认契约——首次点击进入
+    // 确认态（文案切 confirm，历史保留），再次点击才清空并落盘。
     wrapper = await mountForm();
     record(wrapper, baseModel());
     await historyToggle(wrapper).trigger("click");
     await wrapper.find(".history-clear").trigger("click");
+    expect(wrapper.find(".history-clear").classes()).toContain("is-armed");
+    expect(wrapper.findAll(".history-item")).toHaveLength(1);
+    // 确认态再次点击：清空并照常落盘（当前连接段写入空数组）。
+    await wrapper.find(".history-clear").trigger("click");
     expect(wrapper.find(".history-empty").exists()).toBe(true);
     expect(wrapper.findAll(".history-item")).toHaveLength(0);
-    // 空历史照常落盘（当前连接段写入空数组）。
     expect(storedHistory()).toEqual([]);
   });
 

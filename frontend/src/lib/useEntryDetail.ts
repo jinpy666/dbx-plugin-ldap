@@ -288,7 +288,13 @@ export function useEntryDetail(options: UseEntryDetailOptions) {
         onNotice(t("editor.copyEntrySkipped", { attributes: draft.skipped.join(", ") }));
       }
     } catch (cause) {
-      if (request === entryRequestSeq) onBannerError(cause);
+      if (request === entryRequestSeq) {
+        // bump 序号会使在途 openEntry 的 finally 守卫失效（其 loading 不再被
+        // 复位）：本入口失败时必须自己收尾，否则先前打开的弹窗停留 loading
+        // 态直到手动关闭（审查修复）。
+        editorLoading.value = false;
+        onBannerError(cause);
+      }
     }
   }
 

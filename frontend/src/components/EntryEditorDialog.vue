@@ -1166,7 +1166,7 @@ function onAssociationRelation(dn: string, attribute?: string) {
                 </select>
                 <span v-else class="attr-format-label">{{ valueFormatLabel(row) }}</span>
                 <span v-if="rowValues(row).length > 1" class="attr-count-label">{{ t("editor.valueCount", { count: rowValues(row).length }) }}</span>
-                <span v-if="mustAttributes.has(row.name.split(';')[0].trim().toLowerCase())" class="must-label must-mark" :title="t('editor.requiredAttributes')">★ MUST</span>
+                <span v-if="mustAttributes.has(row.name.split(';')[0].trim().toLowerCase())" class="must-label must-mark" :title="t('editor.requiredAttributes')">{{ t("editor.mustMark") }}</span>
               </div>
             </div>
             <div class="attr-value-field">

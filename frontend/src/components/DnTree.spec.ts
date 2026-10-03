@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { defineComponent, h } from "vue";
-import { ldapApi, type LdapSearchResult } from "../lib/api";
+import { ldapApi, type LdapSearchPage, type LdapSearchResult } from "../lib/api";
 import DnTree from "./DnTree.vue";
 
 vi.mock("../lib/api", () => ({
@@ -159,6 +159,40 @@ describe("DnTree server-side child cursors", () => {
     expect(searchStart).toHaveBeenCalledTimes(1);
     expect(titles()).toEqual([baseDn, first.dn, second.dn]);
     expect(wrapper.find(".tree-badge--truncated").exists()).toBe(false);
+  });
+
+  it("blocks manual load-more while reveal continuation holds node.loading (cursor mutex)", async () => {
+    // 审查修复钉死：revealDn 续载在途期间 continueOnePage 置位 node.loading，
+    // 用户手动 loadMore 必须被同一门闩拦下——同一 LDAP 游标不允许并发
+    // searchNext（页序交错会丢子项或置错 truncated）。
+    const people = { dn: "ou=people," + baseDn, attributes: {} };
+    const cnA = { dn: "cn=a," + people.dn, attributes: {} };
+    searchStart.mockImplementation(async (request) =>
+      request.baseDn === people.dn
+        ? { searchId: "people-page", entries: [cnA], hasMore: true }
+        : { searchId: "root-page", entries: [people], hasMore: false },
+    );
+    await wrapper.vm.refresh();
+    await flushPromises();
+    expect(wrapper.find(".tree-node[title=\"ou=people,dc=demo,dc=dbx\"]").exists()).toBe(true);
+
+    let release!: (value: LdapSearchPage) => void;
+    searchNext.mockImplementationOnce(() => new Promise<LdapSearchPage>((resolve) => (release = resolve)));
+    const revealed = wrapper.vm.revealDn("cn=deep," + people.dn);
+    await flushPromises(); // 续载 searchNext 已发出、尚未返回
+    expect(searchNext).toHaveBeenCalledTimes(1);
+
+    // 续载在途：「+」徽标被 loading 指示替换（TreeBranch v-if 互斥，UI 层
+    // 直接不可点），loadMore 入口不存在 → searchNext 不可能并发。
+    expect(wrapper.find(".tree-badge--truncated").exists()).toBe(false);
+    expect(wrapper.find(".tree-badge--loading").exists()).toBe(true);
+    await flushPromises();
+    expect(searchNext).toHaveBeenCalledTimes(1);
+
+    release({ entries: [{ dn: "cn=deep," + people.dn, attributes: {} }], hasMore: false });
+    expect(await revealed).toBe("ok");
+    await flushPromises();
+    expect(searchNext).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an already expanded child object when a later page is appended", async () => {

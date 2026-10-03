@@ -80,7 +80,12 @@ fi
 # the sidecar's reported identity always matches the manifest (the host rejects
 # mismatches at init: "backend identity ... does not match manifest").
 PLUGIN_VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' manifest.json | head -1)"
-PLUGIN_VERSION="${PLUGIN_VERSION:-0.0.0-dev}"
+if [ -z "$PLUGIN_VERSION" ]; then
+  # 提取失败直接退出：回退版本号会让下方 prune 的保留模式落空，把 dist/
+  # 里全部历史产物删光（审查修复）。
+  echo "ERROR: cannot extract version from manifest.json; refusing to build" >&2
+  exit 1
+fi
 
 # Build the Go sidecar first when the backend workspace is present.
 # backend/bin is for local smoke/debug; the packaging CLI rebuilds the sidecar

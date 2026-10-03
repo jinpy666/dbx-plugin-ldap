@@ -332,9 +332,28 @@ function formatHistoryTime(timestamp: number): string {
   }
 }
 
+// 清空历史改为行内两步确认（审查修复，对齐预设删除的 J-5 模式）：本地图
+// 数据虽可再生，但误触即丢且不可恢复；原生 confirm 在宿主 webview 会被拦截。
+// 首次点击进入确认态，3 秒无操作自动回落；确认态再次点击才清空，面板保持
+// 打开并显示空状态。
+const historyClearArmed = ref(false);
+let historyClearArmTimer = 0;
+
+function disarmHistoryClear() {
+  window.clearTimeout(historyClearArmTimer);
+  historyClearArmTimer = 0;
+  historyClearArmed.value = false;
+}
+
 function clearHistory() {
-  // 搜索历史只是本地辅助数据，直接清空避免宿主 webview 的原生确认框
-  // 被拦截后看起来像按钮失效；面板保持打开并显示空状态。
+  if (!searchHistory.value.length) return;
+  if (!historyClearArmed.value) {
+    historyClearArmed.value = true;
+    window.clearTimeout(historyClearArmTimer);
+    historyClearArmTimer = window.setTimeout(disarmHistoryClear, 3000);
+    return;
+  }
+  disarmHistoryClear();
   searchHistory.value = [];
   persistHistory();
 }
@@ -608,12 +627,19 @@ const selectedPresetId = ref("");
 const presetNameDraft = ref("");
 const presetPending = ref(false);
 
+let presetsRequestSeq = 0;
+
 async function loadPresets() {
   if (props.disabled) return;
+  const request = ++presetsRequestSeq;
   try {
     const result = await ldapApi.presetsList();
+    // 组件不随连接重建：快速切连接时丢弃旧连接的迟到响应，否则旧预设列表
+    // 会覆盖新连接的（审查修复，与同文件其它异步路径的守卫对齐）。
+    if (request !== presetsRequestSeq) return;
     presets.value = Array.isArray(result.presets) ? result.presets : [];
   } catch {
+    if (request !== presetsRequestSeq) return;
     // presets are a convenience feature; a missing/failed backend must not
     // break the workbench — keep the local list empty.
     presets.value = [];
@@ -928,12 +954,13 @@ const sortOrderOptions = computed(() => [
             <button
               type="button"
               class="history-clear"
+              :class="{ 'is-armed': historyClearArmed }"
               :disabled="!searchHistory.length"
               :aria-label="t('search.historyClear')"
-              :title="t('search.historyClear')"
+              :title="historyClearArmed ? t('confirm') : t('search.historyClear')"
               @click.stop.prevent="clearHistory"
             >
-              <Trash2 aria-hidden="true" />{{ t("search.historyClear") }}
+              <Trash2 aria-hidden="true" />{{ historyClearArmed ? t("confirm") : t("search.historyClear") }}
             </button>
           </div>
           <p v-if="searchHistory.length === 0" class="history-empty">{{ t("search.historyEmpty") }}</p>

@@ -242,7 +242,7 @@ def main() -> int:
         finally:
             client.close()
     except Exception as cause:
-        RESULTS.append(ScenarioResult(" provisioning", "provisioning", "FAIL", str(cause)))
+        RESULTS.append(ScenarioResult("provisioning", "provisioning", "FAIL", str(cause)))
     finally:
         if container_started and not args.keep:
             subprocess.run(["docker", "rm", "-f", CONTAINER], stdout=subprocess.DEVNULL)

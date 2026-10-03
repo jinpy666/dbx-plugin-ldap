@@ -265,6 +265,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .history-clear { display: inline-flex; min-height: 23px; align-items: center; gap: 4px; border: 1px solid color-mix(in srgb, var(--destructive) 42%, var(--border)); border-radius: 5px; padding: 2px 7px; background: color-mix(in srgb, var(--destructive) 9%, transparent); color: var(--destructive); font-size: 10px; cursor: pointer; }
 .history-clear svg { width: 12px; height: 12px; }
 .history-clear:hover:not(:disabled) { background: color-mix(in srgb, var(--destructive) 18%, transparent); }
+.history-clear.is-armed { background: color-mix(in srgb, var(--destructive) 30%, transparent); font-weight: 600; }
 .history-empty { margin: 4px 2px; color: var(--muted-foreground); font-size: 10px; text-align: center; }
 .history-list { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 0; list-style: none; }
 .history-item { display: flex; min-width: 0; align-items: flex-start; gap: 8px; width: 100%; border: 1px solid transparent; border-radius: 5px; padding: 6px 7px; background: transparent; color: var(--foreground); font-size: 11px; text-align: left; cursor: pointer; }

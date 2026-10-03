@@ -3,8 +3,9 @@
 //
 // 用法：node scripts/ui_test.mjs [--keep-server]
 // 前置：frontend 依赖已安装（脚本自行拉起 vite dev，mock 宿主，无需 sidecar）。
-// 浏览器：playwright-core + 系统 Chrome（惰性安装到 /tmp/dbx-ldap-ui-deps，
-// 不进项目依赖；找不到 Chrome 时整个走查 SKIP 而非 FAIL，遵循 test.sh 约定）。
+// 浏览器：playwright-core + 系统 Chrome（惰性安装到系统临时目录的 per-user
+// 子目录，不进项目依赖；找不到 Chrome 时整个走查 SKIP 而非 FAIL，遵循
+// test.sh 约定）。
 // 断言失败 → exit 1；环境不可用 → exit 0（打印 SKIP）。
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -15,7 +16,12 @@ import { fileURLToPath } from "node:url";
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FRONTEND_DIR = path.join(PLUGIN_ROOT, "frontend");
-const DEPS_DIR = "/tmp/dbx-ldap-ui-deps";
+// per-user 隔离（审查修复）：固定共享路径 + TOFU 式信任已存在内容，多用户
+// 机器上预置的同名包会被执行；按用户隔离后只有本人写入的路径会被复用。
+const DEPS_DIR = path.join(
+  process.env.TMPDIR || "/tmp",
+  `dbx-ldap-ui-deps-${typeof process.getuid === "function" ? process.getuid() : "anon"}`,
+);
 const PORT = 5279;
 
 const skip = (reason) => {

@@ -305,6 +305,7 @@ async function toggleNode(node: DnTreeNode) {
   if (node.loading) return;
   if (!node.expanded && !node.loaded) {
     const generation = treeGeneration;
+    const connectionId = currentConnectionId();
     node.loading = true;
     try {
       if (!(await startChildren(node, generation))) return;
@@ -319,7 +320,9 @@ async function toggleNode(node: DnTreeNode) {
       treeErrorRaw.value = treeError.value === raw ? "" : raw;
       return;
     } finally {
-      if (nodeIsCurrent(generation, currentConnectionId())) node.loading = false;
+      // 校验用 await 前捕获的连接：与 currentConnectionId() 现取现比恒真，
+      // 「连接未变」半边校验会成为死代码（审查修复）。
+      if (nodeIsCurrent(generation, connectionId)) node.loading = false;
     }
   }
   node.expanded = !node.expanded;
@@ -349,6 +352,7 @@ async function loadMore(node: DnTreeNode) {
     return;
   }
   const generation = treeGeneration;
+  const connectionId = currentConnectionId();
   node.loading = true;
   try {
     if (!(await continueOnePage(node, generation))) return;
@@ -359,7 +363,7 @@ async function loadMore(node: DnTreeNode) {
     treeError.value = friendlyLdapError(raw);
     treeErrorRaw.value = treeError.value === raw ? "" : raw;
   } finally {
-    if (nodeIsCurrent(generation, currentConnectionId())) node.loading = false;
+    if (nodeIsCurrent(generation, connectionId)) node.loading = false;
   }
 }
 
@@ -387,20 +391,30 @@ function findChildByDn(node: DnTreeNode, dn: string): DnTreeNode | undefined {
 async function continueOnePage(node: DnTreeNode, generation: number): Promise<DnTreeNode[] | undefined> {
   const session = childSessions.get(nodeSessionKey(node));
   if (!session || !session.hasMore) return undefined;
-  const page = await ldapApi.searchNext(session.searchId, session.connectionId || undefined);
-  if (!nodeIsCurrent(generation, session.connectionId) || childSessions.get(nodeSessionKey(node)) !== session) return undefined;
-  return applyPage(node, session, page);
+  // 续载期间置 loading：revealDn 静默续载与用户手动 loadMore 汇聚于此，借
+  // 同一条 node.loading 门闩互斥（loadMore 入口守卫检查该标志），否则同一
+  // LDAP 游标会被并发 searchNext 消费——页序交错可丢子项或置错 truncated
+  //（审查修复）。
+  node.loading = true;
+  try {
+    const page = await ldapApi.searchNext(session.searchId, session.connectionId || undefined);
+    if (!nodeIsCurrent(generation, session.connectionId) || childSessions.get(nodeSessionKey(node)) !== session) return undefined;
+    return applyPage(node, session, page);
+  } finally {
+    if (nodeIsCurrent(generation, session.connectionId)) node.loading = false;
+  }
 }
 
 /** 确保节点 children 已加载（照 toggleNode 的懒展开路径，但不动选中态/错误横幅）。
  *  失败原样上抛：只有 revealDn 一个调用方，由它统一区分「未找到」与「失败」。 */
 async function ensureChildrenLoaded(node: DnTreeNode, generation: number): Promise<boolean> {
   if (node.loaded) return true;
+  const connectionId = currentConnectionId();
   node.loading = true;
   try {
     return await startChildren(node, generation);
   } finally {
-    if (nodeIsCurrent(generation, currentConnectionId())) node.loading = false;
+    if (nodeIsCurrent(generation, connectionId)) node.loading = false;
   }
 }
 
@@ -663,6 +677,7 @@ async function reloadNodeChildren(dn: string) {
   node.children = [];
   if (!wasExpanded || props.disabled) return;
   const generation = treeGeneration;
+  const connectionId = currentConnectionId();
   node.loading = true;
   try {
     if (await startChildren(node, generation)) {
@@ -676,7 +691,7 @@ async function reloadNodeChildren(dn: string) {
     treeError.value = friendlyLdapError(raw);
     treeErrorRaw.value = treeError.value === raw ? "" : raw;
   } finally {
-    if (generation === treeGeneration) node.loading = false;
+    if (nodeIsCurrent(generation, connectionId)) node.loading = false;
   }
 }
 

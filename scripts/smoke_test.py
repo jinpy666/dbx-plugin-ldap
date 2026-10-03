@@ -56,7 +56,11 @@ HOST = os.environ.get("LDAP_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("LDAP_TEST_PORT", "389"))
 ROOT = os.environ.get("LDAP_TEST_ROOT", "dc=example,dc=org")
 BIND_DN = os.environ.get("LDAP_TEST_BINDDN", "cn=admin,dc=example,dc=org")
-BIND_PW = os.environ.get("LDAP_TEST_BINDPW", "adminpassword")
+# 一次性凭据红线（审查修复）：不再回落内置默认口令——默认口令 + 裸 TCP 可达
+# 判定会在开发机 127.0.0.1 恰有真实目录时拿固定 DN/口令发起连接。未提供
+# LDAP_TEST_BINDPW 时整个套件按环境不可用 SKIP（REQUIRE=1 时 FAIL，同下方
+# ldap_reachable 的既有约定）。
+BIND_PW = os.environ.get("LDAP_TEST_BINDPW", "")
 REQUIRE = os.environ.get("LDAP_TEST_REQUIRE", "") == "1"
 DATA_DIR = os.environ.get("LDAP_TEST_DATA_DIR", "")
 
@@ -822,6 +826,16 @@ def main() -> int:
         ("S18", "alias mode/scope matrix", run_s18),
         ("S9", "disconnect then call", run_s9),
     ]
+
+    if not BIND_PW:
+        message = (
+            "LDAP_TEST_BINDPW not set (no default credentials; point LDAP_TEST_* "
+            "at a local throwaway directory you own)"
+        )
+        for no, name, _ in steps:
+            RESULTS.append(ScenarioResult(no, name, "FAIL" if REQUIRE else "SKIP", message))
+        report()
+        return 0
 
     ok, reason = ldap_reachable()
     if not ok:
