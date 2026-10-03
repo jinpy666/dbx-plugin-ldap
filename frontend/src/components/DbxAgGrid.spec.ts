@@ -127,6 +127,34 @@ describe("DbxAgGrid", () => {
     wrapper.unmount();
   });
 
+  it("enables checkbox selection and restores sortable/filter once the cursor completes", async () => {
+    // 多页搜索：首屏前缀态挂载（selection 关闭），自动续拉排空后
+    // clientSideComplete 翻 true，网格必须同步拿到 rowSelection/defaultColDef。
+    const wrapper = mountGrid({ clientSideComplete: false });
+    const api = lastApi(wrapper);
+    await wrapper.setProps({ clientSideComplete: true });
+    expect(api.setGridOption).toHaveBeenCalledWith("rowSelection", {
+      mode: "multiRow",
+      checkboxes: true,
+      headerCheckbox: true,
+      enableClickSelection: false,
+    });
+    expect(api.setGridOption).toHaveBeenCalledWith(
+      "defaultColDef",
+      expect.objectContaining({ sortable: true, filter: "agTextColumnFilter" }),
+    );
+    wrapper.unmount();
+  });
+
+  it("clears stale selection when the cursor flips back to a prefix state", async () => {
+    const wrapper = mountGrid();
+    const api = lastApi(wrapper);
+    await wrapper.setProps({ clientSideComplete: false });
+    expect(api.setGridOption).toHaveBeenCalledWith("rowSelection", undefined);
+    expect(api.deselectAll).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it("persists a pagination page size change per table key and emits it", () => {
     const wrapper = mountGrid();
     expect(gridMock.created[0].options.paginationPageSize).toBe(50);

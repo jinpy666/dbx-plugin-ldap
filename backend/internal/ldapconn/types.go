@@ -473,7 +473,7 @@ type AuditRecord struct {
 	ConnectionID string `json:"connectionId"`
 	Action       string `json:"action"` // add-entry | modify-entry | delete-entry | subtree_delete | modify-dn | read-policy | write-policy
 	Target       string `json:"target"`
-	Result       string `json:"result"` // success | blocked | error
+	Result       string `json:"result"` // ok | denied | error（与上方契约注释一致）
 	Detail       string `json:"detail,omitempty"`
 	// Source 调用来源（M0 审计事件形状不变，新增可选字段）：缺省空 = 工作
 	// 台；"mcp" = MCP 写路径（设计 §4：所有 MCP 写审计记 source:"mcp"）。

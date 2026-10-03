@@ -29,6 +29,9 @@ export interface AttrRowDraft extends AttrRowDraftSource {
   multiline?: boolean;
   /** 行内「数据类型」手动覆盖，仅限 schema/内置表查无定义的属性；改属性名即复位。 */
   kindOverride?: SelectableValueKind;
+  /** 稳定行 id：属性行可 splice 删除，v-for 按 index 复用 DOM 会让删除行
+   * 之后的输入框焦点/内部状态错位到别的行。 */
+  rowId?: number;
 }
 
 // 行内类型下拉可选的值类型：RowEditorKind 去掉 text 兜底与 AD 专用 uac
@@ -96,8 +99,9 @@ const rows = ref<AttrRowDraft[]>([]);
 const ldifText = ref("");
 const editorTab = ref<EditorTab>("form");
 const ldifError = ref("");
-// LDIF 模式 DN 行锁定信号（UI 扫描 P2-13）：LDIF 里的 dn 与原条目不一致时提示。
-const ldifDnChanged = ref(false);
+// LDIF 无条目（零解析错误但条目数为 0，如空文本）：与解析错误分开用键，
+// 不再渲染硬编码的 "no entry"。
+const ldifNoEntry = ref(false);
 const saving = ref(false);
 // 保存前值类型轻校验警告（不阻断）：save 时对被修改属性的值跑
 // validateValueKind，命中才显示；重新打开会话时清空上一轮残留。
@@ -105,6 +109,7 @@ const valueKindWarnings = ref<Array<{ attribute: string; message: string }>>([])
 // 变更预览（仅 edit 态）：save 先 diff 出 changes 并挂起，确认后才真正发
 // modify；取消则只关预览层、编辑原样保留。
 const changesOpen = ref(false);
+const changesLayerEl = ref<HTMLElement>();
 const pendingChanges = ref<LdapModifyChange[]>([]);
 // objectClass 选择器（chips 行「添加」）：记录目标行，选中类写回该行。
 const ocPickerOpen = ref(false);
@@ -131,6 +136,14 @@ const ldifDraft = computed(() => {
   if (editorTab.value !== "ldif") return undefined;
   const parsed = parseLdif(ldifText.value);
   return parsed.errors.length === 0 ? parsed.entries[0] : undefined;
+});
+// LDIF 模式 DN 行锁定信号（UI 扫描 P2-13）：LDIF 里的 dn 与原条目不一致时
+// 提示。watch 的是 ldifDraft（computed 缓存同一次 parseLdif）而非重复解析
+// 全文；切回表单页签后提示保留（P2-23 语义），initFor 重置。
+const ldifDnChanged = ref(false);
+watch(ldifDraft, (draft) => {
+  if (editorTab.value !== "ldif" || isAdd.value) return;
+  ldifDnChanged.value = draft?.dn != null && props.entry != null && draft.dn !== props.entry.dn;
 });
 const activeDnParts = computed(() => editorTab.value === "ldif"
   ? splitFirstDnRdn(ldifDraft.value?.dn ?? "")
@@ -199,12 +212,17 @@ const dirty = computed(() => {
   return currentKeys.some((key) => (current[key] ?? []).join("\n") !== (source.attributes[key] ?? []).join("\n"));
 });
 
+// 属性行自增 id（rowId）：与 DbxAgGrid autoRowIds 同思路，splice 删除后
+// v-for 不按 index 复用 DOM。
+let attrRowIdSeq = 0;
+
 function entryToRows(entry: LdapEntry): AttrRowDraft[] {
   return Object.keys(entry.attributes)
     .sort((left, right) => left.localeCompare(right))
     .map((name) => {
       const values = entry.attributes[name] ?? [];
       return {
+        rowId: attrRowIdSeq++,
         name,
         valuesText: values.join("\n"),
         sourceValues: values,
@@ -235,14 +253,16 @@ function syncRowsFromLdif() {
   const result = parseLdif(ldifText.value);
   if (result.errors.length > 0) {
     ldifError.value = result.errors.map((error) => `L${error.line}: ${error.message}`).join("; ");
+    ldifNoEntry.value = false;
     return false;
   }
   ldifError.value = "";
   const entry = result.entries[0];
   if (!entry) {
-    ldifError.value = "no entry";
+    ldifNoEntry.value = true;
     return false;
   }
+  ldifNoEntry.value = false;
   rows.value = entryToRows(entry);
   if (isAdd.value) {
     const { rdn, parentDn } = splitFirstDnRdn(entry.dn);
@@ -251,20 +271,11 @@ function syncRowsFromLdif() {
   } else {
     // 编辑态忽略 LDIF 中的 DN 变更（P2-13）：LDIF 的 dn 行不是改名入口
     // （改名走 Modify DN），照单全收会把 modify 发往不存在的 DN。
-    ldifDnChanged.value = props.entry != null && entry.dn !== props.entry.dn;
+    // ldifDnChanged 由 ldifDraft computed 派生，此处无需赋值。
     dnDraft.value = props.entry ? props.entry.dn : entry.dn;
   }
   return true;
 }
-
-// LDIF 模式内实时提示 dn 变更（UI 扫描 P2-23）：无需切回表单即可看到
-// 「dn 行不能用于重命名」。编辑态仅在 ldif 页签下解析比对，add 态 dn 合法可编辑。
-watch([ldifText, editorTab], ([text, tab]) => {
-  if (tab !== "ldif" || isAdd.value) return;
-  const result = parseLdif(text);
-  const dn = result.entries[0]?.dn;
-  ldifDnChanged.value = dn != null && props.entry != null && dn !== props.entry.dn;
-});
 
 function initFor(mode_: EditorMode, entry?: LdapEntry, parentDn?: string) {
   const nextIdentity = entry ? `entry:${entry.dn.toLowerCase()}` : `add:${parentDn ?? ""}`;
@@ -278,6 +289,7 @@ function initFor(mode_: EditorMode, entry?: LdapEntry, parentDn?: string) {
     editorTab.value = mode_ === "view" && (requestedTab === "ldif" || requestedTab === "assoc") ? requestedTab : "form";
   }
   ldifError.value = "";
+  ldifNoEntry.value = false;
   ldifDnChanged.value = false;
   saving.value = false;
   valueKindWarnings.value = [];
@@ -492,7 +504,7 @@ function switchToAssoc() {
 }
 
 function addRow() {
-  rows.value.push({ name: "", valuesText: "" });
+  rows.value.push({ rowId: attrRowIdSeq++, name: "", valuesText: "" });
 }
 
 async function focusRequiredAttribute(name: string) {
@@ -501,7 +513,7 @@ async function focusRequiredAttribute(name: string) {
   let index = rows.value.findIndex((row) => row.name.split(";")[0].trim().toLowerCase() === name.toLowerCase());
   if (index < 0) {
     index = rows.value.length;
-    rows.value.push({ name, valuesText: "" });
+    rows.value.push({ rowId: attrRowIdSeq++, name, valuesText: "" });
   }
   await nextTick();
   attrEditor.value?.querySelectorAll(".attr-row")[index]?.querySelector<HTMLElement>("textarea, .attr-value-cell input, .attr-value-cell select")?.focus();
@@ -902,8 +914,9 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", onDocumentKeydown);
 });
 
-function removeRow(index: number) {
-  rows.value.splice(index, 1);
+function removeRow(row: AttrRowDraft) {
+  const index = rows.value.indexOf(row);
+  if (index >= 0) rows.value.splice(index, 1);
 }
 
 async function save() {
@@ -950,6 +963,9 @@ async function save() {
   valueKindWarnings.value = kindWarningsFor(Object.fromEntries(changes.map((change) => [change.attribute, change.values])));
   pendingChanges.value = changes;
   changesOpen.value = true;
+  // 焦点进预览层：aria-modal 语义成立，Esc（层上 keydown）直接取消预览，
+  // 不再被 canRequestClose 的否决吞成「什么都不发生」。
+  void nextTick(() => changesLayerEl.value?.focus());
 }
 
 // 预览层按 op（add/replace/delete）分组渲染，组内保持 diffChanges 顺序。
@@ -1094,7 +1110,8 @@ function onAssociationRelation(dn: string, attribute?: string) {
         <button v-if="editorTab === 'ldif'" class="icon-button" :title="t('editor.copyLdif')" :aria-label="t('editor.copyLdif')" :disabled="ldifText === ''" @click="copyText(ldifText)"><Copy aria-hidden="true" /></button>
       </div>
       <p v-if="!canWrite" class="hint">{{ t("editor.readonlyHint") }}</p>
-      <p v-if="ldifError" class="form-error">{{ t("editor.ldifParseError", { error: ldifError }) }}</p>
+      <p v-if="ldifNoEntry" class="form-error">{{ t("editor.ldifNoEntry") }}</p>
+      <p v-else-if="ldifError" class="form-error">{{ t("editor.ldifParseError", { error: ldifError }) }}</p>
       <p v-if="ldifDnChanged" class="hint">{{ t("editor.ldifDnLocked") }}</p>
       <div v-if="missingRequired.length > 0 && editorTab !== 'assoc'" :id="requiredErrorId" class="form-error required-attributes" role="alert">
         <span>{{ t("editor.requiredAttributes") }}</span>
@@ -1118,7 +1135,7 @@ function onAssociationRelation(dn: string, attribute?: string) {
           <!-- 右键复制（对标 ADS）：行内复制按钮已移除，contextmenu 打开
                统一菜单（原值/Base64/hex/属性名/LDIF 属性行）； LDIF 文本区
                仍走页签上的整段复制按钮。 -->
-          <div v-for="(row, index) in rows" :key="index" class="attr-row" @contextmenu.prevent="openRowMenu({ kind: 'row', row }, $event)">
+          <div v-for="row in rows" :key="row.rowId" class="attr-row" @contextmenu.prevent="openRowMenu({ kind: 'row', row }, $event)">
             <div class="attr-name-field">
               <input v-model="row.name" type="text" name="attr-name" :list="attributeListId" :placeholder="t('editor.attribute')" :aria-label="t('editor.attribute')" :title="row.name" :disabled="!editable" spellcheck="false" @input="onNameInput(row)" />
               <div class="attr-meta">
@@ -1237,7 +1254,7 @@ function onAssociationRelation(dn: string, attribute?: string) {
               </span>
             </div>
             <span class="attr-actions">
-              <button :title="t('editor.removeAttribute')" :disabled="!editable" @click="removeRow(index)"><Trash2 /></button>
+              <button :title="t('editor.removeAttribute')" :disabled="!editable" @click="removeRow(row)"><Trash2 /></button>
             </span>
           </div>
         </div>
@@ -1314,13 +1331,13 @@ function onAssociationRelation(dn: string, attribute?: string) {
            useModalA11y 弹窗，原因：modal.ts 以"当前文档唯一弹窗"为前提做全局
            容器查询，双弹窗会让焦点陷阱错位；内嵌层取消即回到编辑器，天然
            满足"取消不丢编辑"，Esc 由 canRequestClose 的预览否决兜底。 -->
-      <div v-if="changesOpen" class="changes-layer" role="dialog" aria-modal="true" :aria-label="t('editor.changesTitle')">
+      <div v-if="changesOpen" ref="changesLayerEl" class="changes-layer" role="dialog" aria-modal="true" tabindex="-1" :aria-label="t('editor.changesTitle')" @keydown.esc.prevent="cancelChanges">
         <h3>{{ t("editor.changesTitle") }}</h3>
         <p class="hint">{{ t("editor.changesHint") }}</p>
         <div class="changes-list">
           <section v-for="group in groupedChanges" :key="group.op" class="changes-group">
             <p class="changes-group-title">
-              <span class="change-badge" :class="`change-badge--${group.op}`">{{ group.op }}</span>
+              <span class="change-badge" :class="`change-badge--${group.op}`">{{ t(`editor.changeOp.${group.op}`) }}</span>
             </p>
             <ul>
               <li v-for="change in group.changes" :key="`${group.op}:${change.attribute}`" class="change-item">

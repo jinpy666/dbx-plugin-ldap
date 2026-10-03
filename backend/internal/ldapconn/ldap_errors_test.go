@@ -81,8 +81,10 @@ func TestLdapErrorMetaNonLdapError(t *testing.T) {
 
 // referralReferralResponsePacket 构造一个最小 LDAPResult 响应包：
 // packet.Children[0] = messageID，Children[1] = 响应（resultCode / matchedDN /
-// referral 序列）。referral 序列的 tag 取 ber.TagObjectDescriptor（ADS/OpenLDAP
-// 常见形态之一；提取逻辑按结构位置容错，不依赖 tag 值）。
+// diagnosticMessage / referral 序列，RFC 4511 §4.1.10 四字段 wire 形态）。
+// referral 序列的 tag 取 ber.TagObjectDescriptor（ADS/OpenLDAP 常见形态之一；
+// 提取逻辑按结构位置容错，不依赖 tag 值）。审查 H1：fixture 曾省掉
+// diagnosticMessage，与真实报文不符并掩盖了提取实现读错下标的缺陷。
 func referralReferralResponsePacket(uris ...string) *ber.Packet {
 	referralURIs := &ber.Packet{Children: make([]*ber.Packet, 0, len(uris))}
 	for _, uri := range uris {
@@ -94,7 +96,8 @@ func referralReferralResponsePacket(uris ...string) *ber.Packet {
 	}
 	response := &ber.Packet{Children: []*ber.Packet{
 		{Identifier: ber.Identifier{ClassType: ber.ClassUniversal, TagType: ber.TypePrimitive, Tag: ber.TagEnumerated}, Value: int64(ldap.LDAPResultReferral)},
-		{Identifier: ber.Identifier{ClassType: ber.ClassUniversal, TagType: ber.TypePrimitive, Tag: ber.TagOctetString}, Value: ""},
+		{Identifier: ber.Identifier{ClassType: ber.ClassUniversal, TagType: ber.TypePrimitive, Tag: ber.TagOctetString}, Value: ""}, // matchedDN
+		{Identifier: ber.Identifier{ClassType: ber.ClassUniversal, TagType: ber.TypePrimitive, Tag: ber.TagOctetString}, Value: ""}, // diagnosticMessage
 		referralURIs,
 	}}
 	return &ber.Packet{Children: []*ber.Packet{

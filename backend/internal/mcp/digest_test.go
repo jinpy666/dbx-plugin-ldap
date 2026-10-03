@@ -181,3 +181,24 @@ func TestSubtreeKeyUnicodeGrowthAlignment(t *testing.T) {
 		t.Fatalf("unicode fold shrinks tail: subtree key got %q, want %q", got, want)
 	}
 }
+
+// 折叠后字节长度可变不只发生在收缩侧：折叠前缀含多字节 rune（中日韩 DN
+// 常态）时，折叠串字节位置大于 rune 数，旧实现把字节位置当 offsets 的
+// rune 下标用会直接 index out of range（subtreeKey("cn=测试测试测试,dc=a",
+// "dc=a") panic，且该路径对 ldap_search_digest 返回的每条服务端条目执行，
+// 会带崩无 recover 的工作台调用路径）。
+func TestSubtreeKeyMultibytePrefixNoPanic(t *testing.T) {
+	cases := []struct{ dn, base, want string }{
+		{"cn=测试测试测试,dc=a", "dc=a", "cn=测试测试测试,dc=a"}, // base 直接子节点
+		{"cn=测试测试,ou=x,dc=a", "dc=a", "ou=x,dc=a"},
+		{"cn=éééééé,dc=a", "dc=a", "cn=éééééé,dc=a"},
+		{"cn=𠀋𠀋𠀋𠀋,dc=a", "dc=a", "cn=𠀋𠀋𠀋𠀋,dc=a"},
+		{"uid=x,cn=测试,ou=i,dc=a", "ou=i,dc=a", "cn=测试,ou=i,dc=a"},
+	}
+	for _, tc := range cases {
+		got := subtreeKey(tc.dn, tc.base)
+		if got != tc.want {
+			t.Fatalf("subtreeKey(%q, %q) = %q, want %q", tc.dn, tc.base, got, tc.want)
+		}
+	}
+}

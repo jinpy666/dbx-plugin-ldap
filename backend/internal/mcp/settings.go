@@ -198,8 +198,14 @@ func applySettingsUpdate(settings Settings, updates map[string]any) (Settings, e
 			return settings, fmt.Errorf("%s must be a positive integer", field.name)
 		}
 		value := int(number)
-		if value < 1 || value > field.ceiling {
-			return settings, fmt.Errorf("%s must be between 1 and %d", field.name, field.ceiling)
+		// floor 与 Sanitized 的收敛下限一致：validate 收 1、Sanitized 悄悄
+		// 抬回 10 会让「设置成功」的值与实际生效值不一致。
+		floor := 1
+		if field.name == "confirmTtlSecs" {
+			floor = 10
+		}
+		if value < floor || value > field.ceiling {
+			return settings, fmt.Errorf("%s must be between %d and %d", field.name, floor, field.ceiling)
 		}
 		switch field.name {
 		case "reportWaitMs":

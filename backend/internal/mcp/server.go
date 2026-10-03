@@ -242,7 +242,9 @@ func (s *Server) waitIntent(intentID string) map[string]any {
 	for {
 		time.Sleep(25 * time.Millisecond)
 		intent, status := s.intents.Get(intentID, s.now())
-		if status == LookupExpired {
+		if status == LookupExpired || status == LookupUnknown {
+			// unknown（LRU 逐出）同样按过期自愈：等满预算只会返回误导性的
+			// pending——后续 ldap_ui_state 已经查不到这个 id 了。
 			return map[string]any{"intentId": intentID, "state": "expired"}
 		}
 		if status == LookupFound && intent.State != IntentPending {

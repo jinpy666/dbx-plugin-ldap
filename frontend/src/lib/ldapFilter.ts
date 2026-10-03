@@ -37,6 +37,17 @@ const LDAP_ATTRIBUTE_DESCRIPTION_RE = new RegExp(
     'u',
 );
 
+/**
+ * 构建器属性名门禁：与 buildBinaryEqualityFilter 的 description 校验同一把
+ * 正则。值侧已转义，但属性名此前未校验——`cn)(uid=*` 这类名字会拼出越权
+ * 过滤器（现有 UI 调用点各有白名单/校验，这里堵住导出函数被未来调用方直接
+ * 拼接的注入陷阱）。非法属性名按既有空串约定返回 ''。
+ */
+const safeBuilderAttribute = (attribute: unknown): string => {
+    const attr = trimToString(attribute);
+    return LDAP_ATTRIBUTE_DESCRIPTION_RE.test(attr) ? attr : '';
+};
+
 export type SubstringMode = keyof typeof SUBSTRING_MODES;
 export type ComparisonMode = keyof typeof COMPARISON_MODES;
 
@@ -50,7 +61,7 @@ export const escapeLdapFilterValue = (value: unknown): string => {
 };
 
 export const buildPresenceFilter = (attribute: string): string => {
-    const attr = trimToString(attribute);
+    const attr = safeBuilderAttribute(attribute);
     return attr ? `(${attr}=*)` : '';
 };
 
@@ -93,8 +104,8 @@ export function buildObjectGuidEqualityFilter(guid: string): string {
 }
 
 export const buildEqualityFilter = (attribute: string, value: unknown): string => {
-    const attr = trimToString(attribute);
-    if (value instanceof Uint8Array) return buildBinaryEqualityFilter(attr, value);
+    if (value instanceof Uint8Array) return buildBinaryEqualityFilter(trimToString(attribute), value);
+    const attr = safeBuilderAttribute(attribute);
     const raw = String(value ?? '').trim();
     if (!attr || !raw) return '';
     if (attr.toLowerCase() === 'objectguid' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(raw)) {
@@ -127,7 +138,7 @@ export class EqualityFilter {
 }
 
 export const buildSubstringFilter = (attribute: string, value: unknown, mode: SubstringMode): string => {
-    const attr = trimToString(attribute);
+    const attr = safeBuilderAttribute(attribute);
     const raw = String(value ?? '').trim();
     const handler = SUBSTRING_MODES[mode];
     if (!attr || !raw || !handler) return '';
@@ -135,7 +146,7 @@ export const buildSubstringFilter = (attribute: string, value: unknown, mode: Su
 };
 
 export const buildComparisonFilter = (attribute: string, value: unknown, op: ComparisonMode): string => {
-    const attr = trimToString(attribute);
+    const attr = safeBuilderAttribute(attribute);
     const raw = String(value ?? '').trim();
     const handler = COMPARISON_MODES[op];
     if (!attr || !raw || !handler) return '';

@@ -41,6 +41,7 @@ const rdnInvalid = computed(() => {
 });
 
 function confirm() {
+  if (props.submitting) return; // 在途时输入框 Enter 不经禁用按钮，需自行拦
   if (!rdnDraft.value.trim() || rdnInvalid.value) return;
   const parent = parentDraft.value.trim();
   emit("confirm", rdnDraft.value.trim(), parent || undefined, deleteOldRdn.value);

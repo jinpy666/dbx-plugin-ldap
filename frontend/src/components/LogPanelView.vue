@@ -147,7 +147,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="log-panel" aria-label="LDAP Logs">
+  <section class="log-panel" :aria-label="t('logs.title')">
     <header class="log-toolbar">
       <span class="log-title">
         <ScrollText aria-hidden="true" />

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -48,6 +49,9 @@ const (
 	bridgeReadMargin     = 150 * time.Second
 	// bridgeMaxRequestBytes 宿主用单次 64 KiB 读整个请求，请求必须一次写完。
 	bridgeMaxRequestBytes = 64 * 1024
+	// bridgeMaxResponseBytes 桥响应读取上限（工具响应本身另有 responseLimit
+	// 约束，这里只防本地监听端异常时的无界读）。
+	bridgeMaxResponseBytes = 8 << 20
 	// bridgeEnsurePollInterval 端口文件轮询间隔（launch 后等应用起来）。
 	bridgeEnsurePollInterval = 500 * time.Millisecond
 )
@@ -182,11 +186,15 @@ func callPluginTool(port int, connectionID, tool string, arguments map[string]an
 		return nil, fmt.Errorf("DBX app bridge call to 127.0.0.1:%d failed: %v", port, err)
 	}
 	defer func() { _ = response.Body.Close() }()
-	var raw bytes.Buffer
-	if _, err := raw.ReadFrom(response.Body); err != nil {
+	// 响应读取设上限：本地监听端异常时防止无界读进内存。
+	raw, err := io.ReadAll(io.LimitReader(response.Body, bridgeMaxResponseBytes+1))
+	if err != nil {
 		return nil, fmt.Errorf("DBX app bridge read failed: %v", err)
 	}
-	text := strings.TrimSpace(raw.String())
+	if len(raw) > bridgeMaxResponseBytes {
+		return nil, fmt.Errorf("DBX app bridge response exceeds the %d-byte read ceiling", bridgeMaxResponseBytes)
+	}
+	text := strings.TrimSpace(string(raw))
 	if response.StatusCode != http.StatusOK {
 		if len(text) > 500 {
 			text = text[:500]

@@ -104,7 +104,10 @@ export function prepareCopyEntry(source: CopyEntrySource, options: CopyEntryOpti
   if (rdnAttributeName) {
     const existingKey = Object.keys(attributes).find((name) => name.split(";")[0].trim().toLowerCase() === rdnAttributeName.toLowerCase());
     if (existingKey) attributes[existingKey] = [""];
-    else attributes[rdnAttributeName] = [""];
+    else if (!skipped.some((name) => name.split(";")[0].trim().toLowerCase() === rdnAttributeName.toLowerCase())) {
+      // RDN 属性没被剔除才补空值占位；被剔除还补回会让 skipped 与草稿自相矛盾。
+      attributes[rdnAttributeName] = [""];
+    }
   }
 
   return { rdn: `${rdnAttributeName}=`, parentDn, attributes, skipped };

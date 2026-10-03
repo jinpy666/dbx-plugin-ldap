@@ -780,10 +780,9 @@ func (s *Service) WhoAmI(ctx context.Context, req LDAPWhoAmIRequest) (LDAPWhoAmI
 
 // PasswordModify 实现 ldap/entry/passwdModify（RFC 3062 密码修改扩展操作，
 // F3）。写路径门禁对齐 ModifyEntry：read_only 拒绝 + 目标 DN 写白名单。
-// 目标 DN = identity 非空取 identity（按 DN 校验，dnWithinBase 语义一致），
-// 否则 DN；identity 为空时 go-ldap NewPasswordModifyRequest 的 UserIdentity
-// 作用于会话用户，与 DN 为空会话语义一致。审计 action:"passwd-modify"，
-// target 只记 DN，密码值不落审计。
+// 目标 DN 必填（normalizeLDAPWriteDN 对空值报错，测试钉死），identity 非空
+// 时覆盖目标；即仅传 identity 的 RFC 3062 自改密码形态不受支持。审计
+// action:"passwd-modify"，target 只记 DN，密码值不落审计。
 func (s *Service) PasswordModify(ctx context.Context, req LDAPPasswordModifyRequest) (LDAPPasswordModifyResult, error) {
 	start := time.Now()
 	profile, err := s.Get(req.ConnectionID)
@@ -1018,19 +1017,8 @@ func pagedSearchEntries(conn *ldap.Conn, searchReq *ldap.SearchRequest, pageSize
 			sortResult = pageSort
 		}
 
-		// 聚合上限（limit>0 时生效）：截断并停止翻页。审查 M-B3：退出前
-		// 按 go-ldap SearchWithPaging 的语义发送一次放弃搜索（cookie 置空，
-		// RFC 2696），否则共享连接回退路径（withDedicatedConn 失败回退
-		// WithConn）上连接保持打开，服务端分页结果集滞留到服务器自身 TTL。
-		if limit > 0 && len(entries) >= limit {
-			entries = entries[:limit]
-			truncated = true
-			pagingControl.SetCookie(nil)
-			_, _ = conn.Search(searchReq) // 放弃尽力而为：失败不掩盖截断结果
-			return entries, referrals, truncated, sortResult, nil
-		}
-
 		// 读取服务器返回的 paging control cookie；无 cookie 表示翻页结束。
+		// 解析必须先于截断检查：放弃请求要用最近响应的 cookie（RFC 2696 §4）。
 		var received *ldap.ControlPaging
 		for _, control := range result.Controls {
 			if control.GetControlType() == ldap.ControlTypePaging {
@@ -1038,6 +1026,24 @@ func pagedSearchEntries(conn *ldap.Conn, searchReq *ldap.SearchRequest, pageSize
 				break
 			}
 		}
+
+		// 聚合上限（limit>0 时生效）：截断并停止翻页。审查 M-B3：退出前
+		// 按 go-ldap SearchWithPaging 的语义发送一次放弃搜索（pageSize=0 +
+		// 最近响应的 cookie，对齐 session.close()），否则共享连接回退路径
+		// （withDedicatedConn 失败回退 WithConn）上服务端分页结果集滞留到
+		// 服务器自身 TTL。只清 cookie 或不动 pageSize 会让服务器开一轮全新
+		// 搜索，等于把整棵子树重查一遍。
+		if limit > 0 && len(entries) >= limit {
+			entries = entries[:limit]
+			truncated = true
+			if received != nil && len(received.Cookie) > 0 {
+				pagingControl.PagingSize = 0
+				pagingControl.SetCookie(received.Cookie)
+				_, _ = conn.Search(searchReq) // 放弃尽力而为：失败不掩盖截断结果
+			}
+			return entries, referrals, truncated, sortResult, nil
+		}
+
 		if received == nil || len(received.Cookie) == 0 {
 			return entries, referrals, truncated, sortResult, nil
 		}

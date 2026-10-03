@@ -181,3 +181,17 @@ describe("entryFormats edge cases (回归补强)", () => {
     expect(detectEntryFormat("dn: cn=a,dc=x\nObjectClass : user\n")).toBe("ldif");
   });
 });
+
+describe("PS set splitting", () => {
+  it("keeps DN-ish set values whole instead of splitting them into broken fragments", () => {
+    // `Member : {CN=a,DC=x, CN=b,DC=y}` 旧实现按逗号切成 4 个碎片（DN 被拆碎，
+    // 静默改写数据）；DN 值集合现在整串保留，用户可手工修正。
+    const result = parseEntriesFromText("DistinguishedName : cn=g,dc=demo,dc=dbx\nMember : {CN=a,DC=x, CN=b,DC=y}\n");
+    expect(result.entries[0]?.attributes.Member).toEqual(["CN=a,DC=x, CN=b,DC=y"]);
+  });
+
+  it("still splits plain sets on the ', ' separator", () => {
+    const result = parseEntriesFromText("DistinguishedName : cn=g,dc=demo,dc=dbx\nOther : {a, b, c}\n");
+    expect(result.entries[0]?.attributes.Other).toEqual(["a", "b", "c"]);
+  });
+});

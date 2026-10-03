@@ -93,9 +93,13 @@ export function useUiIntent(domain: string, handlers: UiIntentHandlers): UseUiIn
   const report = (body: Record<string, unknown>) => {
     const api = window.dbxPlugin;
     if (!api) return;
-    void api
-      .invoke(`${domain}/ui/state/report`, body)
-      .catch(() => undefined); // 回报失败不打断 UI 流（sidecar 侧按 pending 超时收敛）
+    // invoke 缺省回落 request：与前端 api.ts 同款兼容（仅暴露 request 的
+    // 旧宿主上报会抛 TypeError，且发生在事件回调里会同步外溢）。
+    const invoke = (api.invoke ?? api.request)?.bind(api);
+    if (!invoke) return;
+    void invoke(`${domain}/ui/state/report`, body).catch(
+      () => undefined, // 回报失败不打断 UI 流（sidecar 侧按 pending 超时收敛）
+    );
   };
 
   const handleEvent = (event: unknown) => {

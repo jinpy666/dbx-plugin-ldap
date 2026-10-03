@@ -427,7 +427,8 @@ useModalA11y(
       </header>
       <div class="settings-field" style="flex-direction: row; align-items: center; gap: 8px">
         <input v-model="keyword" type="text" :placeholder="t('schema.searchPlaceholder')" spellcheck="false" style="flex: 1" />
-        <button type="button" class="toolbar-button" :title="t('schema.refresh')" @click="refresh">
+        <!-- 加载中禁用：refresh 强制服务器往返，连点只会堆排队请求。 -->
+        <button type="button" class="toolbar-button" :disabled="cache.loading.value" :aria-busy="cache.loading.value || undefined" :title="t('schema.refresh')" @click="refresh">
           <RefreshCw :class="{ spinning: cache.loading.value }" /><span>{{ t("schema.refresh") }}</span>
         </button>
       </div>

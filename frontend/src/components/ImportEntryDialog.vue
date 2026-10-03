@@ -253,6 +253,9 @@ async function copyFailedList() {
 }
 
 function reset() {
+  // 逐条导入在途时复位会击穿 J-4/L-3 的在途关闭守卫（importing 归假、
+  // rowStates 换空数组、canImport 重新为真可二次导入）——整个复位跳过。
+  if (importing.value) return;
   text.value = "";
   fileName.value = "";
   parseFormat.value = "unknown";
@@ -261,14 +264,16 @@ function reset() {
   rowStates.value = [];
   strategy.value = "keep";
   parentDnDraft.value = props.parentDn || "";
-  importing.value = false;
   resultSummary.value = null;
 }
 
 watch(
   () => [props.open, props.parentDn] as const,
-  ([open]) => {
+  ([open], previous) => {
     if (!open) return;
+    // 复位只在 open 的 false→true 迁移执行：打开态下 baseDn（即 parentDn）
+    // 变化不再整体重置在途/已解析状态。
+    if (previous?.[0]) return;
     reset();
   },
   { immediate: true },

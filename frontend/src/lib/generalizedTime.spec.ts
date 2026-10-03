@@ -104,6 +104,14 @@ describe("datetime-local conversions", () => {
 });
 
 describe("wall-clock + zone helpers (timezone-aware picker)", () => {
+  it("round-trips fractional seconds through the wall clock without losing precision", () => {
+    // 审查 M：结构化编辑曾把小数秒静默丢弃（.123 → 无）。
+    const wall = parseGeneralizedTimeWall("20260924093000.123Z")!;
+    expect(wall.fraction).toBe(".123");
+    expect(formatGeneralizedTimeWall({ ...wall, hour: 1 })).toBe("20260924013000.123Z");
+    expect(formatGeneralizedTimeWall({ ...wall, fraction: undefined, hour: 1 })).toBe("20260924013000Z");
+  });
+
   it("splits wall clock and zone without converting the instant", () => {
     const wall = parseGeneralizedTimeWall("20260102030405+0800")!;
     expect(wall).toMatchObject({ year: 2026, month: 1, day: 2, hour: 3, minute: 4, second: 5, zone: "+0800" });

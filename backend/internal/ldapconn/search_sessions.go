@@ -91,7 +91,24 @@ type ldapSearchSession struct {
 // returns exactly its first page. Existing Search keeps its aggregate API for
 // compatibility; callers that need a responsive first paint use this method.
 func (s *Service) SearchStart(ctx context.Context, req LDAPSearchSessionRequest) (LDAPSearchSessionResult, error) {
-	profile, baseDN, filter, attrs, err := s.validateSearchSessionRequest(req)
+	// 先取条目并在同一次 entry.mu 临界区快照 profile/secrets/target：拆成
+	// "validate 里 Get 一次 + 这里 lookup 一次" 时，并发 Connect 换代可能
+	// 组合出旧 profile（TLS 策略/超时）配新 secrets/target 的错配拨号。
+	// 拨号期间的换代仍由 addSearchSession 的 identity 复查兜底（会话不安装）。
+	entry := s.lookup(req.ConnectionID)
+	if entry == nil {
+		return LDAPSearchSessionResult{}, errConnectionNotFound(req.ConnectionID)
+	}
+	// Snapshot the current connection settings, then dial a connection owned by
+	// this cursor. Holding entry.mu only for the copy avoids blocking all normal
+	// LDAP operations while the user pages through a large result set.
+	entry.mu.Lock()
+	profile := entry.profile
+	secrets := entry.secrets
+	target := entry.target
+	entry.mu.Unlock()
+
+	baseDN, filter, attrs, err := s.validateSearchSessionRequest(req, profile)
 	if err != nil {
 		return LDAPSearchSessionResult{}, err
 	}
@@ -104,17 +121,6 @@ func (s *Service) SearchStart(ctx context.Context, req LDAPSearchSessionRequest)
 		return LDAPSearchSessionResult{}, err
 	}
 
-	entry := s.lookup(req.ConnectionID)
-	if entry == nil {
-		return LDAPSearchSessionResult{}, errConnectionNotFound(req.ConnectionID)
-	}
-	// Snapshot the current connection settings, then dial a connection owned by
-	// this cursor. Holding entry.mu only for the copy avoids blocking all normal
-	// LDAP operations while the user pages through a large result set.
-	entry.mu.Lock()
-	secrets := entry.secrets
-	target := entry.target
-	entry.mu.Unlock()
 	requestCtx, cancel := contextWithTimeout(ctx, profile)
 	defer cancel()
 	conn, err := dialProfile(requestCtx, profile, target, secrets)
@@ -199,30 +205,34 @@ func (s *Service) SearchCancel(_ context.Context, req LDAPSearchSessionCancelReq
 	return nil
 }
 
-func (s *Service) validateSearchSessionRequest(req LDAPSearchSessionRequest) (Profile, string, string, []string, error) {
-	profile, err := s.Get(req.ConnectionID)
-	if err != nil {
-		return Profile{}, "", "", nil, err
-	}
+// validateSearchSessionRequest 校验请求（profile 由调用方传入：SearchStart
+// 在同一 entry 快照里取，避免二次查找的跨代错配）。
+func (s *Service) validateSearchSessionRequest(req LDAPSearchSessionRequest, profile Profile) (string, string, []string, error) {
 	baseDN := strings.TrimSpace(req.BaseDN)
 	if baseDN == "" {
 		baseDN = profile.BaseDN
 	}
 	if baseDN == "" {
-		return Profile{}, "", "", nil, fmt.Errorf("baseDn is required")
+		return "", "", nil, fmt.Errorf("baseDn is required")
+	}
+	// 控制字符 DN 门控与 Search/Count/GetEntry/Compare 对齐（H1 纵深）：
+	// go-ldap ParseDN 接受裸换行等控制字符，缺这道门会让分页会话路径
+	// 重新引入注入面并落进 read-policy 审计 Target。
+	if _, err := normalizeLDAPReadDN(baseDN); err != nil {
+		return "", "", nil, err
 	}
 	filter := strings.TrimSpace(req.Filter)
 	if filter == "" {
 		filter = "(objectClass=*)"
 	}
 	if err := validateLDAPFilter(filter); err != nil {
-		return Profile{}, "", "", nil, err
+		return "", "", nil, err
 	}
 	if err := ensureLDAPReadAllowed(profile, baseDN); err != nil {
 		s.EmitAudit(AuditRecord{ConnectionID: req.ConnectionID, Action: "read-policy", Target: baseDN, Result: "denied", Detail: err.Error()})
-		return Profile{}, "", "", nil, err
+		return "", "", nil, err
 	}
-	return profile, baseDN, filter, effectiveReadAttributes(profile, req.Attributes), nil
+	return baseDN, filter, effectiveReadAttributes(profile, req.Attributes), nil
 }
 
 func (s *Service) ensureSearchSessionCapacity() error {

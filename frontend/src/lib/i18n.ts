@@ -6,6 +6,7 @@ export const messages = {
   en: {
     intent: {
       applied: "MCP intent applied to the workbench",
+      searchNotReady: "Search form is not ready",
       selectMissing: "DN not found in the current results",
       unknownPanel: "Unknown panel",
     },
@@ -373,6 +374,7 @@ export const messages = {
       objectClassRemove: "Remove objectClass {name}",
       objectClassMustHint: "MUST attributes: {attributes}",
       changesTitle: "Review changes",
+      changeOp: { add: "Add", replace: "Replace", "delete": "Delete" },
       changesHint: "Saving will apply the following changes to the server:",
       confirmChanges: "Apply changes",
       loading: "Loading entry…",
@@ -393,6 +395,7 @@ export const messages = {
       ldifMode: "LDIF",
       formMode: "Form",
       ldifParseError: "LDIF parse error: {error}",
+      ldifNoEntry: "No entry found in the LDIF text",
       ldifDnLocked: "The dn: line in LDIF cannot rename the entry — use Modify DN to rename. DN changes here are ignored on save.",
       noChanges: "No changes to save",
       saved: "Entry saved",
@@ -533,6 +536,7 @@ export const messages = {
       target: "Target parent DN",
       targetInvalid: "Target is not a valid DN",
       confirm: "Move {count} entries under {dn}? RDNs are kept.",
+      doomedTarget: "Target is inside a selected entry's subtree, is that entry itself, or already its parent — this move would fail",
       result: "Batch move finished: {ok} moved, {failed} failed",
     },
     connections: {
@@ -617,6 +621,7 @@ export const messages = {
   "zh-CN": {
     intent: {
       applied: "MCP 意图已应用到工作台",
+      searchNotReady: "搜索表单尚未就绪",
       selectMissing: "当前结果中未找到该 DN",
       unknownPanel: "未知面板",
     },
@@ -984,6 +989,7 @@ export const messages = {
       objectClassRemove: "移除 objectClass {name}",
       objectClassMustHint: "必须属性:{attributes}",
       changesTitle: "变更预览",
+      changeOp: { add: "新增", replace: "替换", "delete": "删除" },
       changesHint: "保存将向服务器提交以下修改:",
       confirmChanges: "确认保存",
       loading: "正在加载条目…",
@@ -1004,6 +1010,7 @@ export const messages = {
       ldifMode: "LDIF",
       formMode: "表单",
       ldifParseError: "LDIF 解析错误：{error}",
+      ldifNoEntry: "LDIF 文本中没有可解析的条目",
       ldifDnLocked: "LDIF 中的 dn 行不能用于重命名条目——改名请使用「修改 DN」，保存时将忽略此处的 DN 变更。",
       noChanges: "没有需要保存的修改",
       saved: "条目已保存",
@@ -1144,6 +1151,7 @@ export const messages = {
       target: "目标父 DN",
       targetInvalid: "目标不是合法的 DN",
       confirm: "将把 {count} 个条目移动到 {dn} 下(保留 RDN)。",
+      doomedTarget: "目标是所选条目自身、位于其子树内、或已是其父 DN——这样移动必然失败",
       result: "批量移动完成:成功 {ok} 个,失败 {failed} 个",
     },
     connections: {
@@ -1228,6 +1236,7 @@ export const messages = {
   "zh-TW": {
     intent: {
       applied: "MCP 意圖已套用到工作台",
+      searchNotReady: "搜尋表單尚未就緒",
       selectMissing: "目前結果中找不到該 DN",
       unknownPanel: "未知面板",
     },
@@ -1595,6 +1604,7 @@ export const messages = {
       objectClassRemove: "移除 objectClass {name}",
       objectClassMustHint: "必須屬性:{attributes}",
       changesTitle: "變更預覽",
+      changeOp: { add: "新增", replace: "替換", "delete": "刪除" },
       changesHint: "儲存將向伺服器提交以下修改:",
       confirmChanges: "確認儲存",
       loading: "正在載入條目…",
@@ -1615,6 +1625,7 @@ export const messages = {
       ldifMode: "LDIF",
       formMode: "表單",
       ldifParseError: "LDIF 解析錯誤：{error}",
+      ldifNoEntry: "LDIF 文字中沒有可解析的條目",
       ldifDnLocked: "LDIF 中的 dn 行不能用於重新命名條目——改名請使用「修改 DN」，儲存時將忽略此處的 DN 變更。",
       noChanges: "沒有需要儲存的修改",
       saved: "條目已儲存",
@@ -1755,6 +1766,7 @@ export const messages = {
       target: "目標父 DN",
       targetInvalid: "目標不是合法的 DN",
       confirm: "將把 {count} 個條目移動到 {dn} 下(保留 RDN)。",
+      doomedTarget: "目標是所選條目自身、位於其子樹內、或已是其父 DN——這樣移動必然失敗",
       result: "批次移動完成:成功 {ok} 個,失敗 {failed} 個",
     },
     connections: {
@@ -1839,6 +1851,7 @@ export const messages = {
   es: {
     intent: {
       applied: "Intención de MCP aplicada al espacio de trabajo",
+      searchNotReady: "El formulario de búsqueda no está listo",
       selectMissing: "No se encontró el DN en los resultados actuales",
       unknownPanel: "Panel desconocido",
     },
@@ -2206,6 +2219,7 @@ export const messages = {
       objectClassRemove: "Quitar objectClass {name}",
       objectClassMustHint: "Atributos obligatorios: {attributes}",
       changesTitle: "Revisar cambios",
+      changeOp: { add: "Añadir", replace: "Reemplazar", "delete": "Eliminar" },
       changesHint: "Al guardar se aplicarán los siguientes cambios:",
       confirmChanges: "Aplicar cambios",
       loading: "Cargando entrada…",
@@ -2226,6 +2240,7 @@ export const messages = {
       ldifMode: "LDIF",
       formMode: "Formulario",
       ldifParseError: "Error de análisis LDIF: {error}",
+      ldifNoEntry: "No se encontró ninguna entrada en el texto LDIF",
       ldifDnLocked: "La línea dn: del LDIF no renombra la entrada — usa «Modificar DN» para renombrar. Los cambios de DN aquí se ignoran al guardar.",
       noChanges: "No hay cambios que guardar",
       saved: "Entrada guardada",
@@ -2366,6 +2381,7 @@ export const messages = {
       target: "DN padre de destino",
       targetInvalid: "El destino no es un DN válido",
       confirm: "¿Mover {count} entradas bajo {dn}? Se conservan los RDN.",
+      doomedTarget: "El destino está dentro del subárbol de una entrada seleccionada, es esa entrada o ya es su DN padre: este movimiento fallará",
       result: "Mover en lote completado: {ok} movidos, {failed} con error",
     },
     connections: {
@@ -2450,6 +2466,7 @@ export const messages = {
   it: {
     intent: {
       applied: "Intent MCP applicato all'area di lavoro",
+      searchNotReady: "Il modulo di ricerca non è pronto",
       selectMissing: "DN non trovato nei risultati correnti",
       unknownPanel: "Pannello sconosciuto",
     },
@@ -2817,6 +2834,7 @@ export const messages = {
       objectClassRemove: "Rimuovi objectClass {name}",
       objectClassMustHint: "Attributi obbligatori: {attributes}",
       changesTitle: "Rivedi modifiche",
+      changeOp: { add: "Aggiungi", replace: "Sostituisci", "delete": "Elimina" },
       changesHint: "Il salvataggio applicherà le seguenti modifiche:",
       confirmChanges: "Applica modifiche",
       loading: "Caricamento della voce…",
@@ -2837,6 +2855,7 @@ export const messages = {
       ldifMode: "LDIF",
       formMode: "Modulo",
       ldifParseError: "Errore di analisi LDIF: {error}",
+      ldifNoEntry: "Nessuna voce trovata nel testo LDIF",
       ldifDnLocked: "La riga dn: dell'LDIF non rinomina la voce: usa «Modifica DN» per rinominare. Le modifiche al DN qui vengono ignorate al salvataggio.",
       noChanges: "Nessuna modifica da salvare",
       saved: "Voce salvata",
@@ -2977,6 +2996,7 @@ export const messages = {
       target: "DN padre di destinazione",
       targetInvalid: "La destinazione non è un DN valido",
       confirm: "Spostare {count} voci sotto {dn}? I RDN vengono conservati.",
+      doomedTarget: "La destinazione è nel sottoalbero di una voce selezionata, è quella voce o è già il suo DN padre: questo spostamento fallirà",
       result: "Spostamento batch completato: {ok} spostate, {failed} non riuscite",
     },
     connections: {
@@ -3061,6 +3081,7 @@ export const messages = {
   ja: {
     intent: {
       applied: "MCP インテントをワークベンチに適用しました",
+      searchNotReady: "検索フォームの準備ができていません",
       selectMissing: "現在の結果にその DN が見つかりません",
       unknownPanel: "不明なパネル",
     },
@@ -3428,6 +3449,7 @@ export const messages = {
       objectClassRemove: "objectClass {name} を削除",
       objectClassMustHint: "必須属性:{attributes}",
       changesTitle: "変更の確認",
+      changeOp: { add: "追加", replace: "置換", "delete": "削除" },
       changesHint: "保存すると次の変更が適用されます:",
       confirmChanges: "変更を適用",
       loading: "エントリを読み込み中…",
@@ -3448,6 +3470,7 @@ export const messages = {
       ldifMode: "LDIF",
       formMode: "フォーム",
       ldifParseError: "LDIF 解析エラー: {error}",
+      ldifNoEntry: "LDIF テキストに解析可能なエントリがありません",
       ldifDnLocked: "LDIF の dn 行ではエントリ名を変更できません。名前変更は「DN を変更」を使用してください。保存時、ここでの DN 変更は無視されます。",
       noChanges: "保存する変更はありません",
       saved: "エントリを保存しました",
@@ -3588,6 +3611,7 @@ export const messages = {
       target: "移動先の親 DN",
       targetInvalid: "移動先が有効な DN ではありません",
       confirm: "{count} 件のエントリを {dn} の下へ移動しますか?RDN は維持されます。",
+      doomedTarget: "移動先が選択中エントリのサブツリー内・そのエントリ自身・または既に親 DN です。この移動は失敗します",
       result: "一括移動完了:成功 {ok} 件、失敗 {failed} 件",
     },
     connections: {
@@ -3672,6 +3696,7 @@ export const messages = {
   "pt-BR": {
     intent: {
       applied: "Intenção do MCP aplicada ao espaço de trabalho",
+      searchNotReady: "O formulário de busca não está pronto",
       selectMissing: "DN não encontrado nos resultados atuais",
       unknownPanel: "Painel desconhecido",
     },
@@ -4039,6 +4064,7 @@ export const messages = {
       objectClassRemove: "Remover objectClass {name}",
       objectClassMustHint: "Atributos obrigatórios: {attributes}",
       changesTitle: "Revisar alterações",
+      changeOp: { add: "Adicionar", replace: "Substituir", "delete": "Excluir" },
       changesHint: "Salvar aplicará as seguintes alterações:",
       confirmChanges: "Aplicar alterações",
       loading: "Carregando entrada…",
@@ -4059,6 +4085,7 @@ export const messages = {
       ldifMode: "LDIF",
       formMode: "Formulário",
       ldifParseError: "Erro de análise LDIF: {error}",
+      ldifNoEntry: "Nenhuma entrada encontrada no texto LDIF",
       ldifDnLocked: "A linha dn: do LDIF não renomeia a entrada — use «Modificar DN» para renomear. Alterações de DN aqui são ignoradas ao salvar.",
       noChanges: "Nenhuma alteração para salvar",
       saved: "Entrada salva",
@@ -4199,6 +4226,7 @@ export const messages = {
       target: "DN pai de destino",
       targetInvalid: "O destino não é um DN válido",
       confirm: "Mover {count} entradas para baixo de {dn}? Os RDNs são mantidos.",
+      doomedTarget: "O destino está dentro da subárvore de uma entrada selecionada, é a própria entrada ou já é o DN pai — esta movimentação falhará",
       result: "Mover em lote concluído: {ok} movidos, {failed} falharam",
     },
     connections: {

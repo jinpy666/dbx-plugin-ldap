@@ -82,6 +82,17 @@ describe("isLikelyRdn / isLikelyDn", () => {
   });
 });
 
+describe("dnWithinBase escaped-comma hardening", () => {
+  it("does not treat an escaped comma inside an RDN value as a base boundary", () => {
+    // 单 RDN 值里的转义逗号：原始串 endsWith 会误判其在 base 之下。
+    expect(dnWithinBase("uid=x\\,dc=demo,dc=dbx", "dc=demo,dc=dbx")).toBe(false);
+    expect(dnWithinBase("uid=x,dc=demo,dc=dbx", "dc=demo,dc=dbx")).toBe(true);
+    expect(dnWithinBase("ou=y,uid=x\\,dc=demo,dc=dbx", "uid=x\\,dc=demo,dc=dbx")).toBe(true);
+    expect(dnWithinBase("cn=a,dc=demo,dc=dbx", "DC=DEMO,DC=DBX")).toBe(true);
+  });
+
+});
+
 describe("joinRdnAndParent", () => {
   it("joins and normalises", () => {
     expect(joinRdnAndParent("cn=a", "dc=example,dc=com")).toBe("cn=a,dc=example,dc=com");

@@ -193,7 +193,7 @@ describe("ResultTable batch selection", () => {
 // disabled 时禁用，emit batchModify 的 payload 与 batchMove/batchDelete 同序同
 // 原始大小写，随后清空选择。操作类型/属性名/值由 App 侧 BatchModifyDialog 选择。
 describe("ResultTable batch modify", () => {
-  it("emits batchModify with the same payload shape as batchMove, then clears the selection", async () => {
+  it("emits batchModify with the same payload shape as batchMove and keeps the selection until the dialog confirms", async () => {
     const wrapper = mountTable();
     await checks(wrapper)[0].trigger("click");
     await checks(wrapper)[1].trigger("click");
@@ -209,8 +209,11 @@ describe("ResultTable batch modify", () => {
       "cn=alice,dc=demo,dc=dbx",
       "cn=Bob,dc=demo,dc=dbx",
     ]);
-    // emit 后选择清空：批量条消失、stub 选择集复位。
-    expect(wrapper.find(".batch-bar").exists()).toBe(false);
+    // emit 后选择保留：对话框取消不丢勾选；App 确认执行后经 expose 收尾。
+    expect(wrapper.find(".batch-bar").exists()).toBe(true);
+    expect(gridStubState.selected).toHaveLength(2);
+    wrapper.vm.clearSelection();
+    await wrapper.vm.$nextTick();
     expect(gridStubState.selected).toHaveLength(0);
     wrapper.unmount();
   });

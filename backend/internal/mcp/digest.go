@@ -11,6 +11,7 @@ package mcp
 import (
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"io.dbx.ldap.plugin/internal/ldapconn"
 )
@@ -190,7 +191,13 @@ func subtreeKey(dn, base string) string {
 	if !strings.HasSuffix(lowered, suffix) {
 		return dn
 	}
-	rest := dn[:offsets[len(lowered)-len(suffix)]]
+	// 切点换算：len(lowered)-len(suffix) 是折叠串的字节位置，不能直接当
+	// offsets 的 rune 下标用——折叠是逐 rune 的 1:1 简单映射，但折叠后字节
+	// 长度可变（U+0130→i 收缩），前缀含多字节字符时字节位置大于 rune 数，
+	// 直接索引会越界（cn=测试… 的 DN 实测 panic）。折叠 rune 数与原串一致，
+	// 用折叠前缀的 rune 数查 offsets 才是正确的原串字节偏移。
+	foldedPrefix := lowered[:len(lowered)-len(suffix)]
+	rest := dn[:offsets[utf8.RuneCountInString(foldedPrefix)]]
 	if index := strings.Index(rest, ","); index >= 0 {
 		return rest[index+1:] + "," + base
 	}

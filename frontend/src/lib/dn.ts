@@ -186,10 +186,21 @@ export const joinRdnAndParent = (rdn: string, parentDn: string): string => {
  * `dnWithinBase` semantics, RFC 4519 suffix comparison on the RDN list).
  */
 export const dnWithinBase = (dn: string, baseDn: string): boolean => {
-    const child = trimToString(dn).replace(/,+$/u, '').toLowerCase();
-    const base = trimToString(baseDn).replace(/,+$/u, '').toLowerCase();
+    const child = trimToString(dn).replace(/,+$/u, '');
+    const base = trimToString(baseDn).replace(/,+$/u, '');
     if (!base) return true;
     if (!child) return false;
-    if (child === base) return true;
-    return child.endsWith(`,${base}`);
+    if (child.toLowerCase() === base.toLowerCase()) return true;
+    // RDN 列表级后缀比较：对原始串 endsWith 会被 RDN 值里转义的 `\,` 骗过
+    // （`uid=x\,dc=demo,dc=dbx` 是单 RDN，却被误判在 `dc=demo,dc=dbx` 之下）。
+    const baseRdns = splitTopLevel(base, ',');
+    const childRdns = splitTopLevel(child, ',');
+    if (childRdns.length <= baseRdns.length) return false;
+    const lowerBase = base.toLowerCase();
+    return (
+        childRdns
+            .slice(-baseRdns.length)
+            .map((rdn) => rdn.toLowerCase())
+            .join(',') === lowerBase
+    );
 };

@@ -15,7 +15,9 @@ const emit = defineEmits<{ (e: "clear"): void }>();
 
 const expanded = ref(false);
 const hasEvents = computed(() => props.items.length > 0);
-const deniedCount = computed(() => props.items.filter((item) => item.result !== "ok").length);
+// 只计 denied：error 是执行失败不是"被拒绝"，混进来会把失败误标为策略拒绝
+// （自动展开的 watch 也只认 denied，两处口径对齐）。
+const deniedCount = computed(() => props.items.filter((item) => item.result === "denied").length);
 
 // denied 事件自动展开（含初始挂载即携带 denied 的场景），保证拒绝可见；
 // error 只做徽标/计数高亮，不展开打断当前视图。监听数组引用（父组件每次

@@ -343,7 +343,7 @@ describe("DnTree revealDn 树内定位", () => {
     await wrapper.vm.refresh();
     await flushPromises();
 
-    await expect(wrapper.vm.revealDn(targetDn)).resolves.toBe(true);
+    await expect(wrapper.vm.revealDn(targetDn)).resolves.toBe("ok");
 
     expect(searchStart).toHaveBeenCalledTimes(2);
     expect(searchStart).toHaveBeenLastCalledWith(expect.objectContaining({ baseDn: parentDn, scope: "one" }));
@@ -361,7 +361,7 @@ describe("DnTree revealDn 树内定位", () => {
     await wrapper.vm.refresh();
     await flushPromises();
 
-    await expect(wrapper.vm.revealDn(targetDn)).resolves.toBe(true);
+    await expect(wrapper.vm.revealDn(targetDn)).resolves.toBe("ok");
 
     expect(searchNext).toHaveBeenCalledTimes(1);
     expect(searchNext).toHaveBeenCalledWith("root", undefined);
@@ -381,7 +381,7 @@ describe("DnTree revealDn 树内定位", () => {
     await wrapper.vm.refresh();
     await flushPromises();
 
-    await expect(wrapper.vm.revealDn(lateDn)).resolves.toBe(true);
+    await expect(wrapper.vm.revealDn(lateDn)).resolves.toBe("ok");
 
     expect(searchNext).toHaveBeenCalledTimes(2);
     const targetRow = wrapper.findAll(".tree-node").find((row) => row.attributes("title") === lateDn);
@@ -396,22 +396,22 @@ describe("DnTree revealDn 树内定位", () => {
     await wrapper.vm.refresh();
     await flushPromises();
 
-    await expect(wrapper.vm.revealDn("cn=missing," + baseDn)).resolves.toBe(false);
+    await expect(wrapper.vm.revealDn("cn=missing," + baseDn)).resolves.toBe("notFound");
     expect(searchNext).toHaveBeenCalledTimes(1);
   }, 15000);
 
-  it("DN 不在 baseDn 之下 → 直接 false（零请求）", async () => {
-    await expect(wrapper.vm.revealDn("cn=x,dc=other")).resolves.toBe(false);
+  it("DN 不在 baseDn 之下 → notFound（零请求）", async () => {
+    await expect(wrapper.vm.revealDn("cn=x,dc=other")).resolves.toBe("notFound");
     expect(searchStart).not.toHaveBeenCalled();
   });
 
-  it("祖先懒加载失败 → false（不抛错，树不被清空）", async () => {
+  it("祖先懒加载失败 → failed（不抛错，树不被清空，横幅给原因）", async () => {
     searchStart.mockResolvedValueOnce({ searchId: "root", entries: [parent], hasMore: false });
     searchStart.mockRejectedValueOnce(new Error("connection refused"));
     await wrapper.vm.refresh();
     await flushPromises();
 
-    await expect(wrapper.vm.revealDn(targetDn)).resolves.toBe(false);
+    await expect(wrapper.vm.revealDn(targetDn)).resolves.toBe("failed");
     expect(wrapper.findAll(".tree-node").map((row) => row.attributes("title"))).toEqual([baseDn, parentDn]);
   });
 });

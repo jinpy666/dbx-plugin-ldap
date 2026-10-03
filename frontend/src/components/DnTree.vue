@@ -392,14 +392,13 @@ async function continueOnePage(node: DnTreeNode, generation: number): Promise<Dn
   return applyPage(node, session, page);
 }
 
-/** 确保节点 children 已加载（照 toggleNode 的懒展开路径，但不动选中态/错误横幅）。 */
+/** 确保节点 children 已加载（照 toggleNode 的懒展开路径，但不动选中态/错误横幅）。
+ *  失败原样上抛：只有 revealDn 一个调用方，由它统一区分「未找到」与「失败」。 */
 async function ensureChildrenLoaded(node: DnTreeNode, generation: number): Promise<boolean> {
   if (node.loaded) return true;
   node.loading = true;
   try {
     return await startChildren(node, generation);
-  } catch {
-    return false;
   } finally {
     if (nodeIsCurrent(generation, currentConnectionId())) node.loading = false;
   }
@@ -408,16 +407,18 @@ async function ensureChildrenLoaded(node: DnTreeNode, generation: number): Promi
 /**
  * 定位并高亮目标 DN：逐级展开祖先链（目标不在首 500 条时用截断续载游标
  * 继续取），成功后滚动到目标行并高亮（仅置现有选中态，不发 select——是否
- * 连带读取条目详情由调用方决定）。
+ * 连带读取条目详情由调用方决定）。返回三态：ok / notFound（目标确实不在
+ * base 下或已耗尽续载）/ failed（网络或搜索错误；树错误横幅同步给出原因，
+ * 调用方不要再报「未找到」误导排查）。
  */
-async function revealDn(dn: string): Promise<boolean> {
-  if (props.disabled) return false;
+async function revealDn(dn: string): Promise<"ok" | "notFound" | "failed"> {
+  if (props.disabled) return "notFound";
   const chain = dnPathChain(dn, props.baseDn);
-  if (chain.length === 0) return false;
+  if (chain.length === 0) return "notFound";
   // 过滤视图会整体替换树本体：定位前先还原树视图。
   if (hasFilter.value) clearFilter();
   if (!rootNode.value) await loadRoot();
-  if (!rootNode.value) return false;
+  if (!rootNode.value) return "notFound";
   const generation = treeGeneration;
   try {
     let current = rootNode.value;
@@ -431,17 +432,17 @@ async function revealDn(dn: string): Promise<boolean> {
       // 其他线性调用点。
       let index: Map<string, DnTreeNode> | undefined;
       for (let pages = 0; !node; pages++) {
-        if (pages >= REVEAL_MAX_PAGES) return false;
+        if (pages >= REVEAL_MAX_PAGES) return "notFound";
         index ??= new Map(current.children.map((child) => [child.dn.toLowerCase(), child] as const));
         const added = await continueOnePage(current, generation);
-        if (!added) return false;
+        if (!added) return "notFound";
         for (const child of added) index.set(child.dn.toLowerCase(), child);
         node = index.get(chain[level].toLowerCase());
       }
       current = node;
       // 进下一级前先保证该级 children 已加载并展开可见。
       if (level < chain.length - 1) {
-        if (!(await ensureChildrenLoaded(current, generation))) return false;
+        if (!(await ensureChildrenLoaded(current, generation))) return "notFound";
         current.expanded = true;
       }
     }
@@ -453,9 +454,14 @@ async function revealDn(dn: string): Promise<boolean> {
       visibleList.value?.scrollToIndex?.(index);
       await nextTick();
     }
-    return true;
-  } catch {
-    return false;
+    return "ok";
+  } catch (cause) {
+    // 网络/搜索错误 ≠ 未找到：树错误横幅给出原因（与 toggleNode 同一口径），
+    // 调用方按 "failed" 跳过误导性的 notFound 提示。
+    const raw = cause instanceof Error ? cause.message : String(cause);
+    treeError.value = friendlyLdapError(raw);
+    treeErrorRaw.value = treeError.value === raw ? "" : raw;
+    return "failed";
   }
 }
 
@@ -633,12 +639,14 @@ function menuAction(action: string) {
 }
 
 /** 右键「刷新此节点」：丢子级缓存并按原展开态立即重载（折叠节点只丢缓存，
- *  下次展开时走既有懒加载）。失败保持折叠未加载态，再次展开即重试
- *  （同 toggleNode 口径）。 */
+ *  下次展开时走既有懒加载）。失败保持折叠未加载态并以横幅明示，再次展开
+ *  即重试（同 toggleNode 口径；原先静默吞错会让刷新失败零反馈）。 */
 async function reloadNodeChildren(dn: string) {
   const find = (node?: DnTreeNode): DnTreeNode | undefined => {
     if (!node) return undefined;
-    if (node.dn === dn) return node;
+    // DN 比较与全库约定一致（大小写不敏感）：大小写漂移会让查找 miss，
+    // 退化成整树 loadRoot 且无反馈。
+    if (node.dn.toLowerCase() === dn.toLowerCase()) return node;
     for (const child of node.children) {
       const found = find(child);
       if (found) return found;
@@ -657,9 +665,16 @@ async function reloadNodeChildren(dn: string) {
   const generation = treeGeneration;
   node.loading = true;
   try {
-    if (await startChildren(node, generation)) node.expanded = true;
-  } catch {
-    // 保持折叠未加载态：错误态与懒展开失败共用，重试路径一致。
+    if (await startChildren(node, generation)) {
+      node.expanded = true;
+      treeError.value = "";
+      treeErrorRaw.value = "";
+    }
+  } catch (cause) {
+    // 保持折叠未加载态：错误横幅与懒展开失败共用，重试路径一致。
+    const raw = cause instanceof Error ? cause.message : String(cause);
+    treeError.value = friendlyLdapError(raw);
+    treeErrorRaw.value = treeError.value === raw ? "" : raw;
   } finally {
     if (generation === treeGeneration) node.loading = false;
   }
@@ -685,7 +700,7 @@ watch(
 
 defineExpose({
   refresh,
-  /** 树内定位（F8）：逐级展开到目标 DN 并高亮；失败返回 false，不抛错。 */
+  /** 树内定位（F8）：逐级展开到目标 DN 并高亮；三态返回（ok/notFound/failed）。 */
   revealDn,
   /** After writes, drop the cached children of `dn` (or reload everything). */
   invalidate(dn?: string) {
@@ -695,7 +710,9 @@ defineExpose({
     }
     const walk = (node?: DnTreeNode): boolean => {
       if (!node) return false;
-      if (node.dn === dn) {
+      // DN 比较大小写不敏感（与 nodeSessionKey/findChildByDn 一致）：miss
+      // 会退化为整树重载，安全但浪费。
+      if (node.dn.toLowerCase() === dn.toLowerCase()) {
         releaseNodeSessions(node);
         node.loaded = false;
         node.expanded = false;

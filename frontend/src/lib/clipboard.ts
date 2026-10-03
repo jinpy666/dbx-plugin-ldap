@@ -19,8 +19,13 @@ export async function writeClipboardText(text: string): Promise<boolean> {
     helper.style.opacity = "0";
     document.body.appendChild(helper);
     helper.select();
-    const ok = document.execCommand("copy");
-    helper.remove();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } finally {
+      // execCommand 抛异常时也要移除，textarea 不残留在文档里。
+      helper.remove();
+    }
     return ok;
   } catch {
     return false;

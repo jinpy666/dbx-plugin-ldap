@@ -25,10 +25,14 @@ func LdapErrorMeta(err error) (code int, matchedDN string, ok bool) {
 // LdapReferralURIs 从结果码 10（Referral）的错误里提取引用 URI 列表。
 //
 // go-ldap v3.4.x 没有自动 referral 追随，URI 只保留在错误携带的原始 BER
-// 响应包里（Error.Packet）。按包结构容错遍历（对齐 go-ldap 内部 getReferral
-// 的 OpenLDAP 兼容写法：referral 序列的 tag 在不同服务端实现间不稳定，因此
-// 只按结构位置取 response 的第 3 个 child，URI 值取各子节点的首个 string
-// child），取不到返回 nil，调用方按"无引用"处理。
+// 响应包里（Error.Packet）。LDAPResult 的 wire 结构（RFC 4511 §4.1.10，与
+// go-ldap GetLDAPError 的解码一致）：[0]=resultCode [1]=matchedDN
+// [2]=diagnosticMessage [3]=referral（context tag 3，可选）。按结构位置取
+// [3]（referral 序列的 tag 在不同服务端实现间不稳定，URI 值取各子节点的
+// 首个 string child），取不到返回 nil，调用方按"无引用"处理。
+// 审查 H1：旧实现读 [2]——那是 primitive OCTET STRING 的错误消息，永远
+// 没有 children，真实报文恒返回 nil（测试 fixture 省掉了 errorMessage 字段，
+// 互相背书了错误结构）。
 func LdapReferralURIs(err error) []string {
 	var ldapErr *ldap.Error
 	if !errors.As(err, &ldapErr) || int(ldapErr.ResultCode) != int(ldap.LDAPResultReferral) || ldapErr.Packet == nil {
@@ -39,11 +43,11 @@ func LdapReferralURIs(err error) []string {
 		return nil
 	}
 	response := packet.Children[1]
-	if len(response.Children) < 3 {
+	if len(response.Children) < 4 {
 		return nil
 	}
 	var uris []string
-	for _, child := range response.Children[2].Children {
+	for _, child := range response.Children[3].Children {
 		if child == nil || len(child.Children) == 0 {
 			continue
 		}
