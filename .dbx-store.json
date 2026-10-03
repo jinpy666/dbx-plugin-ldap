@@ -16,7 +16,7 @@
   "source": "https://github.com/jinpy666/dbx-plugin-ldap",
   "homepage": "https://github.com/jinpy666/dbx-plugin-ldap",
   "license": "MIT",
-  "releaseNotes": "objectGUID 正式版：AD 对象 GUID 恢复可读——后端默认拦截表移除 objectGUID（11 项 → 10 项，仍可在连接配置自定义），搜索结果表将 objectGUID 自动渲染为标准 UUID 格式，前后端测试钉死；结果区元信息条、状态徽标、分页按钮与 ag-grid 表格样式打磨（分隔线、图标化分页按钮、表头加重、等宽单元格、编辑器属性行卡片化）。含 0.1.95 全部改动。",
+  "releaseNotes": "评审收敛版：合并三轮代码审查修复（后端 17 项——referral 提取下标、分页放弃语义、stdio 超长行/在途上限、设置并发落盘、确认令牌 fail-closed 等；前端纯逻辑 20 项；工作台交互 21 项），并修复本轮复审发现的边界问题——忙碌路径对通知静默（JSON-RPC 规约）、PS 过滤器 Enabled -ne 方向修正、whoami 切换连接后状态卡死、批量移动自移目标预检、schema 缓存在途失效竞态、分页搜索错误路径放弃服务端结果集等；CI 补 gofmt 门。含 0.1.96 全部改动。",
   "localizations": {
     "zh-CN": {
       "name": "LDAP Studio",
