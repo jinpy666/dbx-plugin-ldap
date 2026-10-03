@@ -29,6 +29,35 @@ const searchStub = defineComponent({
     return () => h("div");
   },
 });
+// ResultTable 桩要暴露 clearSelection：三个批量入口（删除/移动/修改）完成
+// 后 App 都经 resultTableRef.clearSelection() 收尾（批量条保持可见契约）。
+// props 清单跟随 ResultTable.vue 的 defineProps（App.spec 多处对 props 断言）。
+const resultTableStub = defineComponent({
+  name: "ResultTable",
+  props: {
+    entries: { type: Array, default: () => [] },
+    count: { type: Number, default: 0 },
+    truncated: { type: Boolean, default: false },
+    atLimit: { type: Boolean, default: false },
+    sizeLimit: { type: Number, default: undefined },
+    searched: { type: Boolean, default: false },
+    disabled: { type: Boolean, default: false },
+    loading: { type: Boolean, default: false },
+    error: { type: String, default: "" },
+    errorDetail: { type: String, default: "" },
+    complete: { type: Boolean, default: false },
+    loadingMore: { type: Boolean, default: false },
+    loadMoreError: { type: String, default: "" },
+    loadMoreErrorDetail: { type: String, default: "" },
+    canWrite: { type: Boolean, default: true },
+    referrals: { type: Array, default: () => [] },
+    batchBusy: { type: Boolean, default: false },
+  },
+  setup(_, { expose }) {
+    expose({ clearSelection: vi.fn() });
+    return () => h("section");
+  },
+});
 
 async function mountWithHost(
   legacy = false,
@@ -61,7 +90,7 @@ async function mountWithHost(
     },
   } as unknown as DbxPluginApi;
   wrapper = mount(App, { global: { stubs: {
-    DnTree: treeStub, SearchForm: searchStub, ResultTable: true, EntryEditorDialog: true,
+    DnTree: treeStub, SearchForm: searchStub, ResultTable: resultTableStub, EntryEditorDialog: true,
     DeleteEntryDialog: true, ModifyDnDialog: true, NewEntryWizard: true,
     SchemaPanel: true, ConnectionsPanel: true, AuditFeedPanel: true,
   } }, attachTo: document.body });
@@ -163,6 +192,26 @@ describe("App request feedback and recovery", () => {
       entries: [{ dn: "cn=first,dc=demo" }, { dn: "cn=second,dc=demo" }, { dn: "cn=third,dc=demo" }],
       count: 3,
       complete: true,
+    });
+  });
+
+  it("surfaces a mid-drain truncated page as a truncated result (silent incompleteness must be visible)", async () => {
+    const host = await mountWithHost();
+    host.invoke.mockImplementation(async (method) => {
+      if (method === "ldap/search/start") return { searchId: "search-1", entries: [{ dn: "cn=first,dc=demo", attributes: {} }], hasMore: true };
+      // sizeLimit 配额页被服务端截断：hasMore=false + truncated=true（审查
+      // 修复钉死：前端必须消费 truncated，否则静默残缺被当成完整结果）。
+      if (method === "ldap/search/next") return { entries: [{ dn: "cn=second,dc=demo", attributes: {} }], hasMore: false, truncated: true };
+      return { statuses: [], success: true, attributeTypes: [], objectClasses: [] };
+    });
+    wrapper!.findComponent(searchStub).vm.$emit("run", searchModel);
+    await flushPromises();
+    await flushPromises();
+    expect(resultsPane().props()).toMatchObject({
+      entries: [{ dn: "cn=first,dc=demo" }, { dn: "cn=second,dc=demo" }],
+      count: 2,
+      complete: true,
+      truncated: true,
     });
   });
 

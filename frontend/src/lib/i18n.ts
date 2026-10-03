@@ -185,6 +185,7 @@ export const messages = {
     delete: "Delete",
     copyDn: "Copy DN",
     copied: "Copied",
+    batchFailureHint: "First failure: {error}",
     copyFailed: "Copy failed",
     err: {
       invalidCredentials: "Sign-in failed: the username or password is incorrect",
@@ -491,6 +492,7 @@ export const messages = {
       needValue: "At least one value is required",
     },
     compare: {
+      equal: "Entries are identical",
       title: "Compare entry",
       dn: "Current DN",
       targetDn: "Target DN",
@@ -800,6 +802,7 @@ export const messages = {
     delete: "删除",
     copyDn: "复制 DN",
     copied: "已复制",
+    batchFailureHint: "首个失败:{error}",
     copyFailed: "复制失败",
     err: {
       invalidCredentials: "认证失败：用户名或密码不正确",
@@ -1106,6 +1109,7 @@ export const messages = {
       needValue: "至少填写一个值",
     },
     compare: {
+      equal: "条目内容一致",
       title: "比较条目",
       dn: "当前 DN",
       targetDn: "目标 DN",
@@ -1415,6 +1419,7 @@ export const messages = {
     delete: "刪除",
     copyDn: "複製 DN",
     copied: "已複製",
+    batchFailureHint: "首個失敗:{error}",
     copyFailed: "複製失敗",
     err: {
       invalidCredentials: "認證失敗：使用者名稱或密碼不正確",
@@ -1721,6 +1726,7 @@ export const messages = {
       needValue: "至少填寫一個值",
     },
     compare: {
+      equal: "條目內容一致",
       title: "比較條目",
       dn: "目前 DN",
       targetDn: "目標 DN",
@@ -2030,6 +2036,7 @@ export const messages = {
     delete: "Eliminar",
     copyDn: "Copiar DN",
     copied: "Copiado",
+    batchFailureHint: "Primer fallo: {error}",
     copyFailed: "Error al copiar",
     err: {
       invalidCredentials: "Error de autenticación: usuario o contraseña incorrectos",
@@ -2336,6 +2343,7 @@ export const messages = {
       needValue: "Se requiere al menos un valor",
     },
     compare: {
+      equal: "Las entradas son idénticas",
       title: "Comparar entrada",
       dn: "DN actual",
       targetDn: "DN de destino",
@@ -2645,6 +2653,7 @@ export const messages = {
     delete: "Elimina",
     copyDn: "Copia DN",
     copied: "Copiato",
+    batchFailureHint: "Primo errore: {error}",
     copyFailed: "Copia non riuscita",
     err: {
       invalidCredentials: "Autenticazione non riuscita: nome utente o password non corretti",
@@ -2951,6 +2960,7 @@ export const messages = {
       needValue: "È richiesto almeno un valore",
     },
     compare: {
+      equal: "Le voci sono identiche",
       title: "Confronta voce",
       dn: "DN corrente",
       targetDn: "DN di destinazione",
@@ -3260,6 +3270,7 @@ export const messages = {
     delete: "削除",
     copyDn: "DN をコピー",
     copied: "コピーしました",
+    batchFailureHint: "最初の失敗: {error}",
     copyFailed: "コピーに失敗しました",
     err: {
       invalidCredentials: "認証に失敗しました：ユーザー名またはパスワードが正しくありません",
@@ -3566,6 +3577,7 @@ export const messages = {
       needValue: "値を 1 つ以上入力してください",
     },
     compare: {
+      equal: "エントリは同一です",
       title: "エントリ比較",
       dn: "現在の DN",
       targetDn: "対象 DN",
@@ -3875,6 +3887,7 @@ export const messages = {
     delete: "Excluir",
     copyDn: "Copiar DN",
     copied: "Copiado",
+    batchFailureHint: "Primeira falha: {error}",
     copyFailed: "Falha ao copiar",
     err: {
       invalidCredentials: "Falha na autenticação: usuário ou senha incorretos",
@@ -4181,6 +4194,7 @@ export const messages = {
       needValue: "É necessário pelo menos um valor",
     },
     compare: {
+      equal: "As entradas são idênticas",
       title: "Comparar entrada",
       dn: "DN atual",
       targetDn: "DN de destino",

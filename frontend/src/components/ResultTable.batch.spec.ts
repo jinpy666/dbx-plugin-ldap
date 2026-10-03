@@ -100,7 +100,7 @@ describe("ResultTable batch selection", () => {
     wrapper.unmount();
   });
 
-  it("arms on first click and only emits batchDelete on the armed second click, then clears the selection", async () => {
+  it("arms on first click and only emits batchDelete on the armed second click, keeping the selection for App to clear on completion", async () => {
     const wrapper = mountTable();
     await checks(wrapper)[0].trigger("click");
     await checks(wrapper)[1].trigger("click");
@@ -109,13 +109,18 @@ describe("ResultTable batch selection", () => {
     expect(wrapper.emitted("batchDelete")).toBeUndefined();
     expect(wrapper.find(".batch-delete").classes()).toContain("is-armed");
     expect(wrapper.find(".batch-delete").text()).toBe(t("confirm"));
-    // 确认态再点：按条目顺序 emit 原始大小写 DN，随后清空选择并解除确认态。
+    // 确认态再点：按条目顺序 emit 原始大小写 DN。emit 后选择保留（批量条
+    // 保持可见提供 busy 反馈），由 App 执行完成后经 expose 的 clearSelection
+    // 收尾——与批量移动/修改同一契约（审查修复）。
     await wrapper.find(".batch-delete").trigger("click");
     expect(wrapper.emitted("batchDelete")).toHaveLength(1);
     expect(wrapper.emitted("batchDelete")![0][0]).toEqual([
       "cn=alice,dc=demo,dc=dbx",
       "cn=Bob,dc=demo,dc=dbx",
     ]);
+    expect(wrapper.find(".batch-bar").exists()).toBe(true);
+    (wrapper.vm as unknown as { clearSelection: () => void }).clearSelection();
+    await wrapper.vm.$nextTick(); // 选择清空后 DOM 异步刷新
     expect(wrapper.find(".batch-bar").exists()).toBe(false);
     wrapper.unmount();
   });

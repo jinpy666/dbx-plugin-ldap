@@ -108,9 +108,9 @@ func dialTransport(profile Profile, target connTarget, dialTimeout time.Duration
 		return nil, fmt.Errorf("dial ldap: %w", err)
 	}
 	if profile.UseStartTLS {
-		if scheme == "ldaps" {
+		if scheme == "ldaps" || scheme == "ldapi" {
 			_ = conn.Close()
-			return nil, fmt.Errorf("startTLS cannot be combined with ldaps url")
+			return nil, fmt.Errorf("startTLS cannot be combined with %s url", scheme)
 		}
 		if err := conn.StartTLS(tlsConfig); err != nil {
 			_ = conn.Close()

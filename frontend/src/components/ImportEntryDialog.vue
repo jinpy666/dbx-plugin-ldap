@@ -306,7 +306,7 @@ function onBackdropClick() {
       <div class="import-source">
         <label class="field">
           <span class="muted">{{ t("ldap.importEntry.pasteLabel") }}</span>
-          <textarea v-model="text" class="mono import-textarea" rows="6" spellcheck="false" :placeholder="'dn: cn=new,dc=example,dc=com\ncn: new\n…'" @input="onTextChange"></textarea>
+          <textarea v-model="text" class="mono import-textarea" rows="6" spellcheck="false" :disabled="importing" :placeholder="'dn: cn=new,dc=example,dc=com\ncn: new\n…'" @input="onTextChange"></textarea>
         </label>
         <div class="import-source-actions">
           <label class="toolbar-button">

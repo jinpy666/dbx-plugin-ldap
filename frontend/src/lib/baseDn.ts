@@ -104,8 +104,12 @@ export const inferBaseDnFromProfile = (profile: LdapProfileLike = {}): string =>
  * then the first context as-is.
  */
 export const pickBaseDnFromRootDse = (attributes: Record<string, string[]> = {}): string => {
-    const preferred = (attributes.defaultNamingContext || []).map((v) => v.trim()).find(Boolean) || ''
+    // 大小写不敏感取属性（与 AssociationPanel/RootDseDialog/dnTree 同约定）：
+    // 精确取键在个别服务器返回 DefaultNamingContext 等变体时会静默降级到
+    // 主机名推断（审查修复）。
+    const byLower = new Map(Object.entries(attributes).map(([key, value]) => [key.toLowerCase(), value]))
+    const preferred = (byLower.get('defaultnamingcontext') || []).map((v) => v.trim()).find(Boolean) || ''
     if (preferred) return preferred
-    const contexts = (attributes.namingContexts || []).map((v) => v.trim()).filter(Boolean)
+    const contexts = (byLower.get('namingcontexts') || []).map((v) => v.trim()).filter(Boolean)
     return contexts.find((v) => /^dc=/i.test(v)) || contexts[0] || ''
 }

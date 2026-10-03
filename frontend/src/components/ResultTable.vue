@@ -128,8 +128,11 @@ function disarmBatchDelete() {
   batchDeleteArmed.value = false;
 }
 
-// 确认删除：行内两步确认；确认后清空选择。只读连接（canWrite=false）直接
-// 拦截：按钮虽已禁用，键盘/自动化仍可能触达（与 App 侧守卫同语义）。
+// 确认删除：行内两步确认。emit 后不清空选择——批量条保持可见（batch-busy
+// 禁用入口 + 忙碌指示），App 执行完成后经 expose 的 clearSelection 收尾，
+// 与批量移动/修改同一契约（审查修复：此前立即清空导致整个执行期无 busy 反馈）。
+// 只读连接（canWrite=false）直接拦截：按钮虽已禁用，键盘/自动化仍可能触达
+//（与 App 侧守卫同语义）。
 function confirmBatchDelete() {
   if (!props.canWrite || props.batchBusy) return;
   const count = selectedDns.value.size;
@@ -142,7 +145,6 @@ function confirmBatchDelete() {
   }
   disarmBatchDelete();
   emit("batchDelete", collectSelectedDns());
-  clearSelection();
 }
 
 // 批量移动：目标父 DN 的选择与确认在 App 侧对话框完成，这里只 emit（payload
@@ -223,8 +225,11 @@ defineExpose({ clearSelection });
         <span v-else class="auto-load-status">{{ loadingMore ? t("search.running") : t("result.loadingMore") }}</span>
       </div>
       <!-- 批量操作条：选中数 > 0 时出现在表格之上 -->
-      <div v-if="selectedCount > 0" class="batch-bar">
+      <div v-if="selectedCount > 0" class="batch-bar" :aria-busy="batchBusy || undefined">
         <span class="batch-count">{{ t("result.batchSelected", { count: selectedCount }) }}</span>
+        <!-- 批量执行中的忙碌指示：批量条在执行期间保持可见（选择由 App 完成
+             后收尾），入口按钮经 batch-busy 禁用，这里补可视状态。 -->
+        <span v-if="batchBusy" class="batch-busy-hint" role="status">{{ t("search.running") }}</span>
         <!-- 删除走行内两步确认（宿主 webview 可能拦截原生 confirm）：确认态文案
              用既有 confirm 键，title 同步说明；再点一次才触发。 -->
         <!-- 只读连接（canWrite=false）：三个写入口全部禁用并提示（编辑器
@@ -278,6 +283,11 @@ defineExpose({ clearSelection });
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.batch-busy-hint {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted-foreground);
 }
 .partial-results {
   display: flex;

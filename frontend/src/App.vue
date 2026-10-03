@@ -15,6 +15,7 @@ import { appendOpenTab } from "./lib/openTabs";
 import { inferBaseDnFromProfile, pickBaseDnFromRootDse } from "./lib/baseDn";
 import { joinRdnAndParent, splitFirstDnRdn } from "./lib/dn";
 import { escapeLdapFilterValue } from "./lib/ldapFilter";
+import { friendlyLdapError } from "./lib/ldapErrors";
 import { writeClipboardText } from "./lib/clipboard";
 import { saveTextFile, type SaveTextOutcome } from "./lib/fileSave";
 import { serializeEntriesToCsv, serializeEntriesToJson, serializeEntriesToLdifText } from "./lib/ldapExporter";
@@ -350,6 +351,15 @@ const disposeEntryEventWire = onEntryEvent((event) => {
     next.push(dn);
   }
   openTabs.value = next;
+  // 移动命中当前活动页签时同步请求 DN：否则 active-tab-dn 高亮落在旧 DN，
+  // 要再点一次才恢复（审查修复）。
+  if (
+    event.kind === "moved" &&
+    event.previousDn &&
+    editorRequestedDn.value.toLowerCase() === event.previousDn.toLowerCase()
+  ) {
+    editorRequestedDn.value = event.dn;
+  }
   if (event.kind === "changed") return;
   const affected = (event.kind === "moved" && event.previousDn ? event.previousDn : event.dn).toLowerCase();
   if (entryReplayConnectionId !== event.connectionId) {
@@ -439,11 +449,18 @@ const uiIntentHandlers = {
       return { status: "applied", summary: { panel } };
     }
     if (panel === "tree" || panel === "search") {
-      // 主区常驻（树/搜索面板无独立开关）；关闭弹窗让目标面板可见。
+      // 主区常驻（树/搜索面板无独立开关）；关闭全部弹窗让目标面板可见
+      //（清单与 syncConnectionContext 同口径，审查修复：漏关的弹窗会挡住
+      // 宿主点名要聚焦的面板）。
       deleteOpen.value = false;
       modifyDnOpen.value = false;
       batchMoveOpen.value = false;
       wizardOpen.value = false;
+      batchModifyOpen.value = false;
+      compareOpen.value = false;
+      importOpen.value = false;
+      connectionsOpen.value = false;
+      rootDseOpen.value = false;
       // 搜索面板默认折叠为快捷条：宿主点名聚焦时展开，字段必须可见可交互。
       if (panel === "search") searchRef.value?.expandSearch();
       return { status: "applied", summary: { panel } };
@@ -515,18 +532,28 @@ async function onBatchDelete(dns: string[]) {
   const conn = connectionId.value;
   const failed = new Set<string>();
   const deleted: string[] = [];
+  // 首条失败原因随汇总通知透出（审查修复：只报个数会让「非叶子不可删」这类
+  // 原因不可见）。
+  let firstFailure = "";
   for (const dn of dns) {
     if (connectionId.value !== conn) break;
     try {
       await ldapApi.entryDelete(dn, false);
       emitEntryDeleted(conn, dn, true);
       deleted.push(dn);
-    } catch {
+    } catch (cause) {
       failed.add(dn);
+      if (!firstFailure) firstFailure = friendlyLdapError(cause instanceof Error ? cause.message : String(cause));
     }
   }
   batchDeleteSubmitting.value = false;
-  showNotice(t("result.batchResult", { ok: deleted.length, failed: failed.size }));
+  // 与批量移动/修改同一收尾契约：执行完成后才清空选择，批量条在执行期间
+  // 保持可见（batch-busy 禁用入口 + 忙碌指示）。
+  resultTableRef.value?.clearSelection();
+  showNotice(
+    t("result.batchResult", { ok: deleted.length, failed: failed.size })
+      + (firstFailure ? ` ${t("batchFailureHint", { error: firstFailure })}` : ""),
+  );
   if (deleted.length === 0) return;
   for (const parent of new Set(deleted.map((dn) => splitFirstDnRdn(dn).parentDn))) treeRef.value?.invalidate(parent);
 }
@@ -561,20 +588,25 @@ async function onBatchModifyConfirm(payload: { operation: "add" | "replace" | "d
   const conn = connectionId.value;
   const failed = new Set<string>();
   const modified: string[] = [];
+  let firstFailure = "";
   for (const dn of dns) {
     if (connectionId.value !== conn) break;
     try {
       await ldapApi.entryModify(dn, [{ operation: payload.operation, attribute: payload.attribute, values: payload.values }]);
       emitEntryChanged(conn, dn);
       modified.push(dn);
-    } catch {
+    } catch (cause) {
       failed.add(dn);
+      if (!firstFailure) firstFailure = friendlyLdapError(cause instanceof Error ? cause.message : String(cause));
     }
   }
   batchModifySubmitting.value = false;
   batchModifyOpen.value = false;
   resultTableRef.value?.clearSelection();
-  showNotice(t("batchModify.result", { ok: modified.length, failed: failed.size }));
+  showNotice(
+    t("batchModify.result", { ok: modified.length, failed: failed.size })
+      + (firstFailure ? ` ${t("batchFailureHint", { error: firstFailure })}` : ""),
+  );
 }
 
 // 书签（F7）：树右键加入；工具栏下拉跳转（revealDn 逐级展开定位）与移除。
@@ -627,6 +659,7 @@ async function onBatchMoveConfirm(targetParentDn: string) {
   const conn = connectionId.value;
   const failed = new Set<string>();
   const moved: string[] = [];
+  let firstFailure = "";
   for (const dn of dns) {
     if (connectionId.value !== conn) break;
     const { rdn } = splitFirstDnRdn(dn);
@@ -634,14 +667,18 @@ async function onBatchMoveConfirm(targetParentDn: string) {
       await ldapApi.entryModifyDn(dn, rdn, targetParentDn, true);
       emitEntryMoved(conn, dn, joinRdnAndParent(rdn, targetParentDn), true);
       moved.push(dn);
-    } catch {
+    } catch (cause) {
       failed.add(dn);
+      if (!firstFailure) firstFailure = friendlyLdapError(cause instanceof Error ? cause.message : String(cause));
     }
   }
   batchMoveSubmitting.value = false;
   batchMoveOpen.value = false;
   resultTableRef.value?.clearSelection();
-  showNotice(t("batchMove.result", { ok: moved.length, failed: failed.size }));
+  showNotice(
+    t("batchMove.result", { ok: moved.length, failed: failed.size })
+      + (firstFailure ? ` ${t("batchFailureHint", { error: firstFailure })}` : ""),
+  );
   if (moved.length === 0) return;
   const affectedParents = new Set<string>([targetParentDn, ...moved.map((dn) => splitFirstDnRdn(dn).parentDn)]);
   for (const parent of affectedParents) treeRef.value?.invalidate(parent);

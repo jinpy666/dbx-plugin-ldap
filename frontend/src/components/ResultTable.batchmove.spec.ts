@@ -112,13 +112,17 @@ describe("ResultTable batch move", () => {
     // 首次点击进入确认态（不再走 window.confirm），不发删除。
     await wrapper.find(".batch-delete").trigger("click");
     expect(wrapper.emitted("batchDelete")).toBeUndefined();
-    // 确认态再点：emit 原始大小写 DN（按条目顺序），随后清空选择。
+    // 确认态再点：emit 原始大小写 DN（按条目顺序）。选择保留到 App 完成后
+    // 经 expose 收尾（busy 反馈契约，审查修复）。
     await wrapper.find(".batch-delete").trigger("click");
     expect(wrapper.emitted("batchDelete")).toHaveLength(1);
     expect(wrapper.emitted("batchDelete")![0][0]).toEqual([
       "cn=alice,dc=demo,dc=dbx",
       "cn=Bob,dc=demo,dc=dbx",
     ]);
+    expect(wrapper.find(".batch-bar").exists()).toBe(true);
+    (wrapper.vm as unknown as { clearSelection: () => void }).clearSelection();
+    await wrapper.vm.$nextTick(); // 选择清空后 DOM 异步刷新
     expect(wrapper.find(".batch-bar").exists()).toBe(false);
     wrapper.unmount();
   });

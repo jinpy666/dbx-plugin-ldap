@@ -157,9 +157,12 @@ func (p *Params) ConfigStringSlice(key string) []string {
 	}
 }
 
-// SecretString 取 connection_secrets 中的字符串值。
+// SecretString 取 connection_secrets 中的字符串值。凭据按 RFC 4513 是字节
+// 串，首尾空格合法——不走 anyToString 的表单宽容 trim，静默改写凭据会让
+// 用户拿到难排查的 Invalid Credentials（审查修复，勿合并两处语义）。
 func (p *Params) SecretString(key string) string {
-	return anyToString(p.Connection.Secrets[key])
+	typed, _ := p.Connection.Secrets[key].(string)
+	return typed
 }
 
 func anyToString(value any) string {

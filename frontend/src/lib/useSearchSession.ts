@@ -111,10 +111,16 @@ export function useSearchSession(options: UseSearchSessionOptions) {
         if (request !== searchRequestSeq || activeSearchSession?.id !== session.id) return;
         pending.push(...(Array.isArray(page.entries) ? page.entries : []));
         if (Array.isArray(page.referrals)) resultReferrals.value = page.referrals;
+        // sizeLimit 配额打满的页被服务端截断时 hasMore=false 但结果不完整：
+        // 必须透传截断徽标，否则静默残缺被当成完整结果（审查修复，勿回退）。
+        if (page.truncated === true) resultTruncated.value = true;
         resultsComplete.value = page.hasMore !== true;
         if (resultsComplete.value) {
           activeSearchSession = undefined;
           commitPending();
+          // 用最终计数复算「到达 sizeLimit」：首页之后的续拉页此前完全不参与
+          // 该判定，sizeLimit 恰好打满时会漏报。
+          resultAtLimit.value = lastSizeLimit.value !== undefined && resultCount.value >= lastSizeLimit.value;
           break;
         }
         if (++pagesSinceCommit >= DRAIN_COMMIT_PAGES || Date.now() - lastCommitAt >= DRAIN_COMMIT_INTERVAL_MS) commitPending();
@@ -189,7 +195,7 @@ export function useSearchSession(options: UseSearchSessionOptions) {
       results.value = Array.isArray(result.entries) ? result.entries : [];
       resultCount.value = results.value.length;
       resultReferrals.value = Array.isArray(result.referrals) ? result.referrals : [];
-      resultTruncated.value = false;
+      resultTruncated.value = result.truncated === true;
       resultsComplete.value = result.hasMore !== true;
       resultAtLimit.value = requestParams.sizeLimit !== undefined && resultCount.value === requestParams.sizeLimit;
       lastSizeLimit.value = requestParams.sizeLimit;

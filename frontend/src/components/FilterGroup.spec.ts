@@ -75,6 +75,46 @@ describe("FilterGroup", () => {
     expect(wrapper.find(".qb-attr-dropdown").exists()).toBe(false);
   });
 
+  it("supports keyboard selection in the attribute combobox (ArrowDown/ArrowUp/Enter)", async () => {
+    // 审查修复钉死：combobox 键盘可达——方向键移动高亮、Enter 选中高亮项、
+    // aria-activedescendant 跟随。
+    const group: BuilderGroup = createBuilderGroup({ children: [createBuilderClause()] });
+    const wrapper = mount(FilterGroup, {
+      props: { group, depth: 0, listId: "test-datalist", attributeOptions: ["uid", "mail", "objectClass"] },
+    });
+    const input = wrapper.find(".qb-attr");
+    await input.setValue(""); // 清空查询 → 全部选项可选
+    await input.trigger("focus");
+    await input.trigger("keydown", { key: "ArrowDown" });
+    let highlighted = wrapper.find(".qb-attr-option.is-highlighted");
+    expect(highlighted.exists()).toBe(true);
+    expect(highlighted.text()).toBe("uid");
+    expect(input.attributes("aria-activedescendant")).toMatch(/-opt-0$/u); // id 带节点随机后缀
+    await input.trigger("keydown", { key: "ArrowDown" });
+    highlighted = wrapper.find(".qb-attr-option.is-highlighted");
+    expect(highlighted.text()).toBe("mail");
+    await input.trigger("keydown", { key: "ArrowUp" });
+    highlighted = wrapper.find(".qb-attr-option.is-highlighted");
+    expect(highlighted.text()).toBe("uid");
+    await input.trigger("keydown", { key: "Enter" });
+    expect(group.children[0].kind === "clause" && group.children[0].attribute).toBe("uid");
+    expect(wrapper.find(".qb-attr-dropdown").exists()).toBe(false);
+  });
+
+  it("closes the attribute dropdown with Escape without selecting", async () => {
+    const group: BuilderGroup = createBuilderGroup({ children: [createBuilderClause()] });
+    const wrapper = mount(FilterGroup, {
+      props: { group, depth: 0, listId: "test-datalist", attributeOptions: ["uid", "mail", "objectClass"] },
+    });
+    const input = wrapper.find(".qb-attr");
+    await input.setValue("");
+    await input.trigger("focus");
+    expect(wrapper.find(".qb-attr-dropdown").exists()).toBe(true);
+    await input.trigger("keydown", { key: "Escape" });
+    expect(wrapper.find(".qb-attr-dropdown").exists()).toBe(false);
+    expect(group.children[0].kind === "clause" && group.children[0].attribute).toBe("");
+  });
+
   it("toggles NOT on a clause row and reflects the active state", async () => {
     const { wrapper, group } = mountGroup();
     const notButton = wrapper.find(".qb-not");

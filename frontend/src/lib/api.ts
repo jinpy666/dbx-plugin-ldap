@@ -56,6 +56,12 @@ export interface LdapSearchResult {
 export interface LdapSearchPage {
   entries: LdapEntry[];
   hasMore: boolean;
+  /**
+   * sizeLimit 配额打满的页被服务端截断（后端 `hasMore := len(cookie) > 0 &&
+   * !truncated`，search_sessions.go）：截断页 hasMore=false 但结果不完整，
+   * 调用方必须消费该字段否则静默残缺被当成完整结果。
+   */
+  truncated?: boolean;
   /** 会话级累计的延续引用 URI；每个响应都带全量累计，以最新响应为准。 */
   referrals?: string[];
   /** RFC 2891 SortResult 降级状态码（语义同 LdapSearchResult.sortResult）。 */

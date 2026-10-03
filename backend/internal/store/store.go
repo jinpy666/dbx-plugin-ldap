@@ -156,6 +156,12 @@ func (s *Store) SaveJSON(name string, value any) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("store: close %s: %w", name, err)
 	}
+	// rename 前落盘：断电/崩溃时半截临时文件只会被下面的 defer 清掉，不会
+	// 以合法名字留下半截数据静默丢偏好/预设（审查修复）。
+	if tmp, err := os.Open(tmpName); err == nil {
+		_ = tmp.Sync()
+		_ = tmp.Close()
+	}
 	path := filepath.Join(s.dir, name)
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("store: rename %s: %w", name, err)

@@ -569,7 +569,11 @@ func (h *pluginHandler) mcpTools(params json.RawMessage) (any, *dbxpluginsdk.Plu
 	var body struct {
 		ConnectionID string `json:"connectionId"`
 	}
-	_ = json.Unmarshal(params, &body)
+	// 与相邻的 mcp/call、mcp/settings/set 同档：params 非法 JSON 回
+	// invalidParams，不静默按空参处理（审查修复）。
+	if err := json.Unmarshal(params, &body); err != nil {
+		return nil, invalidParams(err)
+	}
 	return h.mcpSrv.Tools(strings.TrimSpace(body.ConnectionID)), nil
 }
 

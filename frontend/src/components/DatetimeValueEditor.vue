@@ -228,7 +228,7 @@ function onZoneInput(event: Event) {
   min-width: 140px;
 }
 .is-invalid .datetime-raw {
-  border-color: var(--danger, #c0392b);
+  border-color: var(--destructive);
 }
 .datetime-time-fields {
   display: flex;

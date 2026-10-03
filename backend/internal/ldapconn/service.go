@@ -213,8 +213,10 @@ func buildLDAPURL(connHost, tlsMode string, legacyStartTLS bool) (string, bool, 
 			// 互斥冲突前置到配置解析期（dial 层保留同义兜底）：带 StartTLS 的
 			// 旧字段落在 ldaps URL 上是逻辑矛盾，保存连接时就应报错，而不是
 			// 等拨号建立后才失败。
-			if legacyStartTLS && strings.EqualFold(parsed.Scheme, "ldaps") {
-				return "", false, fmt.Errorf("startTLS cannot be combined with an ldaps url")
+			if legacyStartTLS && (strings.EqualFold(parsed.Scheme, "ldaps") || strings.EqualFold(parsed.Scheme, "ldapi")) {
+				// ldapi 同拒：unix socket 上发起 StartTLS 必败（与 dial 层守卫
+				// 对称，配置解析期就报错，审查修复）。
+				return "", false, fmt.Errorf("startTLS cannot be combined with an %s url", parsed.Scheme)
 			}
 			return connHost, legacyStartTLS, nil
 		default:

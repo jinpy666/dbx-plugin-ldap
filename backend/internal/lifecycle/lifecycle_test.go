@@ -111,7 +111,9 @@ func TestConfigGetters(t *testing.T) {
 
 func TestSecretString(t *testing.T) {
 	params := mustParse(t, fullParams)
-	if got := params.SecretString("bind_password"); got != "s3cret" {
+	// 凭据按 RFC 4513 是字节串：首尾空格合法，必须原样透传（审查修复钉死，
+	// 旧实现 trim 会静默改写密码导致难排查的 Invalid Credentials）。
+	if got := params.SecretString("bind_password"); got != " s3cret " {
 		t.Errorf("SecretString(bind_password) = %q", got)
 	}
 	if got := params.SecretString("missing"); got != "" {

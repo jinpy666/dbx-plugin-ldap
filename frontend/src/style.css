@@ -365,7 +365,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   text-align: left;
   white-space: nowrap;
 }
-.qb-attr-option:hover, .qb-attr-option:focus-visible { background: var(--accent); }
+.qb-attr-option:hover, .qb-attr-option:focus-visible, .qb-attr-option.is-highlighted { background: var(--accent); }
 .qb-value--empty { display: block; border: 1px dashed color-mix(in srgb, var(--border) 60%, transparent); border-radius: 4px; background: transparent; }
 .qb-remove { display: inline-grid; width: 22px; height: 22px; place-items: center; border: 0; border-radius: 4px; background: transparent; color: var(--muted-foreground); cursor: pointer; }
 .qb-remove:hover:not(:disabled) { background: color-mix(in srgb, var(--destructive) 16%, transparent); color: var(--destructive); }

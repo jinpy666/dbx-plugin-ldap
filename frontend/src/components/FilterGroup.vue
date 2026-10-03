@@ -95,7 +95,44 @@ function optionsFor(node: BuilderClause) {
 }
 
 function openAttributePicker(node: BuilderClause) {
-  if (!props.disabled && props.attributeOptions.length > 0) activeAttributeId.value = node.id;
+  if (!props.disabled && props.attributeOptions.length > 0) {
+    activeAttributeId.value = node.id;
+    // 重新打开时复位高亮（审查修复：键盘可达性状态不残留）。
+    if (highlightedOptionIndex.value[node.id] !== undefined) {
+      const { [node.id]: _removed, ...rest } = highlightedOptionIndex.value;
+      highlightedOptionIndex.value = rest;
+    }
+  }
+}
+
+// 键盘可达性（审查修复）：下拉打开时 ↑/↓ 高亮、Enter 选中高亮项、Escape
+// 关闭；aria-activedescendant 指向高亮项。无高亮项时 Enter 保持默认提交。
+const highlightedOptionIndex = ref<Record<string, number>>({});
+
+function onAttributeKeydown(node: BuilderClause, event: KeyboardEvent) {
+  if (activeAttributeId.value !== node.id) return;
+  const options = optionsFor(node);
+  if (options.length === 0) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeAttributePicker();
+    return;
+  }
+  const current = highlightedOptionIndex.value[node.id] ?? -1;
+  if (event.key === "Enter") {
+    if (current >= 0 && current < options.length) {
+      event.preventDefault();
+      selectAttribute(node, options[current]);
+    }
+    return;
+  }
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const next =
+    event.key === "ArrowDown"
+      ? (current + 1) % options.length
+      : (current - 1 + options.length) % options.length;
+  highlightedOptionIndex.value = { ...highlightedOptionIndex.value, [node.id]: next };
 }
 
 function closeAttributePicker() {
@@ -177,11 +214,13 @@ function onAttributeBlur() {
             role="combobox"
             :aria-expanded="activeAttributeId === node.id"
             :aria-controls="activeAttributeId === node.id ? `${listId || 'ldap-attr-options'}-${node.id}` : undefined"
+            :aria-activedescendant="activeAttributeId === node.id && (highlightedOptionIndex[node.id] ?? -1) >= 0 ? `${listId || 'ldap-attr-options'}-${node.id}-opt-${highlightedOptionIndex[node.id]}` : undefined"
             :placeholder="t('search.builderAttrPlaceholder')"
             :disabled="disabled"
             spellcheck="false"
             @focus="openAttributePicker(node)"
             @input="openAttributePicker(node)"
+            @keydown="onAttributeKeydown(node, $event)"
           />
           <div
             v-if="activeAttributeId === node.id && optionsFor(node).length > 0"
@@ -190,11 +229,14 @@ function onAttributeBlur() {
             role="listbox"
           >
             <button
-              v-for="option in optionsFor(node)"
+              v-for="(option, index) in optionsFor(node)"
+              :id="`${listId || 'ldap-attr-options'}-${node.id}-opt-${index}`"
               :key="option"
               type="button"
               class="qb-attr-option"
+              :class="{ 'is-highlighted': (highlightedOptionIndex[node.id] ?? -1) === index }"
               role="option"
+              :aria-selected="(highlightedOptionIndex[node.id] ?? -1) === index"
               @mousedown.prevent
               @click="selectAttribute(node, option)"
             >{{ option }}</button>

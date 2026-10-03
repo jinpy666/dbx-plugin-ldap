@@ -265,7 +265,7 @@ async function runCheck(seq: number) {
   }
 }
 
-// 身份查询（RFC 4532 WhoAmI）：返回服务器认可的授权身份。
+// 身份查询（RFC 4531 WhoAmI）：返回服务器认可的授权身份。
 async function runWhoami(seq: number) {
   if (!getLdapConnectionId()) return;
   whoamiState.value = { running: true };
