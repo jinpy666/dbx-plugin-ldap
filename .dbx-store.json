@@ -16,7 +16,7 @@
   "source": "https://github.com/jinpy666/dbx-plugin-ldap",
   "homepage": "https://github.com/jinpy666/dbx-plugin-ldap",
   "license": "MIT",
-  "releaseNotes": "评审收敛版（二轮复审后）：合并三轮代码审查修复并修复两轮复审发现的边界问题——会话分页截断信号透传（sizeLimit 打满页不再静默残缺）、凭据不再被静默 trim（RFC 4513 字节串语义）、批量删除/移动/修改透出首条失败原因并带忙碌反馈、忙碌路径对 JSON-RPC 通知静默、PS 过滤器 Enabled -ne 方向修正、whoami 切换连接后状态卡死、批量移动自移预检、schema 缓存在途失效竞态、过滤构建器属性下拉键盘可达（方向键/Enter/Esc）、StartTLS+LDAPS/LDAPI 组合前置拒绝、持久化写入 rename 前落盘等；CI 补 gofmt 门。含 0.1.96 全部改动。",
+  "releaseNotes": "评审收敛版（三轮复审后）：合并三轮代码审查修复并修复三轮复审发现的边界问题——会话分页截断信号透传（sizeLimit 打满页不再静默残缺）、凭据不再被静默 trim（RFC 4513 字节串语义）、树定位续载与手动加载互斥（同游标不再并发消费）、批量删除/移动/修改透出首条失败原因并带忙碌反馈、清空搜索历史改为两步确认、过滤构建器属性下拉键盘可达、忙碌路径对 JSON-RPC 通知静默、StartTLS+LDAPS/LDAPI 组合前置拒绝、本地 smoke 不再内置默认口令、打包版本提取失败即拒建等；CI 补 gofmt 门。含 0.1.96 全部改动。",
   "localizations": {
     "zh-CN": {
       "name": "LDAP Studio",
