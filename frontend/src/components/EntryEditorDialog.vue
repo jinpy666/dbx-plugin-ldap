@@ -110,6 +110,9 @@ const valueKindWarnings = ref<Array<{ attribute: string; message: string }>>([])
 // modify；取消则只关预览层、编辑原样保留。
 const changesOpen = ref(false);
 const changesLayerEl = ref<HTMLElement>();
+// 预览层关闭后的焦点归还目标：footer 保存按钮（预览层打开时焦点被移入层内，
+// 关闭后落 body 会让键盘用户从文档头重新 Tab）。
+const saveButtonEl = ref<HTMLButtonElement>();
 const pendingChanges = ref<LdapModifyChange[]>([]);
 // objectClass 选择器（chips 行「添加」）：记录目标行，选中类写回该行。
 const ocPickerOpen = ref(false);
@@ -989,6 +992,7 @@ async function confirmChanges() {
   if (saving.value || pendingChanges.value.length === 0) return;
   const changes = pendingChanges.value;
   changesOpen.value = false;
+  restoreFocusFromChangesLayer();
   saving.value = true;
   try {
     await ldapApi.entryModify(dnDraft.value, changes);
@@ -1005,6 +1009,13 @@ async function confirmChanges() {
 function cancelChanges() {
   changesOpen.value = false;
   pendingChanges.value = [];
+  restoreFocusFromChangesLayer();
+}
+
+// 预览层关闭后把焦点还给 footer 保存按钮：aria-modal 层拿走过焦点，关闭后
+// 落 body 会让键盘用户从文档头重新 Tab（审查修复）。
+function restoreFocusFromChangesLayer() {
+  void nextTick(() => saveButtonEl.value?.focus());
 }
 
 const title = computed(() => (props.loading || props.loadError
@@ -1280,7 +1291,7 @@ function onAssociationRelation(dn: string, attribute?: string) {
         </button>
         <button type="button" @click="emit('close')">{{ isRelationPresentation ? t("close") : t("cancel") }}</button>
         <!-- 关联页签是只读视图：保存等编辑动作一并隐藏，仅保留取消（关闭）。 -->
-        <button v-if="canWrite && editorTab !== 'assoc' && !loading && !loadError" type="button" class="primary-button" :disabled="!editable || rdnInvalid || parentInvalid || missingRequired.length > 0" @click="save">
+        <button v-if="canWrite && editorTab !== 'assoc' && !loading && !loadError" ref="saveButtonEl" type="button" class="primary-button" :disabled="!editable || rdnInvalid || parentInvalid || missingRequired.length > 0" @click="save">
           {{ saving ? "…" : t("save") }}
         </button>
       </footer>

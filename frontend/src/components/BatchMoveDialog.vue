@@ -41,7 +41,10 @@ const doomedTarget = computed(() => {
   if (!target || targetInvalid.value) return false;
   const targetLower = target.toLowerCase();
   for (const dn of props.dns) {
-    if (dnWithinBase(target, dn) && targetLower !== dn.toLowerCase()) return true;
+    // dnWithinBase 含相等：目标是所选条目自身（newSuperior=自身 DN 服务器
+    // 必败）与位于其子树内合并为同一分支，与 doomedTarget 文案口径一致
+    //（审查修复：此前显式排除相等导致自移形态漏拦）。
+    if (dnWithinBase(target, dn)) return true;
     if (splitFirstDnRdn(dn).parentDn.toLowerCase() === targetLower) return true;
   }
   return false;

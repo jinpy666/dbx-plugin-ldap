@@ -14,6 +14,11 @@
  *   ?panel=1            bottom-dock log panel fixture: surface=panel +
  *                       plugin.mode=logs context, ldap/log/tail 回填夹具数据，
  *                       并周期性推送 ldap/log 事件（LogPanelView 视觉验证）
+ *
+ * 语义同步义务：ui-walkthrough CI 跑的是本 mock，凡涉 sidecar 行为语义的
+ * 夹具（countChildren 截断、compare 任一值命中、audit result 三值等）修改
+ * 时必须引用对应 backend 测试名（同 PR 内对齐），mock 与 Go 实现漂移会让
+ * CI 全绿而真实行为分叉。
  */
 import "./style.css";
 import { dnWithinBase, parseRdnAttributes, splitFirstDnRdn } from "./lib/dn";

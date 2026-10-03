@@ -59,6 +59,15 @@ describe("PS Filter conversion", () => {
     expect(convertPsFilter("Enabled -eq $false", [])).toBe("(userAccountControl:1.2.840.113556.1.4.803:=2)");
   });
 
+  it("keeps -ne variants semantically correct on the UAC disabled bit", () => {
+    // 审查修复钉死：断言值与操作符一起决定方向——`-ne "True"` = 非启用 =
+    // 禁用（此前只看断言值会产出语义反转的结果集）。
+    expect(convertPsFilter('Enabled -ne "True"', [])).toBe("(userAccountControl:1.2.840.113556.1.4.803:=2)");
+    expect(convertPsFilter('Enabled -ne "False"', [])).toBe("(!(userAccountControl:1.2.840.113556.1.4.803:=2))");
+    expect(convertPsFilter("Enabled -ne $true", [])).toBe("(userAccountControl:1.2.840.113556.1.4.803:=2)");
+    expect(convertPsFilter("Enabled -ne $false", [])).toBe("(!(userAccountControl:1.2.840.113556.1.4.803:=2))");
+  });
+
   it("downgrades -gt/-lt with a note via negated fallback", () => {
     const notes: string[] = [];
     expect(convertPsFilter("badPwdCount -gt 3", notes)).toBe("(!(badPwdCount<=3))");

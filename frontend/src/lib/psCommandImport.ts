@@ -216,7 +216,11 @@ function parsePsFilterExpression(
       const lowered = value.toLowerCase();
       if (lowered === "$true" || lowered === "true" || lowered === "$false" || lowered === "false") {
         const disabled = "(userAccountControl:1.2.840.113556.1.4.803:=2)";
-        return { filter: lowered === "$true" || lowered === "true" ? `(!${disabled})` : disabled, notes };
+        // 断言值与操作符一起决定方向：`Enabled -ne "True"` = 非启用 = 禁用，
+        // 不能只看断言值否则 -ne 变体会产出语义反转的结果集（审查修复）。
+        const assertedTrue = lowered === "$true" || lowered === "true";
+        const accountEnabled = assertedTrue !== (spec.op === "!=");
+        return { filter: accountEnabled ? `(!${disabled})` : disabled, notes };
       }
     }
     // -like/-notlike 家族保留 `*` 通配语义；其余（-eq 精确匹配等）转义为字面量

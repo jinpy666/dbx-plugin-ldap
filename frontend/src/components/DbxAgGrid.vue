@@ -181,7 +181,14 @@ function onMenuKeydown(event: KeyboardEvent) {
 }
 
 function onDocumentKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") closeContextMenu();
+  if (event.key !== "Escape") return;
+  // 菜单内 Escape 走 onMenuKeydown（含焦点归还），这里只兜焦点在菜单外的
+  // 文档级路径：同样把焦点还给触发元素，键盘打开菜单后不至于落回 body
+  //（审查修复）。
+  if (contextMenuEl.value?.contains(event.target as Node)) return;
+  const restore = contextMenuTrigger;
+  closeContextMenu();
+  restore?.focus({ preventScroll: true });
 }
 
 /** 行选择配置：multiRow 复选框仅在前缀态结束后可用（selection 选项与

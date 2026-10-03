@@ -74,6 +74,25 @@ describe("BatchMoveDialog", () => {
     expect(wrapper.emitted("confirm")![0]).toEqual([TARGET]);
   });
 
+  it("blocks doomed targets: inside a selected subtree, the entry itself, or its current parent", async () => {
+    // 审查修复钉死：自移形态（目标 = 所选条目自身 DN，newSuperior=自身 服务器
+    // 必败）与子树内、原地移动同拦，与 doomedTarget 文案口径一致。
+    const wrapper = trackDialog({ open: true, dns: DNS });
+    // 所选条目自身（大小写不敏感；此前被显式排除而漏拦）
+    await typeTarget(wrapper, "CN=alice,dc=demo,dc=dbx");
+    expect(wrapper.find(".target-input").attributes("aria-invalid")).toBe("false");
+    expect(confirmButton(wrapper).attributes("disabled")).toBeDefined();
+    // 所选条目的子树内
+    await typeTarget(wrapper, "ou=staff,cn=alice,dc=demo,dc=dbx");
+    expect(confirmButton(wrapper).attributes("disabled")).toBeDefined();
+    // 某条目的当前父 DN（原地移动）
+    await typeTarget(wrapper, "dc=demo,dc=dbx");
+    expect(confirmButton(wrapper).attributes("disabled")).toBeDefined();
+    // 合法目标（兄弟 OU）：确认可用。
+    await typeTarget(wrapper, "ou=people,dc=demo,dc=dbx");
+    expect(confirmButton(wrapper).attributes("disabled")).toBeUndefined();
+  });
+
   it("truncates the entry list at 20 rows with a +N overflow marker", async () => {
     const dns = Array.from({ length: 23 }, (_, index) => `cn=user${index},dc=demo,dc=dbx`);
     const wrapper = trackDialog({ open: true, dns });

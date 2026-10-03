@@ -233,7 +233,14 @@ function parsePsBlock(block: string[]): PsProperty[] {
       // PS 集合的元素分隔符是 ", "（逗号+空格）。只按 ", " 切分：任一片段
       // 仍含裸逗号即 DN 值形态（如 member 的 `CN=a,DC=x, CN=b,DC=y`），
       // 继续按逗号切会把 DN 拆碎——整串保留，不静默改写数据。
-      const parts = inner.split(/,\s+/u).filter(Boolean);
+      let parts = inner.split(/,\s+/u).filter(Boolean);
+      if (parts.some((part) => part.includes(","))) {
+        // 例外：紧排字节数组（`{11,22,33,…}` 无空格）不该因保 DN 而整串
+        // 滞留（那样 convertPsValue 的 ≥8 字节 base64 转换不再触发）——仅当
+        // 整串按裸逗号切出的片段全为纯整数时回退切分，DN 形态不受影响。
+        const terse = inner.split(",").map((piece) => piece.trim()).filter(Boolean);
+        if (terse.length > 0 && terse.every((piece) => /^\d{1,3}$/u.test(piece))) parts = terse;
+      }
       property.values = inner === "" ? [] : parts.some((part) => part.includes(",")) ? [inner] : parts;
     } else {
       property.values = joined === "" ? [] : [joined];

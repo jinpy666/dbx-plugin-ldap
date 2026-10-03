@@ -998,6 +998,9 @@ func pagedSearchEntries(conn *ldap.Conn, searchReq *ldap.SearchRequest, pageSize
 	var referrals []string
 	truncated := false
 	sortResult := 0
+	// lastCookie 记录最近一次成功响应给出的非空分页 cookie（与写入
+	// pagingControl 的值同步），错误路径的放弃请求要用它。
+	var lastCookie []byte
 	collectReferrals := func(uris []string) {
 		for _, uri := range uris {
 			if len(referrals) >= maxReportedReferrals {
@@ -1009,6 +1012,16 @@ func pagedSearchEntries(conn *ldap.Conn, searchReq *ldap.SearchRequest, pageSize
 	for {
 		result, err := conn.Search(searchReq)
 		if err != nil {
+			// 错误路径的放弃（与下方截断路径同源）：多页中途出错时，服务端
+			// 在共享连接回退路径（withDedicatedConn 失败回退 WithConn）上仍
+			// 持有分页结果集——按 RFC 2696 发一次 pageSize=0 + 最近 cookie
+			// 的放弃，尽力而为，失败不掩盖原错误。首页即错没有 cookie，
+			// 服务端侧不存在已开的结果集。
+			if len(lastCookie) > 0 {
+				pagingControl.PagingSize = 0
+				pagingControl.SetCookie(lastCookie)
+				_, _ = conn.Search(searchReq)
+			}
 			return entries, referrals, truncated, sortResult, err
 		}
 		entries = append(entries, result.Entries...)
@@ -1047,6 +1060,7 @@ func pagedSearchEntries(conn *ldap.Conn, searchReq *ldap.SearchRequest, pageSize
 		if received == nil || len(received.Cookie) == 0 {
 			return entries, referrals, truncated, sortResult, nil
 		}
+		lastCookie = received.Cookie
 		pagingControl.SetCookie(received.Cookie)
 	}
 }

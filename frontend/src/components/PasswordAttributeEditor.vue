@@ -101,10 +101,12 @@ const toggleShow = () => {
 
 // 提交：扩展模式走 RFC 3062 passwdModify；默认模式本地哈希后回写存储值。
 // 输入即清空，明文不留在组件状态里。
-// IME 组合态（日文/中文输入法提交候选词）的 Enter 不触发 apply——
-// isComposing 时 keyup 仍会带着组合前的旧值进来。
+// IME 组合态（日文/中文输入法提交候选词）的 Enter 不触发 apply。守卫挂在
+// keydown 上：候选确认的 Enter 在 Chrome/Firefox 的 keyup 阶段 isComposing
+// 已复位，keyup 守卫拦不住；keydown 阶段 isComposing 仍为 true（或 keyCode
+// 229），两判齐用（审查修复）。
 const onEnter = (event: KeyboardEvent) => {
-  if (event.isComposing) return;
+  if (event.isComposing || event.keyCode === 229) return;
   void apply();
 };
 
@@ -192,7 +194,7 @@ async function applyExtended() {
           autocomplete="new-password"
           spellcheck="false"
           :disabled="disabled"
-          @keyup.enter="onEnter"
+          @keydown.enter="onEnter"
         />
         <button
           type="button"
@@ -216,7 +218,7 @@ async function applyExtended() {
         autocomplete="new-password"
         spellcheck="false"
         :disabled="disabled"
-        @keyup.enter="onEnter"
+        @keydown.enter="onEnter"
       />
       <span v-if="confirmMismatch" class="form-error password-confirm-error" role="alert">{{ t("ldap.passwordEditor.confirmMismatch") }}</span>
     </label>

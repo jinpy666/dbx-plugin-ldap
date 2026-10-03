@@ -444,23 +444,35 @@ export function useLdapSchemaCache(): SchemaCacheView {
             } catch (err) {
                 sharedError.value = err;
                 throw err;
-            } finally {
-                sharedInFlight.delete(key);
-                if (sharedInFlight.size === 0) sharedLoading.value = false;
             }
         })();
         sharedInFlight.set(key, pending);
+        // 槽位保护 + loading 收尾都挂自身清理链（settle 后运行，此刻 pending
+        // 已赋值）：invalidate 摘除后同 key 可能已有新拉取在途，旧拉取只清理
+        // 仍属于它的槽位，误删会让并发视图重复起拉取、loading 抖动。拒绝沿用
+        // pending 本身上抛给等待方，这里只兜清理链自身的拒绝。
+        void pending
+            .finally(() => {
+                if (sharedInFlight.get(key) === pending) sharedInFlight.delete(key);
+                if (sharedInFlight.size === 0) sharedLoading.value = false;
+            })
+            .catch(() => {});
         return pending.then((payload) => settle(key, payload));
     };
 
     const invalidate = (connectionId?: string) => {
         // 代际推进：让发起于本次失效之前的在途拉取在 resolve 时放弃写回。
         sharedCacheGeneration++;
+        // 同步摘除在途 promise：失效到旧拉取 settle 之间的 ensureLoaded 不再
+        // 复联旧 promise（否则命中 pre-invalidate 数据且不落缓存，面板刷新
+        // 后首屏陈旧，审查修复）。旧拉取最终 settle 只清理仍属于它的槽位。
         if (connectionId == null) {
             sharedCache.clear();
+            sharedInFlight.clear();
             return;
         }
         sharedCache.delete(String(connectionId));
+        sharedInFlight.delete(String(connectionId));
     };
 
     const clear = () => {

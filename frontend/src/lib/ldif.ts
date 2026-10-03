@@ -173,10 +173,11 @@ function unfoldLines(text: string): UnfoldedLine[] {
     return out
 }
 
-/** 合法属性名：descr（字母开头 + 字母/数字/连字符）或 OID，可带 `;option`
+/** 合法属性名：descr（字母开头 + 字母/数字/连字符）或 OID（RFC 4512
+ *  numericoid 要求至少一个 `.`，与 ldapFilter 的口径一致），可带 `;option`
  * 段（RFC 2849 attr-type 形态）。文件首行带前导空格、名字里混空格这类
  * 畸形输入此前被静默接受，一路传到服务器才报出难排查的错误。 */
-const LDIF_ATTR_NAME_RE = /^(?:[A-Za-z][A-Za-z0-9-]*|[0-9]+(?:\.[0-9]+)*)(?:;[A-Za-z0-9-]+)*$/
+const LDIF_ATTR_NAME_RE = /^(?:[A-Za-z][A-Za-z0-9-]*|[0-9]+(?:\.[0-9]+)+)(?:;[A-Za-z0-9-]+)*$/
 
 /**
  * Parse a single `name: value` or `name:: base64` LDIF line.

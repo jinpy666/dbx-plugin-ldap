@@ -228,6 +228,28 @@ describe("useLdapSchemaCache 共享缓存视图 (J-8)", () => {
     expect(calls).toEqual(["conn-1", "conn-2", "conn-1", "conn-1", "conn-2"]);
   });
 
+  it("在途拉取途中 invalidate：旧响应不写回缓存，后续加载重拉落地新数据", async () => {
+    // 审查修复钉死：失效同步摘除在途 promise——失效到旧拉取 settle 之间的
+    // ensureLoaded 不再复联旧 promise（那会拿到 pre-invalidate 数据且不落
+    // 缓存），代际守卫同时拦住旧响应写回。
+    let release!: (value: Partial<SchemaMetadata>) => void;
+    let calls = 0;
+    setSchemaLoaderForTests(() => {
+      calls += 1;
+      if (calls === 1) return new Promise<Partial<SchemaMetadata>>((resolve) => (release = resolve));
+      return Promise.resolve({ ...BASE, attributeNames: ["fresh"] });
+    });
+    const view = useLdapSchemaCache();
+    const first = view.ensureLoaded("conn-1"); // 在途（sharedInFlight 已注册）
+    view.invalidate("conn-1");
+    release({ ...BASE });
+    await first; // 旧响应被代际守卫丢弃，不落缓存
+    const fresh = await view.ensureLoaded("conn-1"); // 必须真实重拉
+    expect(calls).toBe(2);
+    expect(fresh?.attributeNames).toEqual(["fresh"]);
+    expect(view.attributeNames.value).toEqual(["fresh"]);
+  });
+
   it("loader 失败置 error 且不落缓存；恢复后可重试", async () => {
     let fail = true;
     setSchemaLoaderForTests(async () => {

@@ -12,7 +12,12 @@ workflow:
     integration: [review]
     verification: [integration]
 ownership:
-  contract: [manifest.json, docs/PROTOCOL.zh-CN.md]
+  # 协议契约没有独立文档（原 docs/PROTOCOL.zh-CN.md 自仓库创建起不存在）：
+  # 方法面真值在 backend/internal/mcp/server.go，前端 API 形状在
+  # frontend/src/lib/api.ts 与 shared/frontend/uiIntent.ts，审计 result 三值
+  # 口径见 docs/PROGRESS-P-LDAP.zh-CN.md。contract 所有权只列真实存在的
+  # 共享文件，避免 contract 阶段守幽灵文件。
+  contract: [manifest.json]
   backend: [backend/]
   frontend: [frontend/, manifest.json]
   tests: [scripts/]

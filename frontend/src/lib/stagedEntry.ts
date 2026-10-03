@@ -47,13 +47,19 @@ export function chunkEntryAttributes(names: string[], size = ENTRY_ATTRIBUTE_BAT
 
 /** Case-insensitive attribute union; keep the spelling from the newest read. */
 export function mergeEntryAttributes(current: LdapEntry | undefined, next: LdapEntry): LdapEntry {
-  if (!current) return { dn: next.dn, attributes: { ...next.attributes } };
-  // 值数组逐键拷贝：浅拷 map 后未覆盖的数组与源条目共享引用，原地改会串数据。
+  // 值数组逐键拷贝：浅拷后未覆盖的数组与源条目共享引用，原地改会串数据。
+  // sidecar 运行时 JSON 的值可能不是数组，容错为空数组而非抛 TypeError。
+  const copyValues = (values: unknown): string[] => [...(Array.isArray(values) ? values : [])];
+  if (!current) {
+    const attributes: Record<string, string[]> = {};
+    for (const [key, values] of Object.entries(next.attributes)) attributes[key] = copyValues(values);
+    return { dn: next.dn, attributes };
+  }
   // 小写键索引替代每键全量线性扫（属性数上百的 staged read 逐批叠加变慢）。
   const attributes: Record<string, string[]> = {};
   const byLower = new Map<string, string>();
   for (const [key, values] of Object.entries(current.attributes)) {
-    attributes[key] = [...values];
+    attributes[key] = copyValues(values);
     if (!byLower.has(key.toLowerCase())) byLower.set(key.toLowerCase(), key);
   }
   for (const [name, values] of Object.entries(next.attributes)) {
@@ -62,7 +68,7 @@ export function mergeEntryAttributes(current: LdapEntry | undefined, next: LdapE
       delete attributes[oldName];
       byLower.delete(oldName.toLowerCase());
     }
-    attributes[name] = [...values];
+    attributes[name] = copyValues(values);
     byLower.set(name.toLowerCase(), name);
   }
   return { dn: next.dn || current.dn, attributes };

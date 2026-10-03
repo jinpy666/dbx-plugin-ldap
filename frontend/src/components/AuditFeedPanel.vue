@@ -1,8 +1,8 @@
 // 审计事件面板：最近 `ldap/audit` 事件的工作台可视化（§11.2 候选）。
 // 数据面在 App.vue（handleEvent → lib/auditFeed 纯函数），本组件纯展示：
-// - 头部常驻：事件总数 + denied/error 计数徽标（denied 高亮为 destructive）
-// - 列表折叠可展开；denied 事件到达（含初始列表）时自动展开保证可见，
-//   error 仅徽标高亮不展开
+// - 头部常驻：事件总数 + denied 计数徽标（destructive 高亮）；error 不聚合，
+//   仅在展开后的逐条徽标可见
+// - 列表折叠可展开；denied 事件到达（含初始列表）时自动展开保证可见
 // - 清空按钮由父级处理（App.vue 持有列表状态）
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";

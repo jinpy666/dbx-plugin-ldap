@@ -16,8 +16,10 @@
 import { splitFirstDnRdn } from "./dn";
 import { builtinAttributeInfo } from "./builtinSchema";
 
-/** 密码类属性：哈希不可复用（ADS PasswordValueEditor 亦不允许复制既有哈希）。 */
-const NON_COPYABLE_PASSWORDS = new Set(["userpassword", "unicodepwd", "userpassword;binary"]);
+/** 密码类属性：哈希不可复用（ADS PasswordValueEditor 亦不允许复制既有哈希）。
+ *  只列裸属性名：匹配前 name 已按 `;` 截掉 option 段（见 isPasswordAttribute），
+ *  带 option 的键永远命不中，属死条目不写。 */
+const NON_COPYABLE_PASSWORDS = new Set(["userpassword", "unicodepwd"]);
 
 /** 系统/操作属性名（小写）；RDN 属性即便命中也按 RDN 规则单独处理。
  *  distinguishedName/name/dSCorePropagationData/isCriticalSystemObject 来自

@@ -69,6 +69,53 @@ func TestStdioRobustNotificationSilence(t *testing.T) {
 	}
 }
 
+// S-STDIO-R2b 忙碌分支（-32000）回包决策：带 id 回显请求 id；无 id 的
+// notifications/* 通知静默（JSON-RPC 2.0 MUST NOT reply，审查修复钉死）；
+// 缺 id 非通知与坏 JSON 按 null id 回忙碌错误。
+func TestStdioRobustBusyReply(t *testing.T) {
+	// 带 id：-32000 + id 回显。
+	payload, silent := busyReplyFor([]byte(`{"jsonrpc":"2.0","id":"busy-1","method":"ping"}`))
+	if silent {
+		t.Fatal("id request under load must be answered")
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got := errorOf(t, decoded); got == nil || got["code"] != float64(-32000) {
+		t.Fatalf("busy reply must carry -32000: %v", decoded)
+	}
+	if decoded["id"] != "busy-1" {
+		t.Fatalf("busy reply must echo request id: %v", decoded)
+	}
+	// 无 id 通知：静默（不回包）。
+	for name, line := range map[string]string{
+		"initialized":    `{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		"unknown-notify": `{"jsonrpc":"2.0","method":"notifications/custom/x","params":{"a":1}}`,
+	} {
+		if _, silent := busyReplyFor([]byte(line)); silent != true {
+			t.Fatalf("%s under load must stay silent", name)
+		}
+	}
+	// 缺 id 非通知 / 坏 JSON：null id 忙碌错误（可回包、可关联性降级）。
+	for name, line := range map[string]string{
+		"missing-id": `{"jsonrpc":"2.0","method":"ping"}`,
+		"garbage":    `not json`,
+	} {
+		payload, silent := busyReplyFor([]byte(line))
+		if silent {
+			t.Fatalf("%s under load must still be answered (null id)", name)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(payload, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := json.Marshal(decoded["id"]); string(got) != "null" {
+			t.Fatalf("%s: busy reply without id must carry null id: %s", name, got)
+		}
+	}
+}
+
 // S-STDIO-R3 请求形状分档（对照 MCP_ACCEPTANCE §2）：缺 id / id 为 object/
 // array/布尔 / method 缺失或非字符串 / jsonrpc 版本非法 → 全部 -32600 结构化
 // 报错（不崩、不 -32700 误档）；显式 "id":null 是合法请求；每条之后 ping
@@ -87,6 +134,9 @@ func TestStdioRobustRequestShapes(t *testing.T) {
 		"jsonrpc-wrong":  `{"jsonrpc":"1.0","id":1,"method":"ping"}`,
 		"jsonrpc-number": `{"jsonrpc":2.0,"id":1,"method":"ping"}`,
 		"empty-body":     `{}`,
+		// JSON 合法但形状是数组（JSON-RPC 批处理，MCP 不支持）→ -32600 而非
+		// -32700（审查修复钉死：合法 JSON 的结构非法走 Invalid Request 档）。
+		"batch-array": `[{"jsonrpc":"2.0","id":1,"method":"ping"}]`,
 	} {
 		decoded := decodeResponse(t, server.handleLine([]byte(line)))
 		mustErrCode(t, decoded, -32600)

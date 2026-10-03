@@ -108,6 +108,18 @@ func TestSettingsUpdateWhitelistAndClamp(t *testing.T) {
 	if _, err := applySettingsUpdate(updated, map[string]any{"cursorTtlSecs": "long"}); err == nil {
 		t.Fatal("non-numeric cursorTtlSecs must be rejected")
 	}
+	// confirmTtlSecs 的 floor=10（与 Sanitized 同源）：低于下限直接拒绝
+	//（不是收 1 再被 Sanitized 悄悄抬回 10），小数同样拒绝（不静默截断）。
+	if _, err := applySettingsUpdate(updated, map[string]any{"confirmTtlSecs": float64(5)}); err == nil {
+		t.Fatal("confirmTtlSecs below floor must be rejected")
+	}
+	if _, err := applySettingsUpdate(updated, map[string]any{"confirmTtlSecs": 5.9}); err == nil {
+		t.Fatal("non-integer confirmTtlSecs must be rejected (no silent truncation)")
+	}
+	floored, err := applySettingsUpdate(updated, map[string]any{"confirmTtlSecs": float64(10)})
+	if err != nil || floored.ConfirmTtlSecs != 10 {
+		t.Fatalf("confirmTtlSecs at floor must be accepted: %+v err=%v", floored, err)
+	}
 }
 
 func TestSettingsPersistRoundtrip(t *testing.T) {

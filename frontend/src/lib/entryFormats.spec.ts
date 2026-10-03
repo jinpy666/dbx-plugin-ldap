@@ -139,6 +139,15 @@ describe("parseEntriesFromText (ps-format-list path)", () => {
     const result = parseEntriesFromText(`DistinguishedName : CN=a,DC=x\nThumbnail : ${dump}\n`);
     expect(result.entries[0].attributes.Thumbnail).toEqual([bytesToBase64(bytes)]);
   });
+
+  it("still splits terse comma-packed byte arrays into base64", () => {
+    // 审查修复钉死：DN 保全规则（片段含裸逗号整串保留）不吞掉紧排字节数组
+    //（`{11,22,33,…}` 无空格）——全整数片段回退按裸逗号切分。
+    const bytes = Uint8Array.from([1, 5, 0, 0, 0, 5, 21, 0, 0, 0]);
+    const dump = `{${bytes.join(",")}}`;
+    const result = parseEntriesFromText(`DistinguishedName : CN=a,DC=x\nThumbnail : ${dump}\n`);
+    expect(result.entries[0].attributes.Thumbnail).toEqual([bytesToBase64(bytes)]);
+  });
 });
 
 describe("parsePowerShellFormatList (Quest Get-QAD shapes)", () => {

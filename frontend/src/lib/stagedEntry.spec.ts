@@ -17,4 +17,22 @@ describe("staged entry helpers", () => {
       { dn: "cn=a", attributes: { cn: ["new"], mail: ["a@example.test"] } },
     )).toEqual({ dn: "cn=a", attributes: { uid: ["a"], cn: ["new"], mail: ["a@example.test"] } });
   });
+
+  it("deep-copies value arrays even when merging into an empty base", () => {
+    // 审查修复钉死：无基线的早退分支同样逐键拷贝，合并结果与源条目不得
+    // 共享数组引用（原地改会串数据）。
+    const source = { dn: "cn=a", attributes: { cn: ["a"], objectClass: ["top", "person"] } };
+    const merged = mergeEntryAttributes(undefined, source);
+    merged.attributes.objectClass.push("user");
+    expect(source.attributes.objectClass).toEqual(["top", "person"]);
+  });
+
+  it("tolerates non-array attribute values from the wire instead of throwing", () => {
+    // sidecar 运行时 JSON 的值类型不受 TS 契约保护：非数组容错为空数组。
+    const merged = mergeEntryAttributes(undefined, {
+      dn: "cn=a",
+      attributes: { weird: null as unknown as string[] },
+    });
+    expect(merged.attributes.weird).toEqual([]);
+  });
 });

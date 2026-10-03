@@ -74,6 +74,11 @@ const maxRequestLineBytes = 16 << 20
 // 把内存压力换成延迟压力），进程继续服务后续请求。
 const maxConcurrentRequests = 32
 
+// bridgeForwardTimeout 桥转发调用的缺省与上界超时（forwardViaBridge 的
+// clamp 5s–bridgeForwardTimeout 与 EOF 后 drain 等待都从这里取值，消除
+// 「在途桥调用恰在上界、drain 恰在同值」的巧合边界）。
+const bridgeForwardTimeout = 300 * time.Second
+
 // StdioServer 独立 stdio 模式的 MCP 服务器：包装工具面 Server + 内联凭据
 // 连接池 + DBX 桥转发兜底。并发安全（每请求一个 goroutine）。
 type StdioServer struct {
@@ -140,21 +145,14 @@ serveLoop:
 			case sem <- struct{}{}:
 			default:
 				// 在途请求已达上限（SEC-005）：同步回忙碌错误，不排队。
-				// id 尽力回显：行内容可用时提取，让宿主能把 -32000 关联到请求。
-				requestID := json.RawMessage("null")
-				var probe struct {
-					ID json.RawMessage `json:"id"`
+				// 回包决策（id 回显 + 通知静默）见 busyReplyFor。
+				if payload, silent := busyReplyFor(line); !silent {
+					writeMu.Lock()
+					if _, werr := out.Write(append(payload, '\n')); werr != nil {
+						log.Printf("mcp stdio: response write failed (host closed stdout?): %v", werr)
+					}
+					writeMu.Unlock()
 				}
-				if json.Unmarshal(line, &probe) == nil && len(probe.ID) > 0 {
-					requestID = probe.ID
-				}
-				payload, _ := json.Marshal(rpcFailure(requestID, -32000,
-					fmt.Sprintf("Server busy: more than %d requests in flight", maxConcurrentRequests)))
-				writeMu.Lock()
-				if _, werr := out.Write(append(payload, '\n')); werr != nil {
-					log.Printf("mcp stdio: response write failed (host closed stdout?): %v", werr)
-				}
-				writeMu.Unlock()
 				if err == nil {
 					continue serveLoop
 				}
@@ -199,9 +197,36 @@ serveLoop:
 	}()
 	select {
 	case <-drained:
-	case <-time.After(300 * time.Second):
+	// EOF 后在途请求最迟在「桥 ensure 预算 + 转发上界」内收尾，再留少量
+	// 余量——等待上界与转发上界同源取值，不再靠两个 300s 恰好相等。
+	case <-time.After(s.bridgeEnsureWait + bridgeForwardTimeout + 5*time.Second):
 	}
 	return nil
+}
+
+// busyReplyFor 忙碌分支的回包决策（纯函数，单测直接喂行）：
+//   - 带 id 的请求：-32000 忙碌错误并回显请求 id，宿主能关联到具体请求；
+//   - 无 id 的 notifications/* 通知：静默丢弃——JSON-RPC 2.0 规定 MUST NOT
+//     reply to a Notification，与 handleLine 的通知静默契约对齐（审查修复，
+//     勿回退为无条件回包）；
+//   - 其余（缺 id 的畸形请求、坏 JSON）：按 null id 回忙碌错误，与
+//     handleLine 对无法关联响应的输入回 null id 的口径一致。
+func busyReplyFor(line []byte) (payload []byte, silent bool) {
+	requestID := json.RawMessage("null")
+	var probe struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+	}
+	if json.Unmarshal(line, &probe) == nil {
+		if len(probe.ID) > 0 {
+			requestID = probe.ID
+		} else if strings.HasPrefix(probe.Method, "notifications/") {
+			return nil, true
+		}
+	}
+	payload, _ = json.Marshal(rpcFailure(requestID, -32000,
+		fmt.Sprintf("Server busy: more than %d requests in flight", maxConcurrentRequests)))
+	return payload, false
 }
 
 // readBoundedLine 边读边限地读一行：累计字节一超过 maxRequestLineBytes 立即
@@ -553,13 +578,13 @@ func (s *StdioServer) forwardViaBridge(connectionID, name string, args map[strin
 	if err != nil {
 		return nil, err
 	}
-	timeout := 300 * time.Second
+	timeout := bridgeForwardTimeout
 	if secs := intArg(args["timeoutSecs"]); secs > 0 {
 		if secs < 5 {
 			secs = 5
 		}
-		if secs > 300 {
-			secs = 300
+		if secs > int(bridgeForwardTimeout/time.Second) {
+			secs = int(bridgeForwardTimeout / time.Second)
 		}
 		timeout = time.Duration(secs) * time.Second
 	}
@@ -670,6 +695,11 @@ type inlineConn struct {
 	ReadOnly          bool   `json:"readOnly,omitempty"`
 }
 
+// credentialArgKeys 内联凭据键的唯一真源：parseInlineConn 的认领与
+// stripCredentialArgs 的剥离都必须出自这里——新增凭据字段时漏改任何一侧，
+// 都会把凭据送上明文回环 HTTP 或让它进不了池化路径（审查修复）。
+var credentialArgKeys = []string{"password", "bindPassword", "ntlmHash"}
+
 // parseInlineConn 从工具参数提取内联连接参数（startTls 是 tlsMode=starttls
 // 的便捷别名；password 接受 bindPassword 别名）。present = host 非空。
 func parseInlineConn(args map[string]any) (inlineConn, bool) {
@@ -681,7 +711,7 @@ func parseInlineConn(args map[string]any) (inlineConn, bool) {
 		BindDN:            firstNonEmptyArg(args, "bindDn"),
 		Username:          firstNonEmptyArg(args, "username"),
 		Domain:            firstNonEmptyArg(args, "domain"),
-		Password:          firstNonEmptyArg(args, "password", "bindPassword"),
+		Password:          firstNonEmptyArg(args, credentialArgKeys...),
 		NTLMHash:          firstNonEmptyArg(args, "ntlmHash"),
 		BaseDN:            firstNonEmptyArg(args, "baseDn"),
 		TLSCAPath:         firstNonEmptyArg(args, "tlsCaPath"),
@@ -705,10 +735,13 @@ func parseInlineConn(args map[string]any) (inlineConn, bool) {
 // 连接库按 connectionId 解析；无 host 的孤儿凭据参数（parseInlineConn 不
 // 认领）不该流经明文回环 HTTP，也进不了池化路径，剥掉即 fail-closed。
 func stripCredentialArgs(args map[string]any) map[string]any {
+	credentialKeys := make(map[string]struct{}, len(credentialArgKeys))
+	for _, key := range credentialArgKeys {
+		credentialKeys[key] = struct{}{}
+	}
 	forwarded := make(map[string]any, len(args))
 	for key, value := range args {
-		switch key {
-		case "password", "bindPassword", "ntlmHash":
+		if _, sensitive := credentialKeys[key]; sensitive {
 			continue
 		}
 		forwarded[key] = value

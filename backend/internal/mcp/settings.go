@@ -9,6 +9,7 @@ package mcp
 
 import (
 	"fmt"
+	"math"
 
 	"io.dbx.ldap.plugin/internal/store"
 )
@@ -72,27 +73,34 @@ func DefaultSettings() Settings {
 	}
 }
 
-// settingsField 声明一个可 set 字段的取值边界（1..ceiling）。
+// confirmTtlSecsFloor confirmTtlSecs 的收敛下限（files 同款：过短的 token
+// TTL 只有误配价值）。settingsFields 与 Sanitized 都从这里取值，避免
+// 「设置成功」的值与实际生效值不一致。
+const confirmTtlSecsFloor = 10
+
+// settingsField 声明一个可 set 字段的取值边界（floor..ceiling）。
 type settingsField struct {
 	name    string
 	ceiling int
+	floor   int
 }
 
 // settingsFields mcp/settings/set 的白名单字段表：不在表内的字段一律拒绝
-// （白名单而非黑名单，对齐 ssh settings_set 语义）。
+// （白名单而非黑名单，对齐 ssh settings_set 语义）。floor 与 Sanitized 的
+// 收敛下限同源（confirmTtlSecs 用共享常量，其余为 1）。
 var settingsFields = []settingsField{
-	{"reportWaitMs", 30000},
-	{"cellWidth", 2000},
-	{"digestGroupLimit", 20},
-	{"digestTopN", 10},
-	{"digestSampleRows", 5},
-	{"digestRowLimit", 20},
-	{"digestScanLimit", 100000},
-	{"maxCursorRows", 100000},
-	{"cursorTtlSecs", 3600},
-	{"maxCursorSessions", 32},
-	{"confirmTtlSecs", 600},
-	{"responseLimitBytes", 1024 * 1024},
+	{"reportWaitMs", 30000, 1},
+	{"cellWidth", 2000, 1},
+	{"digestGroupLimit", 20, 1},
+	{"digestTopN", 10, 1},
+	{"digestSampleRows", 5, 1},
+	{"digestRowLimit", 20, 1},
+	{"digestScanLimit", 100000, 1},
+	{"maxCursorRows", 100000, 1},
+	{"cursorTtlSecs", 3600, 1},
+	{"maxCursorSessions", 32, 1},
+	{"confirmTtlSecs", 600, confirmTtlSecsFloor},
+	{"responseLimitBytes", 1024 * 1024, 1},
 }
 
 // Sanitized 把每个字段收敛进 1..上限（加载与 set 后都执行，越界配置不可达）。
@@ -116,8 +124,8 @@ func (s Settings) Sanitized() Settings {
 	s.MaxCursorRows = clamp(s.MaxCursorRows, 100000)
 	s.CursorTtlSecs = clamp(s.CursorTtlSecs, 3600)
 	s.MaxCursorSessions = clamp(s.MaxCursorSessions, 32)
-	if s.ConfirmTtlSecs < 10 {
-		s.ConfirmTtlSecs = 10 // files 同款下限：过短的 token TTL 只有误配价值
+	if s.ConfirmTtlSecs < confirmTtlSecsFloor {
+		s.ConfirmTtlSecs = confirmTtlSecsFloor
 	}
 	s.ConfirmTtlSecs = clamp(s.ConfirmTtlSecs, 600)
 	s.ResponseLimitBytes = clamp(s.ResponseLimitBytes, 1024*1024)
@@ -197,15 +205,14 @@ func applySettingsUpdate(settings Settings, updates map[string]any) (Settings, e
 		if !ok {
 			return settings, fmt.Errorf("%s must be a positive integer", field.name)
 		}
-		value := int(number)
-		// floor 与 Sanitized 的收敛下限一致：validate 收 1、Sanitized 悄悄
-		// 抬回 10 会让「设置成功」的值与实际生效值不一致。
-		floor := 1
-		if field.name == "confirmTtlSecs" {
-			floor = 10
+		// 小数静默截断会让「设置成功」的值与请求值不一致（5.9 ≠ 5）：非整
+		// 数直接拒绝，错误消息带回真实边界。
+		if number != math.Trunc(number) {
+			return settings, fmt.Errorf("%s must be an integer between %d and %d", field.name, field.floor, field.ceiling)
 		}
-		if value < floor || value > field.ceiling {
-			return settings, fmt.Errorf("%s must be between %d and %d", field.name, floor, field.ceiling)
+		value := int(number)
+		if value < field.floor || value > field.ceiling {
+			return settings, fmt.Errorf("%s must be between %d and %d", field.name, field.floor, field.ceiling)
 		}
 		switch field.name {
 		case "reportWaitMs":
