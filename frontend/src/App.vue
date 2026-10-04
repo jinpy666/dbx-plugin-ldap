@@ -16,6 +16,7 @@ import { inferBaseDnFromProfile, pickBaseDnFromRootDse } from "./lib/baseDn";
 import { joinRdnAndParent, splitFirstDnRdn } from "./lib/dn";
 import { escapeLdapFilterValue } from "./lib/ldapFilter";
 import { friendlyLdapError } from "./lib/ldapErrors";
+import { decideConnectionRetry } from "./lib/connectionRetry";
 import { writeClipboardText } from "./lib/clipboard";
 import { saveTextFile, type SaveTextOutcome } from "./lib/fileSave";
 import { serializeEntriesToCsv, serializeEntriesToJson, serializeEntriesToLdifText } from "./lib/ldapExporter";
@@ -67,6 +68,10 @@ interface ConnectionSummary {
 const hostContext = ref<Record<string, unknown>>({});
 const appearance = ref(resolveAppearance());
 const ready = ref(false);
+// Boot 恢复自愈窗口的等待态（connectionRetry 决策驱动）：整页刷新/宿主重启后
+// 首次 ldap/* 调用跑赢宿主 connection/connect 重放时短暂置位，窗口耗尽或
+// 探测成功后复位——工作台照常落既有错误面，不吞错。
+const bootWaiting = ref(false);
 // 宿主 executeCommand 桥可用性（initialize 时特性检测）：决定工具栏是否显示
 // "请求日志"按钮；旧宿主无该桥时隐藏，入口仍在 appToolbar/命令面板/dock「+」。
 const logsCommandSupported = ref(false);
@@ -897,6 +902,28 @@ async function waitForHostApi(timeoutMs = 8000) {
   return window.dbxPlugin;
 }
 
+// Boot 恢复自愈窗口（对标 dbx-plugin-ssh#144 的 BOOT_RESTORE_RETRY 窗口）：
+// web/docker 部署整页刷新/宿主重启后恢复的插件页，其首次 ldap/* 调用可能
+// 跑赢宿主 connection/connect 重放（凭据重推晚数秒），sidecar 报
+// "not connected"。用 whoami 作轻量就绪探测，识别为该暂时态时在有界窗口内
+// 固定节奏重试等待重放落地；其它错误（认证拒绝等）立即放行，交由树/搜索的
+// 既有错误面呈现。窗口耗尽同样放行——工作台不吞错，错误面接管。
+async function waitForConnectionReady() {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await ldapApi.whoami();
+      return;
+    } catch (cause) {
+      const decision = decideConnectionRetry({ cause, attempt });
+      if (decision.kind === "fail") return;
+      bootWaiting.value = true;
+      await new Promise((resolve) => window.setTimeout(resolve, decision.delayMs));
+      // 等待期间连接上下文被摘除（页签关闭/切换）就放弃等待。
+      if (!connectionId.value) return;
+    }
+  }
+}
+
 async function initialize() {
   const api = await waitForHostApi();
   hostContext.value = await Promise.any([
@@ -934,6 +961,12 @@ async function initialize() {
   void refreshBackendReadOnly();
   ready.value = true;
   await nextTick();
+  await waitForConnectionReady();
+  bootWaiting.value = false;
+  // 恢复竞态期间 resolveAutoBaseDn 已空跑过一轮（statuses/RootDSE 在连接未就绪
+  // 时全部静默失败，主机名推断又救不了 IP 直连）：就绪后 baseDn 仍为空则重解
+  // 一次，避免恢复页落在「未配置 Base DN」的降级态（web 恢复场景 E2E 实测）。
+  if (!baseDn.value && !contextBaseDn.value) await resolveAutoBaseDn();
   void treeRef.value?.refresh();
   void searchRef.value?.applyBaseDn(baseDn.value, false);
 }
@@ -1112,6 +1145,8 @@ onBeforeUnmount(() => {
 
     <div v-if="initError" class="tree-state">{{ initError }}</div>
     <div v-else-if="!ready" class="tree-state">{{ t("tree.loading") }}</div>
+    <!-- Boot 恢复等待态：首次调用跑赢宿主 connect 重放时的有界自愈窗口。 -->
+    <div v-else-if="bootWaiting" class="tree-state" role="status">{{ t("connectionWaiting") }}</div>
 
     <!-- 底部 dock 日志面板（logPanelMode）：宿主以 surface=panel 嵌入的独立
          视图，只渲染日志流，不渲染工作台分栏。 -->
