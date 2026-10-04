@@ -101,6 +101,21 @@ describe("Get-QAD support", () => {
   });
 });
 
+describe("tokenizer and numeric flag edge cases (审查 C-L2)", () => {
+  it("folds the PS single-quote escape '' into a literal quote inside quoted values", () => {
+    // 旧行为：`it''s` 被拆成 `it`、`s` 两个 token，过滤值错位。
+    const result = parsePsAdCommand(`Get-ADUser -Filter 'Name -eq "it''s"' -SearchBase 'DC=demo,DC=dbx'`);
+    expect(result.ok).toBe(true);
+    expect(result.search.filter).toContain("it's");
+  });
+
+  it("reports invalidValue (not missingValue) when -SizeLimit carries a non-numeric value", () => {
+    const result = parsePsAdCommand("Get-ADUser -SizeLimit abc -SearchBase 'DC=demo,DC=dbx'");
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("invalidValue");
+  });
+});
+
 describe("identity handling", () => {
   it("positional identity becomes an sAMAccountName/name OR filter wrapped with objectClass", () => {
     const result = parsePsAdCommand("Get-ADUser jsmith -SearchBase 'DC=demo,DC=dbx'");

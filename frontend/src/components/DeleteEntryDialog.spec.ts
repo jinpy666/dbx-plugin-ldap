@@ -69,8 +69,21 @@ describe("DeleteEntryDialog", () => {
 
   it("emits confirm from the danger button", async () => {
     const wrapper = trackDialog({ open: true, dn: DN });
+    // 审查 D-L9：计数在途时确认按钮暂禁——先等 childrenCount 落定。
+    await flushPromises();
     await wrapper.find(".danger-button").trigger("click");
     expect(wrapper.emitted("confirm")).toHaveLength(1);
+    expect(wrapper.find(".danger-button").attributes("disabled")).toBeUndefined();
+  });
+
+  it("disables the danger button while the child count is in flight (审查 D-L9)", async () => {
+    let resolveCount: (value: { count: number }) => void = () => undefined;
+    childrenCountMock.mockReturnValue(new Promise((resolve) => (resolveCount = resolve)));
+    const wrapper = trackDialog({ open: true, dn: DN });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".danger-button").attributes("disabled")).toBeDefined();
+    resolveCount({ count: 0 });
+    await flushPromises();
     expect(wrapper.find(".danger-button").attributes("disabled")).toBeUndefined();
   });
 

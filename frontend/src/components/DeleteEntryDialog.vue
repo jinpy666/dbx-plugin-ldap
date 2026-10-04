@@ -27,8 +27,11 @@ const label = computed(() => {
 });
 
 // 子条目计数：仅用于展示与递归勾选，拿不到（方法未注册/无桥）即隐藏勾选，
-// 不阻塞确认框打开。
+// 不阻塞确认框打开。计数在途时暂禁确认（审查 D-L9）：childCount 尚为
+// undefined 时确认会按单条删除语义提交，大目录上「有子条目」的条目必然
+// notAllowedOnNonLeaf 失败——递归选项还没加载出来。
 const childCount = ref<number>();
+const childCountPending = ref(false);
 const recursive = ref(false);
 let childCountSeq = 0;
 watch(
@@ -36,6 +39,7 @@ watch(
   ([open]) => {
     recursive.value = false;
     childCount.value = undefined;
+    childCountPending.value = open === true && props.dn !== undefined;
     const seq = ++childCountSeq;
     if (!open || !props.dn) return;
     ldapApi
@@ -45,16 +49,20 @@ watch(
         // （最坏情形会把「有子条目」显示成「无」→ 递归勾选被隐藏）。
         if (seq !== childCountSeq) return;
         childCount.value = result.count;
+        childCountPending.value = false;
       })
       .catch(() => {
         if (seq !== childCountSeq) return;
         childCount.value = undefined;
+        // 拿不到计数（旧 sidecar/无桥）：保持既有静默降级，确认恢复可用。
+        childCountPending.value = false;
       });
   },
   { immediate: true },
 );
 
 function onConfirm() {
+  if (childCountPending.value) return;
   emit("confirm", { recursive: recursive.value && (childCount.value ?? 0) > 0 });
 }
 
@@ -96,7 +104,13 @@ function onBackdropClick() {
       </div>
       <footer>
         <button type="button" @click="emit('close')">{{ t("cancel") }}</button>
-        <button type="button" class="danger-button" :disabled="submitting" @click="onConfirm">
+        <button
+          type="button"
+          class="danger-button"
+          :disabled="submitting || childCountPending"
+          :title="childCountPending ? t('deleteDialog.countingChildren') : undefined"
+          @click="onConfirm"
+        >
           {{ submitting ? "…" : t("delete") }}
         </button>
       </footer>

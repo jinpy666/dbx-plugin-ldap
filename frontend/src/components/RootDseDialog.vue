@@ -24,7 +24,7 @@ import { protocolBadge, type ConnectionSummary } from "../lib/connectionIdentity
 import { writeClipboardText } from "../lib/clipboard";
 import { saveTextFile, type SaveTextOutcome } from "../lib/fileSave";
 import { useModalA11y } from "../lib/modal";
-import { t } from "../lib/i18n";
+import { t, workbenchLocale } from "../lib/i18n";
 
 const props = defineProps<{
   open: boolean;
@@ -86,7 +86,8 @@ function formatTime(value?: number | string): string {
   if (value === undefined || value === null || value === "") return "";
   const parsed = typeof value === "number" ? value : Date.parse(value);
   if (!Number.isFinite(parsed)) return String(value);
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "medium" }).format(new Date(parsed));
+  // 跟随工作台 locale（审查 D-L2：与 ConnectionsPanel 同口径），不用浏览器默认。
+  return new Intl.DateTimeFormat(workbenchLocale.value, { dateStyle: "short", timeStyle: "medium" }).format(new Date(parsed));
 }
 
 // 摘要行从已加载的 RootDSE 取值（属性名大小写不敏感）。
@@ -331,17 +332,27 @@ function onDocumentClick() {
   closeValueMenu();
 }
 
+// 审查 D-L5（滚动部分）：fixed 菜单不随内容滚动，滚动即关。
+function onDocumentScroll() {
+  if (valueMenu.value) valueMenu.value = null;
+}
+
 // timer 必须保存并在卸载时清除（审计 K-8 同款），否则挂载同 tick 卸载时
 // 监听器会随回调"复活"泄漏。
 let menuListenerTimer = 0;
 
 onMounted(() => {
-  menuListenerTimer = window.setTimeout(() => document.addEventListener("click", onDocumentClick), 0);
+  menuListenerTimer = window.setTimeout(() => {
+    document.addEventListener("click", onDocumentClick);
+    // 审查 D-L5（滚动部分）：fixed 菜单不随内容滚动，滚动即关。
+    document.addEventListener("scroll", onDocumentScroll, true);
+  }, 0);
 });
 
 onBeforeUnmount(() => {
   window.clearTimeout(menuListenerTimer);
   document.removeEventListener("click", onDocumentClick);
+  document.removeEventListener("scroll", onDocumentScroll, true);
 });
 
 // 导出 root-dse.txt：属性名排序后 "name: v1, v2" 行（与 App 旧直导同一文本

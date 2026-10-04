@@ -35,7 +35,18 @@ node scripts/ui_test.mjs || exit 1
 
 if [ -f backend/go.mod ] && command -v go >/dev/null 2>&1; then
   echo "==> backend unit tests (owned by backend path)"
-  (cd backend && go vet ./... && go test ./...) || echo "WARN: backend go test failed (parallel development) — see docs/PROGRESS-P-LDAP.zh-CN.md"
+  # 审查 D-H1：并行开发期的软失败（失败只 WARN、"all green" 照常打印）会让
+  # 按交接契约引用本脚本产出的 agent 拿着假绿交接损坏的后端——现改硬门禁。
+  # 确需临时容忍时设 LDAP_TEST_ALLOW_BACKEND_FAIL=1（交接说明必须如实列出
+  # 失败，不得引用本脚本声明验证通过）。
+  if (cd backend && go vet ./... && go test ./...); then
+    :
+  elif [ "${LDAP_TEST_ALLOW_BACKEND_FAIL:-0}" = "1" ]; then
+    echo "WARN: backend go test failed (LDAP_TEST_ALLOW_BACKEND_FAIL=1) — see docs/PROGRESS-P-LDAP.zh-CN.md" >&2
+  else
+    echo "FAIL: backend go test failed — see docs/PROGRESS-P-LDAP.zh-CN.md" >&2
+    exit 1
+  fi
 else
   echo "==> backend unit tests skipped (no backend/go.mod or no go toolchain yet)"
 fi
@@ -50,11 +61,22 @@ if [ -f manifest.json ] && command -v dbx-plugin >/dev/null 2>&1; then
   # go.mod replace (host worktree SDK) are used — same as scripts/build.sh.
   # The platform package suffix is resolved per-machine (linux uses -gnu).
   . scripts/cli-platform.sh
-  if NATIVE_CLI="$(resolve_native_plugin_cli)"; then
-    env -u DBX_PLUGIN_SDK_ROOT NO_COLOR=1 "$NATIVE_CLI" package . || echo "WARN: dbx-plugin package failed (backend under parallel development)"
+  # 打包失败同为硬门禁（审查 D-H1：半失败产物不能带着 all green 交接）。
+  package_cli() {
+    if NATIVE_CLI="$(resolve_native_plugin_cli)"; then
+      env -u DBX_PLUGIN_SDK_ROOT NO_COLOR=1 "$NATIVE_CLI" package .
+    else
+      echo "WARN: native plugin-cli for $(uname -s)/$(uname -m) not found; falling back to the npm wrapper (its bundled SDK may conflict with backend go.mod)" >&2
+      NO_COLOR=1 dbx-plugin package .
+    fi
+  }
+  if package_cli; then
+    :
+  elif [ "${LDAP_TEST_ALLOW_BACKEND_FAIL:-0}" = "1" ]; then
+    echo "WARN: dbx-plugin package failed (LDAP_TEST_ALLOW_BACKEND_FAIL=1)" >&2
   else
-    echo "WARN: native plugin-cli for $(uname -s)/$(uname -m) not found; falling back to the npm wrapper (its bundled SDK may conflict with backend go.mod)" >&2
-    NO_COLOR=1 dbx-plugin package . || echo "WARN: dbx-plugin package failed (backend under parallel development)"
+    echo "FAIL: dbx-plugin package failed" >&2
+    exit 1
   fi
 else
   echo "SKIP: manifest.json/dbx-plugin CLI not ready yet; frontend artifacts are in ui/"

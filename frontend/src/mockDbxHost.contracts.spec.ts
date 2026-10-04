@@ -64,6 +64,22 @@ describe("mock search/read contract", () => {
     }
   });
 
+  it("mirrors the session exact-limit truncated flag on the final page (B-M4)", async () => {
+    const query = { baseDn: people, scope: "one", attributes: ["1.1"] };
+    // sizeLimit=5、pageSize=2：三页（2+2+1）；截断标志只落在末页（契约：截断页
+    // hasMore=false），中间页不得提前置位。
+    const first = await invoke<{ searchId: string; hasMore: boolean; truncated?: boolean }>("ldap/search/start", { ...query, pageSize: 2, sizeLimit: 5 });
+    expect(first.hasMore).toBe(true);
+    expect(first.truncated).toBeUndefined();
+    const second = await invoke<{ searchId: string; hasMore: boolean; truncated?: boolean }>("ldap/search/next", { searchId: first.searchId });
+    expect(second.hasMore).toBe(true);
+    expect(second.truncated).toBeUndefined();
+    await expect(invoke("ldap/search/next", { searchId: first.searchId })).resolves.toMatchObject({ hasMore: false, truncated: true });
+    // 未触顶的会话不置 truncated。
+    const plain = await invoke<{ searchId: string; hasMore: boolean; truncated?: boolean }>("ldap/search/start", { ...query, pageSize: 500 });
+    expect(plain.truncated).toBeUndefined();
+  });
+
   it("truncates non-paged size-limited searches with entries plus an honest flag instead of Size Limit Exceeded", async () => {
     const query = { baseDn: people, scope: "one", attributes: ["1.1"] };
     // 命中上限：照给前 limit 条 + truncated:true（对齐真实聚合语义，不抛 code-4）。

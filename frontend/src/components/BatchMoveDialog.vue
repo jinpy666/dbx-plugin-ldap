@@ -49,7 +49,24 @@ const doomedTarget = computed(() => {
   }
   return false;
 });
-const canConfirm = computed(() => !props.submitting && !targetInvalid.value && !doomedTarget.value);
+
+// 目标 DN 冲突预检（审查 D-M2）：不同父下同 RDN 的选择集移到同一目标父时，
+// 第二条 modifyDN 必报 alreadyExists（code 68）——按「新 DN」小写去重，
+// 命中即行内提示并禁用确认，不等逐条失败后只给「成功 N 失败 1」。
+const targetConflict = computed(() => {
+  const target = targetDraft.value.trim();
+  if (!target || targetInvalid.value) return false;
+  const seen = new Set<string>();
+  for (const dn of props.dns) {
+    const rdn = splitFirstDnRdn(dn).rdn;
+    if (!rdn) continue;
+    const key = `${rdn},${target}`.toLowerCase();
+    if (seen.has(key)) return true;
+    seen.add(key);
+  }
+  return false;
+});
+const canConfirm = computed(() => !props.submitting && !targetInvalid.value && !doomedTarget.value && !targetConflict.value);
 
 // 确认文案实时取当前输入值：用户能在点确认前看清"移到哪里"。
 const confirmCopy = computed(() => t("batchMove.confirm", { count: props.dns.length, dn: targetDraft.value.trim() }));
@@ -64,7 +81,7 @@ const overflowCount = computed(() => Math.max(0, props.dns.length - VISIBLE_LIMI
 
 function confirm() {
   const target = targetDraft.value.trim();
-  if (props.submitting || !isLikelyDn(target) || doomedTarget.value) return;
+  if (props.submitting || !isLikelyDn(target) || doomedTarget.value || targetConflict.value) return;
   emit("confirm", target);
 }
 
@@ -90,6 +107,7 @@ function onBackdropClick() {
       </header>
       <p class="confirm-copy">{{ confirmCopy }}</p>
       <p v-if="doomedTarget" class="form-error" role="alert">{{ t("batchMove.doomedTarget") }}</p>
+      <p v-else-if="targetConflict" class="form-error" role="alert">{{ t("batchMove.targetConflict") }}</p>
       <label class="settings-field">
         <span>{{ t("batchMove.target") }}</span>
         <input

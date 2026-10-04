@@ -42,10 +42,14 @@ const props = withDefaults(defineProps<{
   /** 批量写进行中（App 侧删除/移动/修改循环未结束）：禁用三个批量入口，
    * 防止二次触发被 App 门闩静默吞掉。 */
   batchBusy?: boolean;
+  /** 批量执行进度（审查 D-M3：大批量只靠忙碌指示无法估时）——done/total
+   * 逐条推进；null = 非 App 侧计数型批量。 */
+  batchProgress?: { done: number; total: number } | null;
 }>(), {
   complete: true,
   canWrite: true,
   batchBusy: false,
+  batchProgress: null,
 });
 
 const emit = defineEmits<{
@@ -56,6 +60,7 @@ const emit = defineEmits<{
   (e: "batchDelete", dns: string[]): void;
   (e: "batchMove", dns: string[]): void;
   (e: "batchModify", dns: string[]): void;
+  (e: "batchAbort"): void;
   (e: "loadMore"): void;
   (e: "retryMore"): void;
 }>();
@@ -228,8 +233,21 @@ defineExpose({ clearSelection });
       <div v-if="selectedCount > 0" class="batch-bar" :aria-busy="batchBusy || undefined">
         <span class="batch-count">{{ t("result.batchSelected", { count: selectedCount }) }}</span>
         <!-- 批量执行中的忙碌指示：批量条在执行期间保持可见（选择由 App 完成
-             后收尾），入口按钮经 batch-busy 禁用，这里补可视状态。 -->
-        <span v-if="batchBusy" class="batch-busy-hint" role="status">{{ t("search.running") }}</span>
+             后收尾），入口按钮经 batch-busy 禁用，这里补可视状态；有进度时
+             显示 N/M 并提供中止入口（审查 D-M3：协作式中止，在途请求完成后
+             生效）。 -->
+        <span v-if="batchBusy" class="batch-busy-hint" role="status">
+          {{ batchProgress ? t("result.batchProgress", { done: batchProgress.done, total: batchProgress.total }) : t("result.batchRunning") }}
+        </span>
+        <button
+          v-if="batchBusy && batchProgress"
+          type="button"
+          class="toolbar-button"
+          :title="t('result.batchAbort')"
+          @click="emit('batchAbort')"
+        >
+          {{ t("result.batchAbort") }}
+        </button>
         <!-- 删除走行内两步确认（宿主 webview 可能拦截原生 confirm）：确认态文案
              用既有 confirm 键，title 同步说明；再点一次才触发。 -->
         <!-- 只读连接（canWrite=false）：三个写入口全部禁用并提示（编辑器

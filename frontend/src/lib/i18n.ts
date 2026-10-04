@@ -9,6 +9,7 @@ export const messages = {
       searchNotReady: "Search form is not ready",
       selectMissing: "DN not found in the current results",
       unknownPanel: "Unknown panel",
+      busy: "A write operation is in progress — panel focus postponed",
     },
     ldap: {
       passwordEditor: {
@@ -343,6 +344,10 @@ export const messages = {
     result: {
       batchMove: "Move selected",
       batchSelected: "{count} selected",
+      batchRunning: "Batch operation in progress…",
+      batchProgress: "Batch progress {done}/{total}",
+      batchAbort: "Abort",
+      batchAborted: "(aborted — remaining entries skipped)",
       batchDelete: "Delete selected",
       batchModify: "Modify selected",
       batchClear: "Clear selection",
@@ -448,6 +453,7 @@ export const messages = {
     deleteDialog: {
       title: "Delete LDAP entry",
       recursive: "Also delete all child entries (recursive)",
+      countingChildren: "Counting child entries…",
       message: "Delete the entry below? This operation cannot be undone.",
       deleted: "Entry deleted",
     },
@@ -546,6 +552,7 @@ export const messages = {
       targetInvalid: "Target is not a valid DN",
       confirm: "Move {count} entries under {dn}? RDNs are kept.",
       doomedTarget: "Target is inside a selected entry's subtree, is that entry itself, or already its parent — this move would fail",
+      targetConflict: "Two or more selected entries share the same RDN — they would collide at the target parent",
       result: "Batch move finished: {ok} moved, {failed} failed",
     },
     connections: {
@@ -633,6 +640,7 @@ export const messages = {
       searchNotReady: "搜索表单尚未就绪",
       selectMissing: "当前结果中未找到该 DN",
       unknownPanel: "未知面板",
+      busy: "有写操作进行中——面板聚焦已暂缓",
     },
     ldap: {
       passwordEditor: {
@@ -967,6 +975,10 @@ export const messages = {
     result: {
       batchMove: "移动所选",
       batchSelected: "已选 {count} 项",
+      batchRunning: "批量操作执行中…",
+      batchProgress: "批量进度 {done}/{total}",
+      batchAbort: "中止",
+      batchAborted: "（已中止，剩余条目跳过）",
       batchDelete: "删除所选",
       batchModify: "修改所选",
       batchClear: "取消选择",
@@ -1072,6 +1084,7 @@ export const messages = {
     deleteDialog: {
       title: "删除 LDAP 条目",
       recursive: "同时递归删除所有子条目",
+      countingChildren: "正在统计子条目…",
       message: "确认删除以下条目？此操作不可撤销。",
       deleted: "条目已删除",
     },
@@ -1170,6 +1183,7 @@ export const messages = {
       targetInvalid: "目标不是合法的 DN",
       confirm: "将把 {count} 个条目移动到 {dn} 下(保留 RDN)。",
       doomedTarget: "目标是所选条目自身、位于其子树内、或已是其父 DN——这样移动必然失败",
+      targetConflict: "所选条目中存在相同 RDN——移动到同一目标父下必然冲突",
       result: "批量移动完成:成功 {ok} 个,失败 {failed} 个",
     },
     connections: {
@@ -1257,6 +1271,7 @@ export const messages = {
       searchNotReady: "搜尋表單尚未就緒",
       selectMissing: "目前結果中找不到該 DN",
       unknownPanel: "未知面板",
+      busy: "有寫操作進行中——面板聚焦已暫緩",
     },
     ldap: {
       passwordEditor: {
@@ -1591,6 +1606,10 @@ export const messages = {
     result: {
       batchMove: "移動所選",
       batchSelected: "已選 {count} 項",
+      batchRunning: "批量操作執行中…",
+      batchProgress: "批量進度 {done}/{total}",
+      batchAbort: "中止",
+      batchAborted: "（已中止，剩餘條目跳過）",
       batchDelete: "刪除所選",
       batchModify: "修改所選",
       batchClear: "取消選取",
@@ -1696,6 +1715,7 @@ export const messages = {
     deleteDialog: {
       title: "刪除 LDAP 條目",
       recursive: "同時遞迴刪除所有子條目",
+      countingChildren: "正在統計子條目…",
       message: "確認刪除以下條目？此操作無法復原。",
       deleted: "條目已刪除",
     },
@@ -1794,6 +1814,7 @@ export const messages = {
       targetInvalid: "目標不是合法的 DN",
       confirm: "將把 {count} 個條目移動到 {dn} 下(保留 RDN)。",
       doomedTarget: "目標是所選條目自身、位於其子樹內、或已是其父 DN——這樣移動必然失敗",
+      targetConflict: "所選條目中存在相同 RDN——移動到同一目標父下必然衝突",
       result: "批次移動完成:成功 {ok} 個,失敗 {failed} 個",
     },
     connections: {
@@ -1881,6 +1902,7 @@ export const messages = {
       searchNotReady: "El formulario de búsqueda no está listo",
       selectMissing: "No se encontró el DN en los resultados actuales",
       unknownPanel: "Panel desconocido",
+      busy: "Hay una operación de escritura en curso: enfoque del panel aplazado",
     },
     ldap: {
       passwordEditor: {
@@ -2215,6 +2237,10 @@ export const messages = {
     result: {
       batchMove: "Mover selección",
       batchSelected: "{count} seleccionados",
+      batchRunning: "Operación por lotes en curso…",
+      batchProgress: "Progreso del lote {done}/{total}",
+      batchAbort: "Abortar",
+      batchAborted: "(abortado: se omitieron las entradas restantes)",
       batchDelete: "Eliminar selección",
       batchModify: "Modificar selección",
       batchClear: "Cancelar selección",
@@ -2320,6 +2346,7 @@ export const messages = {
     deleteDialog: {
       title: "Eliminar entrada LDAP",
       recursive: "Eliminar también todas las entradas hijas (recursivo)",
+      countingChildren: "Contando entradas hijas…",
       message: "¿Eliminar la entrada siguiente? Esta operación no se puede deshacer.",
       deleted: "Entrada eliminada",
     },
@@ -2418,6 +2445,7 @@ export const messages = {
       targetInvalid: "El destino no es un DN válido",
       confirm: "¿Mover {count} entradas bajo {dn}? Se conservan los RDN.",
       doomedTarget: "El destino está dentro del subárbol de una entrada seleccionada, es esa entrada o ya es su DN padre: este movimiento fallará",
+      targetConflict: "Dos o más entradas seleccionadas comparten la misma RDN: colisionarían en el DN padre de destino",
       result: "Mover en lote completado: {ok} movidos, {failed} con error",
     },
     connections: {
@@ -2505,6 +2533,7 @@ export const messages = {
       searchNotReady: "Il modulo di ricerca non è pronto",
       selectMissing: "DN non trovato nei risultati correnti",
       unknownPanel: "Pannello sconosciuto",
+      busy: "Un'operazione di scrittura è in corso: messa a fuoco del pannello rinviata",
     },
     ldap: {
       passwordEditor: {
@@ -2839,6 +2868,10 @@ export const messages = {
     result: {
       batchMove: "Sposta selezionati",
       batchSelected: "{count} selezionati",
+      batchRunning: "Operazione in blocco in corso…",
+      batchProgress: "Avanzamento batch {done}/{total}",
+      batchAbort: "Interrompi",
+      batchAborted: "(interrotto: voci rimanenti ignorate)",
       batchDelete: "Elimina selezionati",
       batchModify: "Modifica selezionate",
       batchClear: "Annulla selezione",
@@ -2944,6 +2977,7 @@ export const messages = {
     deleteDialog: {
       title: "Elimina voce LDAP",
       recursive: "Elimina anche tutte le voci figlie (ricorsivo)",
+      countingChildren: "Conteggio delle voci figlie…",
       message: "Eliminare la voce seguente? L'operazione non può essere annullata.",
       deleted: "Voce eliminata",
     },
@@ -3042,6 +3076,7 @@ export const messages = {
       targetInvalid: "La destinazione non è un DN valido",
       confirm: "Spostare {count} voci sotto {dn}? I RDN vengono conservati.",
       doomedTarget: "La destinazione è nel sottoalbero di una voce selezionata, è quella voce o è già il suo DN padre: questo spostamento fallirà",
+      targetConflict: "Due o più voci selezionate condividono lo stesso RDN: colliderebbero al DN padre di destinazione",
       result: "Spostamento batch completato: {ok} spostate, {failed} non riuscite",
     },
     connections: {
@@ -3129,6 +3164,7 @@ export const messages = {
       searchNotReady: "検索フォームの準備ができていません",
       selectMissing: "現在の結果にその DN が見つかりません",
       unknownPanel: "不明なパネル",
+      busy: "書き込み操作が進行中のため、パネルのフォーカスを延期しました",
     },
     ldap: {
       passwordEditor: {
@@ -3463,6 +3499,10 @@ export const messages = {
     result: {
       batchMove: "選択を移動",
       batchSelected: "{count} 件選択中",
+      batchRunning: "一括操作を実行中…",
+      batchProgress: "一括進捗 {done}/{total}",
+      batchAbort: "中止",
+      batchAborted: "（中止しました。残りエントリはスキップ）",
       batchDelete: "選択を削除",
       batchModify: "選択を変更",
       batchClear: "選択を解除",
@@ -3568,6 +3608,7 @@ export const messages = {
     deleteDialog: {
       title: "LDAP エントリを削除",
       recursive: "配下のエントリも再帰的に削除する",
+      countingChildren: "子エントリを集計中…",
       message: "以下のエントリを削除しますか？この操作は元に戻せません。",
       deleted: "エントリを削除しました",
     },
@@ -3666,6 +3707,7 @@ export const messages = {
       targetInvalid: "移動先が有効な DN ではありません",
       confirm: "{count} 件のエントリを {dn} の下へ移動しますか?RDN は維持されます。",
       doomedTarget: "移動先が選択中エントリのサブツリー内・そのエントリ自身・または既に親 DN です。この移動は失敗します",
+      targetConflict: "選択中に同じ RDN のエントリが複数あります。同じ移動先では衝突します",
       result: "一括移動完了:成功 {ok} 件、失敗 {failed} 件",
     },
     connections: {
@@ -3753,6 +3795,7 @@ export const messages = {
       searchNotReady: "O formulário de busca não está pronto",
       selectMissing: "DN não encontrado nos resultados atuais",
       unknownPanel: "Painel desconhecido",
+      busy: "Uma operação de gravação está em andamento — foco do painel adiado",
     },
     ldap: {
       passwordEditor: {
@@ -4087,6 +4130,10 @@ export const messages = {
     result: {
       batchMove: "Mover selecionados",
       batchSelected: "{count} selecionados",
+      batchRunning: "Operação em lote em andamento…",
+      batchProgress: "Progresso do lote {done}/{total}",
+      batchAbort: "Abortar",
+      batchAborted: "(abortado — entradas restantes ignoradas)",
       batchDelete: "Excluir selecionados",
       batchModify: "Modificar selecionadas",
       batchClear: "Limpar seleção",
@@ -4192,6 +4239,7 @@ export const messages = {
     deleteDialog: {
       title: "Excluir entrada LDAP",
       recursive: "Excluir também todas as entradas filhas (recursivo)",
+      countingChildren: "Contando entradas filhas…",
       message: "Excluir a entrada abaixo? Esta operação não pode ser desfeita.",
       deleted: "Entrada excluída",
     },
@@ -4290,6 +4338,7 @@ export const messages = {
       targetInvalid: "O destino não é um DN válido",
       confirm: "Mover {count} entradas para baixo de {dn}? Os RDNs são mantidos.",
       doomedTarget: "O destino está dentro da subárvore de uma entrada selecionada, é a própria entrada ou já é o DN pai — esta movimentação falhará",
+      targetConflict: "Duas ou mais entradas selecionadas compartilham o mesmo RDN — colidiriam no DN pai de destino",
       result: "Mover em lote concluído: {ok} movidos, {failed} falharam",
     },
     connections: {

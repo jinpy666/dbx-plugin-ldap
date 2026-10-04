@@ -212,7 +212,9 @@ function schemaSupers(schema: LdapSchema | null | undefined, className: string):
   if (!Array.isArray(raw) || raw.length === 0) return [];
   const key = lower(className);
   for (const definition of raw) {
-    const text = String(definition ?? "");
+    // 审查 D-L7：部分服务器的定义里 DESC 在 NAME 之前，DESC 文本含
+    // "name of …" 这类词组会先被 NAME 正则误命中——先剥引号 DESC 串再匹配。
+    const text = String(definition ?? "").replace(/\bDESC\s+'[^']*'/giu, " ");
     const nameMatch = /\bNAME\s+(?:\(\s*([^)]*)\s*\)|'([^']*)'|([^\s)]+))/iu.exec(text);
     if (!nameMatch) continue;
     const names = (nameMatch[1] ?? `${nameMatch[2] ?? ""} ${nameMatch[3] ?? ""}`)

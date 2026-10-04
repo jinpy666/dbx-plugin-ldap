@@ -147,6 +147,50 @@ func TestWithDedicatedConnRetriesOnceOnReconnectError(t *testing.T) {
 	}
 }
 
+// 重拨窗口内并发 Connect 换代（复审 A-L4 / C-L1）：重试拨号返回后、fn 执行
+// 前的身份双检必须命中换代 → errEntryDetached，重试连接关闭（pipe 对端 EOF）。
+func TestWithDedicatedConnRetryRechecksGeneration(t *testing.T) {
+	s := NewService()
+	registerCheckEntry(t, s, "c1", true)
+	calls := 0
+	var retryServer net.Conn
+	s.dedicatedDialFn = func(context.Context, Profile, connTarget, bindSecrets) (*ldap.Conn, error) {
+		calls++
+		client, server := net.Pipe()
+		t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+		conn := ldap.NewConn(client, false)
+		conn.Start()
+		t.Cleanup(func() { _ = conn.Close() })
+		if calls == 2 {
+			// 第二次拨号（重试）落点：并发 Connect 以新条目整体替换连接表，
+			// 模拟换代窗口。旧条目 profile 构造后不可变，语义同 Connect。
+			s.mu.Lock()
+			s.conns["c1"] = &connEntry{
+				profile: Profile{ID: "c1", URL: "ldap://ldap.example.com", AuthType: LDAPAuthSimple, TimeoutSeconds: 5},
+				target:  connTarget{Host: "ldap.example.com", Port: 389},
+				status:  "idle",
+			}
+			s.mu.Unlock()
+			retryServer = server
+		}
+		return conn, nil
+	}
+
+	err := s.withDedicatedConn(context.Background(), "c1", func(*ldap.Conn) error {
+		return io.EOF // 首轮断线类错误 → 触发重拨
+	})
+	if err == nil || err.Error() != errEntryDetached("c1").Error() {
+		t.Fatalf("err = %v, want errEntryDetached", err)
+	}
+	if calls != 2 {
+		t.Errorf("dedicated dial calls = %d, want 2 (initial + retry)", calls)
+	}
+	if retryServer != nil {
+		// 重试连接已被双检路径关闭：pipe server 侧读到 EOF。
+		pipeReadEOF(t, retryServer)
+	}
+}
+
 // 非断线类错误（如服务端结果码）：不重拨不重试，错误原样返回。
 func TestWithDedicatedConnNonReconnectErrorNoRetry(t *testing.T) {
 	s := NewService()

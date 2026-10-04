@@ -402,6 +402,11 @@ const batchDeleteSubmitting = ref(false);
 const batchModifyOpen = ref(false);
 const batchModifyDns = ref<string[]>([]);
 const batchModifySubmitting = ref(false);
+// 批量进度与协作式中止（审查 D-M3）：三个批量写循环逐条推进 done/total，
+// 结果表批量条显示 N/M 并提供中止按钮；中止只在条目间生效（在途请求完成
+// 后循环退出），语义与连接切换守卫同款。
+const batchProgress = ref<{ done: number; total: number } | null>(null);
+const batchAbortRequested = ref(false);
 // 书签（F7，pluginStore 持久化、按连接隔离）与比较弹窗（F3）。
 const bookmarks = ref<string[]>([]);
 function reloadBookmarks() {
@@ -454,6 +459,19 @@ const uiIntentHandlers = {
       return { status: "applied", summary: { panel } };
     }
     if (panel === "tree" || panel === "search") {
+      // 审查 D-M5：删除/批量操作在途时本 intent 回 rejected——无条件关弹窗
+      // 会让 v-if 卸载掉在途操作的确认界面，操作在后台继续而用户失去
+      // 「结果不明」防护（host intent 不得绕过 allowClose 家族守卫）。
+      if (
+        deleteSubmitting.value ||
+        modifyDnSubmitting.value ||
+        batchMoveSubmitting.value ||
+        batchDeleteSubmitting.value ||
+        batchModifySubmitting.value ||
+        wizardSubmitting.value
+      ) {
+        return { status: "rejected", reason: t("intent.busy") };
+      }
       // 主区常驻（树/搜索面板无独立开关）；关闭全部弹窗让目标面板可见
       //（清单与 syncConnectionContext 同口径，审查修复：漏关的弹窗会挡住
       // 宿主点名要聚焦的面板）。
@@ -543,8 +561,11 @@ async function onBatchDelete(dns: string[]) {
   // 首条失败原因随汇总通知透出（审查修复：只报个数会让「非叶子不可删」这类
   // 原因不可见）。
   let firstFailure = "";
+  batchAbortRequested.value = false;
+  batchProgress.value = { done: 0, total: dns.length };
+  let done = 0;
   for (const dn of dns) {
-    if (connectionId.value !== conn) break;
+    if (connectionId.value !== conn || batchAbortRequested.value) break;
     try {
       await ldapApi.entryDelete(dn, false);
       emitEntryDeleted(conn, dn, true);
@@ -553,13 +574,19 @@ async function onBatchDelete(dns: string[]) {
       failed.add(dn);
       if (!firstFailure) firstFailure = friendlyLdapError(cause instanceof Error ? cause.message : String(cause));
     }
+    done += 1;
+    batchProgress.value = { done, total: dns.length };
   }
+  const aborted = batchAbortRequested.value;
   batchDeleteSubmitting.value = false;
+  batchProgress.value = null;
+  batchAbortRequested.value = false;
   // 与批量移动/修改同一收尾契约：执行完成后才清空选择，批量条在执行期间
   // 保持可见（batch-busy 禁用入口 + 忙碌指示）。
   resultTableRef.value?.clearSelection();
   showNotice(
     t("result.batchResult", { ok: deleted.length, failed: failed.size })
+      + (aborted ? ` ${t("result.batchAborted")}` : "")
       + (firstFailure ? ` ${t("batchFailureHint", { error: firstFailure })}` : ""),
   );
   if (deleted.length === 0) return;
@@ -597,8 +624,11 @@ async function onBatchModifyConfirm(payload: { operation: "add" | "replace" | "d
   const failed = new Set<string>();
   const modified: string[] = [];
   let firstFailure = "";
+  batchAbortRequested.value = false;
+  batchProgress.value = { done: 0, total: dns.length };
+  let done = 0;
   for (const dn of dns) {
-    if (connectionId.value !== conn) break;
+    if (connectionId.value !== conn || batchAbortRequested.value) break;
     try {
       await ldapApi.entryModify(dn, [{ operation: payload.operation, attribute: payload.attribute, values: payload.values }]);
       emitEntryChanged(conn, dn);
@@ -607,12 +637,18 @@ async function onBatchModifyConfirm(payload: { operation: "add" | "replace" | "d
       failed.add(dn);
       if (!firstFailure) firstFailure = friendlyLdapError(cause instanceof Error ? cause.message : String(cause));
     }
+    done += 1;
+    batchProgress.value = { done, total: dns.length };
   }
+  const aborted = batchAbortRequested.value;
   batchModifySubmitting.value = false;
   batchModifyOpen.value = false;
+  batchProgress.value = null;
+  batchAbortRequested.value = false;
   resultTableRef.value?.clearSelection();
   showNotice(
     t("batchModify.result", { ok: modified.length, failed: failed.size })
+      + (aborted ? ` ${t("result.batchAborted")}` : "")
       + (firstFailure ? ` ${t("batchFailureHint", { error: firstFailure })}` : ""),
   );
 }
@@ -668,8 +704,11 @@ async function onBatchMoveConfirm(targetParentDn: string) {
   const failed = new Set<string>();
   const moved: string[] = [];
   let firstFailure = "";
+  batchAbortRequested.value = false;
+  batchProgress.value = { done: 0, total: dns.length };
+  let done = 0;
   for (const dn of dns) {
-    if (connectionId.value !== conn) break;
+    if (connectionId.value !== conn || batchAbortRequested.value) break;
     const { rdn } = splitFirstDnRdn(dn);
     try {
       await ldapApi.entryModifyDn(dn, rdn, targetParentDn, true);
@@ -679,12 +718,18 @@ async function onBatchMoveConfirm(targetParentDn: string) {
       failed.add(dn);
       if (!firstFailure) firstFailure = friendlyLdapError(cause instanceof Error ? cause.message : String(cause));
     }
+    done += 1;
+    batchProgress.value = { done, total: dns.length };
   }
+  const aborted = batchAbortRequested.value;
   batchMoveSubmitting.value = false;
   batchMoveOpen.value = false;
+  batchProgress.value = null;
+  batchAbortRequested.value = false;
   resultTableRef.value?.clearSelection();
   showNotice(
     t("batchMove.result", { ok: moved.length, failed: failed.size })
+      + (aborted ? ` ${t("result.batchAborted")}` : "")
       + (firstFailure ? ` ${t("batchFailureHint", { error: firstFailure })}` : ""),
   );
   if (moved.length === 0) return;
@@ -707,9 +752,14 @@ function openAddChild(parentDn: string) {
 }
 
 // 向导提交 = 空白新增的模板化版本：payload 由向导铺好 must 属性。
+// 审查 D-M1：entryAdd 慢时双击「创建」会并发两次 add——第一条成功关闭弹窗，
+// 第二条失败弹「条目已存在」横幅覆盖成功反馈。submitting 门闩与批量对话框同款。
+const wizardSubmitting = ref(false);
 async function onWizardCreate(payload: { dn: string; attributes: Record<string, string[]> }) {
   if (!guardWrite()) return;
+  if (wizardSubmitting.value) return;
   clearBanner();
+  wizardSubmitting.value = true;
   try {
     await ldapApi.entryAdd(payload.dn, payload.attributes);
     wizardOpen.value = false;
@@ -717,6 +767,8 @@ async function onWizardCreate(payload: { dn: string; attributes: Record<string, 
     treeRef.value?.invalidate(splitFirstDnRdn(payload.dn).parentDn);
   } catch (cause) {
     showError(cause);
+  } finally {
+    wizardSubmitting.value = false;
   }
 }
 
@@ -874,7 +926,10 @@ function handleEvent(event: DbxPluginEvent) {
     const params = event.params || {};
     // 与 onEntryEvent 同款连接隔离：宿主广播/切换连接后迟到的旧连接审计事件
     // 不得混入当前工作台（面板记录与 denied/error 横幅都会错误归属）。
-    if (String(params.connectionId ?? "") !== connectionId.value) return;
+    // 审查 D-L8：connectionId 字段缺失（旧 sidecar 不发）时按当前连接接收
+    // ——面板全空且无「不支持」信号比错误归属更难排查；仅在「有值但不匹配」
+    // 时丢弃（跨连接迟到事件的隔离语义保持）。
+    if (params.connectionId !== undefined && String(params.connectionId) !== connectionId.value) return;
     // 数据面：进入最近操作面板（denied/error 高亮）。ok 结果不再弹通知——
     // 面板已承载记录，弹窗反而会覆盖领域反馈（审计 J-9）；denied/error 保留横幅。
     auditItems.value = pushAuditItem(auditItems.value, parseAuditEvent(params, auditSeq++, Date.now()));
@@ -1243,6 +1298,7 @@ onBeforeUnmount(() => {
           :error-detail="searchErrorDetail"
           :can-write="canWrite"
           :batch-busy="batchDeleteSubmitting || batchMoveSubmitting || batchModifySubmitting"
+          :batch-progress="batchProgress"
           @retry="retrySearch"
           @load-more="requestNextSearchPage"
           @retry-more="requestNextSearchPage"
@@ -1252,6 +1308,7 @@ onBeforeUnmount(() => {
           @batch-delete="onBatchDelete"
           @batch-move="onBatchMove"
           @batch-modify="onBatchModify"
+          @batch-abort="batchAbortRequested = true"
         />
         <AuditFeedPanel :items="auditItems" @clear="clearAuditFeed" />
       </main>
@@ -1434,6 +1491,7 @@ onBeforeUnmount(() => {
       :parent-dn="wizardParentDn"
       :schema="wizardSchema"
       :can-write="canWrite"
+      :submitting="wizardSubmitting"
       @submit="onWizardCreate"
       @cancel="wizardOpen = false"
     />

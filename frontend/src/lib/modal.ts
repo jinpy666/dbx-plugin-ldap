@@ -115,7 +115,14 @@ export function useModalA11y(open: Ref<boolean> | (() => boolean), options: Moda
     const token = stackToken;
     stackToken = null;
     try {
-      trigger?.focus({ preventScroll: true });
+      // 触发元素可能已随重渲卸载（审查 D-L3：批量操作收尾 clearSelection/
+      // 树 invalidate 后结果行不在 DOM）——focus() 落空会让键盘焦点丢到
+      // body；失效时回退页面首个可交互控件。
+      if (trigger?.isConnected) {
+        trigger.focus({ preventScroll: true });
+      } else {
+        document.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)?.focus({ preventScroll: true });
+      }
     } finally {
       if (token) {
         const index = modalStack.indexOf(token);

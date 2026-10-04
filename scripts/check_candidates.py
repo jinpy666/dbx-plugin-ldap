@@ -112,6 +112,23 @@ def main() -> int:
             errors.append(f"{package_name}: unreadable manifest.json: {error}")
             continue
 
+        # 审查 D-M4：校验和只证明「metadata 与文件一致」，不证明包内容完整——
+        # 只含 manifest.json 的半失败产物能直通全部既有检查。对 entrypoints
+        # 声明的关键产物做 zip 内存在性 + 非空断言。
+        with zipfile.ZipFile(package) as archive:
+            names = set(archive.namelist())
+            for entry_key, entry_path in (
+                ("backend.executable", (manifest.get("entrypoints") or {}).get("backend", {}).get("executable", "")),
+                ("ui.entry", (manifest.get("entrypoints") or {}).get("ui", {}).get("entry", "")),
+            ):
+                if not entry_path:
+                    errors.append(f"{package_name}: manifest entrypoints.{entry_key} missing")
+                    continue
+                if entry_path not in names:
+                    errors.append(f"{package_name}: entrypoint {entry_path} ({entry_key}) not in package")
+                elif archive.getinfo(entry_path).file_size == 0:
+                    errors.append(f"{package_name}: entrypoint {entry_path} ({entry_key}) is empty")
+
         identity = {field: manifest.get(field) for field in IDENTITY_FIELDS}
         identity["permissions"] = sorted(manifest.get("permissions") or [])
         if not identity["id"] or not identity["name"] or not identity["publisher"] or not identity["version"]:

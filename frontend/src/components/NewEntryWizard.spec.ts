@@ -68,10 +68,18 @@ async function chooseTemplate(wrapper: WizardWrapper, id: string) {
   await wrapper.find(`.template-card[data-template="${id}"]`).trigger("click");
 }
 
+// 步进助手：带跳数上限与禁用检测——下一步被守卫禁用（如 D-L6 的
+// objectClass 必选）时立即抛错，绝不无界打转拖死整个测试进程。
 async function gotoStep(wrapper: WizardWrapper, target: number) {
-  while (Number(activeStep(wrapper).attributes("data-step")) < target) {
-    await nextButton(wrapper).trigger("click");
+  for (let hops = 0; hops < 8; hops += 1) {
+    if (Number(activeStep(wrapper).attributes("data-step")) >= target) return;
+    const next = nextButton(wrapper);
+    if (next.attributes("disabled") !== undefined) {
+      throw new Error(`next is disabled at step ${activeStep(wrapper).attributes("data-step")} (guard blocked traversal)`);
+    }
+    await next.trigger("click");
   }
+  throw new Error(`gotoStep did not reach step ${target} within 8 hops`);
 }
 
 async function fillRdn(wrapper: WizardWrapper, attr: string, value: string) {
@@ -194,12 +202,11 @@ describe("NewEntryWizard", () => {
     await chooseTemplate(wrapper, "blank");
     expect(classChips(wrapper)).toHaveLength(0);
     expect(wrapper.find(".class-chips .muted").text()).toBe(t("ldap.wizard.noObjectClass"));
-    // 无 objectClass 时第 ④ 步给出必填提示并拦截提交。
-    await gotoStep(wrapper, 4);
-    expect(wrapper.find(".form-error").text()).toBe(t("ldap.wizard.objectClassRequired"));
-    expect(submitButton(wrapper).attributes("disabled")).toBeDefined();
+    // 审查 D-L6：objectClass 为空时第 ② 步就地拦截——下一步禁用 + 行内必填
+    // 提示（不再放行到第 ④ 步才由 objectClassRequired 弹回）。
+    expect(wrapper.find(".wizard-step .form-error").text()).toBe(t("ldap.wizard.objectClassRequired"));
+    expect(nextButton(wrapper).attributes("disabled")).toBeDefined();
 
-    for (let index = 0; index < 2; index++) await prevButton(wrapper).trigger("click");
     await wrapper.find(".class-adder input").setValue("organizationalUnit");
     await anyButtonByText(wrapper, t("ldap.wizard.addClass")).trigger("click");
     expect(classChips(wrapper)).toHaveLength(1);

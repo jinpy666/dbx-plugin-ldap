@@ -206,9 +206,10 @@ function onGotoMenuKeydown(event: KeyboardEvent) {
   // 输入框内方向键是光标移动，不做菜单导航；提交由 form 的 Enter 语义承担。
 }
 
-// 三个下拉共用的文档级兜底：Escape 只关已打开的书签/跳转菜单（焦点不在
-// 菜单内时也能关）；各菜单元素自身已带 keydown 处理并 stopPropagation，
-// 这里只兜"焦点散落在菜单外"的场景。
+// 三个下拉共用的文档级兜底：Escape 只关已打开的书签/跳转/最近打开菜单（焦点
+// 不在菜单内时也能关）；各菜单元素自身已带 keydown 处理并 stopPropagation，
+// 这里只兜"焦点散落在菜单外"的场景。审查 D-L4：recentMenu 漏兜导致三个
+// 同构下拉 Esc 行为不一致（只能靠外点关闭）。
 function onMenuDocumentKeydown(event: KeyboardEvent) {
   if (event.key !== "Escape") return;
   if (bookmarkMenu.value) {
@@ -219,6 +220,10 @@ function onMenuDocumentKeydown(event: KeyboardEvent) {
     event.preventDefault();
     event.stopPropagation();
     closeGotoMenu(true);
+  } else if (recentMenu.value) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeRecentMenu(true);
   }
 }
 

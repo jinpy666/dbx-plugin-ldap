@@ -228,7 +228,9 @@ func NewProfileFromLifecycle(params *lifecycle.Params) (Profile, bindSecrets, er
 // 形态 → (_,false)。ConfigBool 对不可识别值缺省 false——"yes"/数字 1 这类
 // 宿主表单形态会静默变 false，read_only 门禁 fail-open、use_starttls 明文
 // 降级都源于此（审查 M1）；安全相关布尔一律走本解析并按调用方 fail-closed
-// 方向定不可识别时的缺省。
+// 方向定不可识别时的缺省。字段在场但为 JSON null 同样落「不可识别」：
+// 复审 C-L4 确认这是接受的设计取舍——宿主按 manifest 默认值落盘不会产
+// null，一旦出现宁取安全方向（read_only=true、use_starttls=true）。
 func configBoolForms(raw any) (value, ok bool) {
 	switch typed := raw.(type) {
 	case bool:

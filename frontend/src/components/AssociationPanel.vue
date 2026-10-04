@@ -375,17 +375,27 @@ function onDocumentClick() {
   closeRowMenu();
 }
 
+// 审查 D-L5（滚动部分）：fixed 定位菜单不随列表滚动——滚动即关闭，避免菜单
+// 指向错误的行。scroll 不冒泡但 capture 相位可拦截，挂在 document 上。
+function onDocumentScroll() {
+  if (rowMenu.value) closeRowMenu();
+}
+
 // timer 必须保存并在卸载时清除（审计 K-8 同款），否则挂载同 tick 卸载时
 // 监听器会随回调"复活"泄漏。
 let menuListenerTimer = 0;
 
 onMounted(() => {
-  menuListenerTimer = window.setTimeout(() => document.addEventListener("click", onDocumentClick), 0);
+  menuListenerTimer = window.setTimeout(() => {
+    document.addEventListener("click", onDocumentClick);
+    document.addEventListener("scroll", onDocumentScroll, true);
+  }, 0);
 });
 
 onBeforeUnmount(() => {
   window.clearTimeout(menuListenerTimer);
   document.removeEventListener("click", onDocumentClick);
+  document.removeEventListener("scroll", onDocumentScroll, true);
 });
 
 function openAssociation(entry: AssocEntry) {

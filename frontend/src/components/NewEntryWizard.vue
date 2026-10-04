@@ -30,9 +30,13 @@ const props = withDefaults(
     schema?: LdapSchema;
     /** 连接可写门禁：false 时提交禁用并提示（与 ImportEntryDialog 同语义）。 */
     canWrite?: boolean;
+    /** 提交在途（审查 D-M1）：entryAdd 慢时双击会造成重复 entryAdd——
+     *  第一条成功 + 第二条「已存在」错误横幅覆盖成功反馈。批量对话框同款门闩。 */
+    submitting?: boolean;
   }>(),
   {
     canWrite: true,
+    submitting: false,
   },
 );
 
@@ -186,7 +190,7 @@ const canSubmit = computed(
 );
 
 function submit() {
-  if (!canSubmit.value) return;
+  if (!canSubmit.value || props.submitting) return;
   const attributes: Record<string, string[]> = { objectClass: [...objectClasses.value] };
   for (const attr of mustAttrs.value) {
     const value = (isRdnAttr(attr) ? rdnValueDraft.value : attrValues.value[attr] ?? "").trim();
@@ -270,6 +274,9 @@ function onBackdropClick() {
           </span>
           <span v-if="objectClasses.length === 0" class="muted">{{ t("ldap.wizard.noObjectClass") }}</span>
         </div>
+        <!-- 审查 D-L6：objectClass 为空即可「下一步」会把错误暴露拖到最后一步
+             才弹回——本步就地提示并禁用下一步。 -->
+        <p v-if="objectClasses.length === 0" class="form-error">{{ t("ldap.wizard.objectClassRequired") }}</p>
         <div class="class-adder">
           <input
             v-model="newClassInput"
@@ -374,9 +381,9 @@ function onBackdropClick() {
         <span v-if="!canWrite" class="muted" style="margin-right: auto">{{ t("editor.readonlyHint") }}</span>
         <button type="button" @click="emit('cancel')">{{ t("cancel") }}</button>
         <button v-if="step > 1" type="button" @click="step -= 1">{{ t("ldap.wizard.prev") }}</button>
-        <button v-if="step < 4" type="button" class="primary-button" @click="step += 1">{{ t("ldap.wizard.next") }}</button>
-        <button v-else type="button" class="primary-button" :disabled="!canSubmit" @click="submit">
-          {{ t("ldap.wizard.submit") }}
+        <button v-if="step < 4" type="button" class="primary-button" :disabled="step === 2 && objectClasses.length === 0" @click="step += 1">{{ t("ldap.wizard.next") }}</button>
+        <button v-else type="button" class="primary-button" :disabled="!canSubmit || submitting" @click="submit">
+          {{ submitting ? "…" : t("ldap.wizard.submit") }}
         </button>
       </footer>
     </div>

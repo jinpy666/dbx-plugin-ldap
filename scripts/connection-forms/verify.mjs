@@ -153,4 +153,23 @@ assert.equal(byKey.blocked_attributes.type, "textarea");
 assert(String(byKey.blocked_attributes.default).includes("userPassword"), "blocked_attributes must ship password guard defaults");
 assert.equal(byKey.read_only.type, "boolean");
 
+// -- Core-field invariants (审查 D-S1)：矩阵场景只覆盖条件字段，基础字段的
+//    required/缺省没有任何断言——删掉 host 的 required 之类回归此前会静默
+//    PASS。这里钉住最小不变量。
+const defaultState = state({});
+defaultState.required("host", true);
+defaultState.visible("host", true);
+defaultState.visible("port", true);
+defaultState.required("port", false);
+defaultState.visible("base_dn", true);
+defaultState.required("base_dn", false);
+defaultState.visible("read_only", true);
+defaultState.required("read_only", false);
+defaultState.visible("auth_type", true);
+defaultState.visible("tls_mode", true);
+assert.equal(defaults.read_only, false, "read_only default must stay false (opt-in guard)");
+assert.equal(defaults.tls_verify, true, "tls_verify default must stay true (fail-closed)");
+assert.equal(defaults.auth_type, "simple", "auth_type default must stay simple");
+assert.equal(defaults.tls_mode, "none", "tls_mode default must stay none");
+
 console.log(`PASS LDAP connection form: ${scenarios} combinations; field ordering and seven-language labels/options`);
