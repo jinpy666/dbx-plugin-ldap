@@ -84,6 +84,8 @@ interface DbxPluginApi {
    * { error } 返回；旧宿主为 undefined，调用前需特性检测。
    */
   executeCommand?(commandId: string, context?: Record<string, unknown>): Promise<{ error?: string }>;
+  /** 请宿主按当前最新配置重开连接（含 vault 最新凭据回推）。Host API 1.2+；旧宿主无此方法。 */
+  reopenConnection?(connectionId: string): Promise<unknown>;
   sendBinary(channel: string, data: Uint8Array | ArrayBuffer | string): Promise<void>;
   onEvent(listener: (event: DbxPluginEvent) => void): () => void;
   onBinary(listener: (event: DbxPluginBinaryEvent) => void): () => void;

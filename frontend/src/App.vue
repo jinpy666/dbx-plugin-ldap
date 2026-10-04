@@ -905,9 +905,11 @@ async function waitForHostApi(timeoutMs = 8000) {
 // Boot 恢复自愈窗口（对标 dbx-plugin-ssh#144 的 BOOT_RESTORE_RETRY 窗口）：
 // web/docker 部署整页刷新/宿主重启后恢复的插件页，其首次 ldap/* 调用可能
 // 跑赢宿主 connection/connect 重放（凭据重推晚数秒），sidecar 报
-// "not connected"。用 whoami 作轻量就绪探测，识别为该暂时态时在有界窗口内
-// 固定节奏重试等待重放落地；其它错误（认证拒绝等）立即放行，交由树/搜索的
-// 既有错误面呈现。窗口耗尽同样放行——工作台不吞错，错误面接管。
+// "not connected"。用 whoami 作轻量就绪探测，识别为该暂时态时先请宿主重开
+// 连接（旧宿主下这是唯一触发凭据重推的入口，见 requestHostReopenConnection），
+// 再在有界窗口内固定节奏重试等待重放落地；其它错误（认证拒绝等）立即放行，
+// 交由树/搜索的既有错误面呈现。窗口耗尽同样放行——工作台不吞错，错误面接管。
+// 连接本就在线（侧边栏首次打开）时探测一次即过，不发任何重开请求。
 async function waitForConnectionReady() {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -916,12 +918,38 @@ async function waitForConnectionReady() {
     } catch (cause) {
       const decision = decideConnectionRetry({ cause, attempt });
       if (decision.kind === "fail") return;
+      if (attempt === 0) await requestHostReopenConnection();
       bootWaiting.value = true;
       await new Promise((resolve) => window.setTimeout(resolve, decision.delayMs));
       // 等待期间连接上下文被摘除（页签关闭/切换）就放弃等待。
       if (!connectionId.value) return;
     }
   }
+}
+
+// 手动重连前请宿主按当前最新配置重开连接（对标 ssh App.vue 的同名函数）：
+// 连接在侧边栏被编辑（如改密码）后，宿主会摘掉 connected 标记且不回推插件，
+// sidecar 里存的凭据就此过期——不先重开的话后续 ldap/* 只会拿旧凭据反复失败。
+// 宿主以打开连接的同款流程重新下发配置（含 vault 里的最新凭据）。旧宿主无
+// reopenConnection 桥：回退 host.reopenConnection 请求，仍报错则静默忽略，
+// 行为退化为纯重试。
+async function requestHostReopenConnection() {
+  if (!connectionId.value) return;
+  try {
+    const api = window.dbxPlugin;
+    if (api?.reopenConnection) await api.reopenConnection(connectionId.value);
+    else await api?.request("host.reopenConnection", { connectionId: connectionId.value });
+  } catch {
+    // 旧宿主无此方法。
+  }
+}
+
+// 树根错误态的恢复出口（排查清单第 5 项）：先请宿主重开连接（含最新凭据
+// 回推），再重载树根——重试按钮若只重发 ldap/* 而连接始终未重开，会永远
+// 原地失败。DnTree 只发 retry-connection 事件，重开+重载的顺序在本侧保证。
+async function onTreeRetryConnection() {
+  await requestHostReopenConnection();
+  refreshTree();
 }
 
 async function initialize() {
@@ -1170,6 +1198,7 @@ onBeforeUnmount(() => {
         @copy-dn="copyDn"
         @add-bookmark="onAddBookmark"
         @compare="onCompare"
+        @retry-connection="onTreeRetryConnection"
       />
       <div class="divider" />
       <main class="main-pane">
