@@ -197,7 +197,9 @@ export function useSearchSession(options: UseSearchSessionOptions) {
       resultReferrals.value = Array.isArray(result.referrals) ? result.referrals : [];
       resultTruncated.value = result.truncated === true;
       resultsComplete.value = result.hasMore !== true;
-      resultAtLimit.value = requestParams.sizeLimit !== undefined && resultCount.value === requestParams.sizeLimit;
+      // >= 而非 ===：服务器无视 sizeLimit 多给（或续拉跨上限）时同样要报
+      // 「可能不完整」，与 drain 路径的判定口径一致（审查 L-1）。
+      resultAtLimit.value = requestParams.sizeLimit !== undefined && resultCount.value >= requestParams.sizeLimit;
       lastSizeLimit.value = requestParams.sizeLimit;
       // RFC 2891 优雅降级一次性提示：服务器回非零 SortResult 时结果未按请求
       // 排序（属性不支持/服务器拒绝），条目照常展示，只提示不报错。0/缺省

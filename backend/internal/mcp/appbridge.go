@@ -104,15 +104,21 @@ func bridgePortAlive(appDataDir string) (int, bool) {
 
 // launchAppDBX 尽力拉起 DBX 应用（DBX_APP_LAUNCH_CMD 覆盖，否则 macOS
 // `open -a DBX.app`）；失败不致命——下面的端口文件轮询才是事实来源。
+// Start 后异步 Wait 兜底 reap：桥不可达时每次工具调用都会走到这里，
+// 不收尸会在 sidecar 长驻期间累积僵尸进程（审查 L1）。
 func launchAppDBX() {
 	if cmd := strings.TrimSpace(os.Getenv("DBX_APP_LAUNCH_CMD")); cmd != "" {
 		if proc := exec.Command("sh", "-c", cmd); proc != nil {
-			_ = proc.Start()
+			if err := proc.Start(); err == nil {
+				go func() { _ = proc.Wait() }()
+			}
 		}
 		return
 	}
 	if proc := exec.Command("open", "-a", "DBX.app"); proc != nil {
-		_ = proc.Start()
+		if err := proc.Start(); err == nil {
+			go func() { _ = proc.Wait() }()
+		}
 	}
 }
 

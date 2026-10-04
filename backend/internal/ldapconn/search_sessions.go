@@ -318,8 +318,9 @@ func (s *Service) nextSearchSession(ctx context.Context, session *ldapSearchSess
 	}
 
 	entries := ldapEntriesToTypes(ldapResult.Entries, s.ldapBinaryValuePredicate(session.connectionID))
+	blockedFilter := newLDAPBlockedAttributeFilter(session.profile)
 	for i := range entries {
-		entries[i] = filterLDAPEntryBlockedAttributes(session.profile, entries[i])
+		entries[i] = blockedFilter(entries[i])
 	}
 	truncated := false
 	if session.remaining > 0 {

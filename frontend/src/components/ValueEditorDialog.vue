@@ -34,6 +34,7 @@ const emit = defineEmits<{
   (e: "notify", message: string): void;
   (e: "error", message: string): void;
   (e: "plainGenerated", plain: string): void;
+  (e: "extendedApplied"): void;
 }>();
 
 // 草稿只在打开瞬间拷贝：Cancel 丢弃编辑、OK 才写回（ ADS 同款语义）。
@@ -89,6 +90,7 @@ useModalA11y(
           @plain-generated="emit('plainGenerated', $event)"
           @notify="emit('notify', $event)"
           @error="emit('error', $event)"
+          @extended-applied="emit('close')"
         />
         <UacValueEditor v-else v-model="draft" :disabled="disabled" />
       </div>

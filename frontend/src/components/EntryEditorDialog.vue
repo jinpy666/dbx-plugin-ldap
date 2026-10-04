@@ -358,8 +358,10 @@ function mergeEntryDraft(entry: LdapEntry) {
       merged.push({ ...row, sourceValues: next });
       continue;
     }
+    // 保留原行的 rowId/kindOverride：v-for :key 依赖 rowId 稳定，kindOverride
+    // 是用户手动设置的「数据类型」覆盖，合并重建时都不得静默清掉。
     merged.push({
-      name: row.name,
+      ...row,
       valuesText: next.join("\n"),
       sourceValues: next,
       multiline: next.some((value) => value.includes("\n")),
@@ -369,6 +371,7 @@ function mergeEntryDraft(entry: LdapEntry) {
     if (present.has(name)) continue;
     const values = entry.attributes[name] ?? [];
     merged.push({
+      rowId: attrRowIdSeq++,
       name,
       valuesText: values.join("\n"),
       sourceValues: values,

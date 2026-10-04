@@ -79,6 +79,14 @@ func (s *CursorStore) Configure(ttl time.Duration, capacity, maxRows int) {
 	}
 }
 
+// MaxRows 返回单会话物化行上限（searchDigest 投影前预裁剪用，审查 M4：
+// 先裁掉注定被 Put 丢弃的条目，避免对超额行做逐行值级拷贝）。
+func (s *CursorStore) MaxRows() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.maxRows
+}
+
 // Put 物化一次 digest 的行（超 maxRows 截断并置 Truncated）；新会话把最旧
 // 会话按 LRU 淘汰。id 冲突概率可忽略（16 字节随机），冲突时旧会话被覆盖。
 func (s *CursorStore) Put(rows []CursorRow, baseDN, filter string, now time.Time) *CursorSession {

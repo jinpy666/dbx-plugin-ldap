@@ -390,6 +390,11 @@ type SchemaCache struct {
 type schemaCacheEntry struct {
 	metadata  LDAPSchemaMetadata
 	fetchedAt time.Time
+	// binaryNames 从 metadata 派生的「二进制语法属性名」集合（审查 M3：
+	// ldapBinaryValuePredicate 在 Search/GetEntry/Add/Modify 等每个请求上
+	// 调用，走 Get 的深拷贝再全量重建代价 O(schema)；惰性构建一次，
+	// Put/Invalidate 随条目整体换代）。
+	binaryNames map[string]struct{}
 }
 
 func NewSchemaCache(ttl time.Duration) *SchemaCache {
@@ -425,6 +430,33 @@ func (c *SchemaCache) Put(connectionID string, metadata LDAPSchemaMetadata) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.items[c.key(connectionID)] = &schemaCacheEntry{metadata: metadata, fetchedAt: time.Now()}
+}
+
+// BinaryNames 返回该连接「二进制语法属性名」的只读集合；缓存未加载或过期
+// 返回 nil（与 Get 同语义）。集合惰性构建一次并随缓存条目换代，调用方
+// 只读不写（共享可变状态以不写为契约）。
+func (c *SchemaCache) BinaryNames(connectionID string) map[string]struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry := c.items[c.key(connectionID)]
+	if entry == nil || time.Since(entry.fetchedAt) > c.ttl {
+		return nil
+	}
+	if entry.binaryNames == nil {
+		names := make(map[string]struct{})
+		for _, attrType := range entry.metadata.AttributeTypes {
+			if _, ok := ldapBinarySyntaxOIDs[attrType.Syntax]; !ok {
+				continue
+			}
+			for _, name := range append([]string{attrType.Name}, attrType.Names...) {
+				if key := ldapAttrNameKey(name); key != "" {
+					names[key] = struct{}{}
+				}
+			}
+		}
+		entry.binaryNames = names
+	}
+	return entry.binaryNames
 }
 
 // Invalidate 移除缓存（disconnect 时调用）。

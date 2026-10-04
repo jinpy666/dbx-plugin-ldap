@@ -196,8 +196,9 @@ func (s *Service) Search(ctx context.Context, req LDAPSearchRequest) (LDAPSearch
 	if err != nil {
 		return LDAPSearchResult{}, err
 	}
+	blockedFilter := newLDAPBlockedAttributeFilter(profile)
 	for i := range entries {
-		entries[i] = filterLDAPEntryBlockedAttributes(profile, entries[i])
+		entries[i] = blockedFilter(entries[i])
 	}
 	return LDAPSearchResult{
 		Entries:    entries,
@@ -1001,6 +1002,17 @@ func pagedSearchEntries(conn *ldap.Conn, searchReq *ldap.SearchRequest, pageSize
 	// lastCookie 记录最近一次成功响应给出的非空分页 cookie（与写入
 	// pagingControl 的值同步），错误路径的放弃请求要用它。
 	var lastCookie []byte
+	// 死循环护栏（审查 M2）：有缺陷或敌意服务端可能每页都返回非空 cookie
+	// 但 0 条条目——entries 永不增长、cookie 永不为空，而 go-ldap 的
+	// conn.Search 不感知 ctx，外层 requestCtx 的 deadline 拦不住；共享连接
+	// 回退路径上这会卡死 entry.mu 临界区饿死全部后续操作。两道护栏：相同
+	// cookie 的连续空页视为翻页结束；总页数按 limit/pageSize 推算加余量
+	// 封顶，超限按截断语义收尾（放弃请求顺带清掉服务端结果集）。
+	maxPages := 64
+	if pageSize > 0 && limit > 0 {
+		maxPages = limit/int(pageSize) + 16
+	}
+	pages := 0
 	collectReferrals := func(uris []string) {
 		for _, uri := range uris {
 			if len(referrals) >= maxReportedReferrals {
@@ -1058,6 +1070,22 @@ func pagedSearchEntries(conn *ldap.Conn, searchReq *ldap.SearchRequest, pageSize
 		}
 
 		if received == nil || len(received.Cookie) == 0 {
+			return entries, referrals, truncated, sortResult, nil
+		}
+		pages++
+		if len(result.Entries) == 0 && string(received.Cookie) == string(lastCookie) {
+			// 空页 + 与上页相同的 cookie：翻页游标停滞，视为翻页结束，
+			// 避免无限循环（守护注释见 lastCookie 上方）。
+			return entries, referrals, truncated, sortResult, nil
+		}
+		if pages >= maxPages {
+			if limit > 0 && len(entries) > limit {
+				entries = entries[:limit]
+			}
+			truncated = true
+			pagingControl.PagingSize = 0
+			pagingControl.SetCookie(received.Cookie)
+			_, _ = conn.Search(searchReq) // 放弃尽力而为：失败不掩盖截断结果
 			return entries, referrals, truncated, sortResult, nil
 		}
 		lastCookie = received.Cookie
@@ -1145,20 +1173,10 @@ func ldapBinaryValueAttribute(name string) bool {
 
 // ldapBinaryValuePredicate 返回该连接「属性值是否按二进制 base64 传输」的
 // 判定函数。schema 缓存未加载时仅靠名字绑定（读路径另有非法 UTF-8 兜底）。
+// 名字集合由 SchemaCache.BinaryNames 惰性派生并按条目缓存（审查 M3：本
+// 谓词每个请求都要构建，走 Get 深拷贝全量重建是 O(schema) 的每请求浪费）。
 func (s *Service) ldapBinaryValuePredicate(connectionID string) func(string) bool {
-	binaryNames := map[string]struct{}{}
-	if metadata := s.schemaCache().Get(connectionID); metadata != nil {
-		for _, attrType := range metadata.AttributeTypes {
-			if _, ok := ldapBinarySyntaxOIDs[attrType.Syntax]; !ok {
-				continue
-			}
-			for _, name := range append([]string{attrType.Name}, attrType.Names...) {
-				if key := ldapAttrNameKey(name); key != "" {
-					binaryNames[key] = struct{}{}
-				}
-			}
-		}
-	}
+	binaryNames := s.schemaCache().BinaryNames(connectionID)
 	return func(name string) bool {
 		if ldapPasswordValueAttribute(name) {
 			return false

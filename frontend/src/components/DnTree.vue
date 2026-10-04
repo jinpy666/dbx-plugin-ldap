@@ -551,7 +551,9 @@ function onFilterInput() {
 const contextMenuEl = ref<HTMLElement>();
 let contextMenuTrigger: HTMLElement | null = null;
 
-function openContextMenu(event: MouseEvent, dn: string) {
+// 菜单触发源：右键 MouseEvent 或键盘路径（Shift+F10/ContextMenu，TreeBranch
+// 用行中心合成坐标）。只消费 clientX/clientY。
+function openContextMenu(event: { clientX: number; clientY: number }, dn: string) {
   contextMenuTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   contextMenu.value = { x: event.clientX, y: event.clientY, dn };
   // 渲染后按实际菜单尺寸夹回视口（右缘/底缘右键不裁切），焦点进菜单容器

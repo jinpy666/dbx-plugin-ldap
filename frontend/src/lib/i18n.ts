@@ -49,6 +49,7 @@ export const messages = {
         tooLarge: "\"{name}\" exceeds the {max} MB binary upload limit",
         readFailed: "Cannot read \"{name}\"",
         invalidBase64: "Value is not valid base64",
+        hexTooLarge: "Value too large for hex view ({max} MB cap) — download to inspect",
       },
       valueEditors: {
         oidInvalid: "Not a valid OID (dot-separated numbers)",
@@ -112,6 +113,8 @@ export const messages = {
         attributesColumn: "Attributes",
         warningsColumn: "Warnings",
         warningNoDn: "No DN — a parent DN is required",
+        noteSkipped: "Skipped computed/unsupported properties: {names}",
+        warningUnconverted: "Unconverted value dropped: {detail}",
         entryCount: "{count} entries parsed",
         importButton: "Import",
         summary: "Imported {ok} entries, {failed} failed.",
@@ -479,6 +482,7 @@ export const messages = {
       syntaxes: "LDAP syntaxes",
       applies: "Applies to attributes",
       detailsEmpty: "Select a definition to view details",
+      showAll: "Show all {count}",
     },
     batchModify: {
       title: "Batch modify attributes",
@@ -669,6 +673,7 @@ export const messages = {
         tooLarge: "「{name}」超过二进制值 {max} MB 上限",
         readFailed: "无法读取「{name}」",
         invalidBase64: "该值不是有效的 base64",
+        hexTooLarge: "值过大，hex 视图上限 {max} MB——请下载查看",
       },
       valueEditors: {
         oidInvalid: "不是合法的 OID(点分数字)",
@@ -732,6 +737,8 @@ export const messages = {
         attributesColumn: "属性数",
         warningsColumn: "告警",
         warningNoDn: "缺少 DN——必须指定父 DN",
+        noteSkipped: "已跳过计算属性/不支持属性：{names}",
+        warningUnconverted: "无法转换的值已丢弃：{detail}",
         entryCount: "已解析 {count} 条",
         importButton: "导入",
         summary: "导入成功 {ok} 条，失败 {failed} 条。",
@@ -1099,6 +1106,7 @@ export const messages = {
       syntaxes: "LDAP 语法",
       applies: "适用于属性",
       detailsEmpty: "选择左侧定义查看明细",
+      showAll: "显示全部 {count} 条",
     },
     batchModify: {
       title: "批量修改属性",
@@ -1289,6 +1297,7 @@ export const messages = {
         tooLarge: "「{name}」超過二進位值 {max} MB 上限",
         readFailed: "無法讀取「{name}」",
         invalidBase64: "該值不是有效的 base64",
+        hexTooLarge: "值過大，hex 視圖上限 {max} MB——請下載查看",
       },
       valueEditors: {
         oidInvalid: "不是合法的 OID(點分數字)",
@@ -1352,6 +1361,8 @@ export const messages = {
         attributesColumn: "屬性數",
         warningsColumn: "警告",
         warningNoDn: "缺少 DN——必須指定父 DN",
+        noteSkipped: "已跳過計算屬性/不支援屬性：{names}",
+        warningUnconverted: "無法轉換的值已丟棄：{detail}",
         entryCount: "已解析 {count} 條",
         importButton: "匯入",
         summary: "匯入成功 {ok} 條，失敗 {failed} 條。",
@@ -1719,6 +1730,7 @@ export const messages = {
       syntaxes: "LDAP 語法",
       applies: "適用於屬性",
       detailsEmpty: "選擇左側定義查看明細",
+      showAll: "顯示全部 {count} 條",
     },
     batchModify: {
       title: "批次修改屬性",
@@ -1909,6 +1921,7 @@ export const messages = {
         tooLarge: "\"{name}\" supera el límite de {max} MB para valores binarios",
         readFailed: "No se puede leer \"{name}\"",
         invalidBase64: "El valor no es base64 válido",
+        hexTooLarge: "Valor demasiado grande para la vista hex (límite {max} MB): descárguelo para inspeccionarlo",
       },
       valueEditors: {
         oidInvalid: "No es un OID válido (números separados por puntos)",
@@ -1972,6 +1985,8 @@ export const messages = {
         attributesColumn: "Atributos",
         warningsColumn: "Avisos",
         warningNoDn: "Sin DN: se requiere un DN padre",
+        noteSkipped: "Propiedades calculadas o no admitidas omitidas: {names}",
+        warningUnconverted: "Valor no convertido descartado: {detail}",
         entryCount: "{count} entradas analizadas",
         importButton: "Importar",
         summary: "Se importaron {ok} entradas, {failed} fallaron.",
@@ -2339,6 +2354,7 @@ export const messages = {
       syntaxes: "Sintaxis LDAP",
       applies: "Se aplica a los atributos",
       detailsEmpty: "Selecciona una definición para ver los detalles",
+      showAll: "Mostrar todos ({count})",
     },
     batchModify: {
       title: "Modificar atributos en lote",
@@ -2529,6 +2545,7 @@ export const messages = {
         tooLarge: "\"{name}\" supera il limite di {max} MB per i valori binari",
         readFailed: "Impossibile leggere \"{name}\"",
         invalidBase64: "Il valore non è base64 valido",
+        hexTooLarge: "Valore troppo grande per la vista hex (limite {max} MB): scaricalo per esaminarlo",
       },
       valueEditors: {
         oidInvalid: "OID non valido (numeri separati da punti)",
@@ -2592,6 +2609,8 @@ export const messages = {
         attributesColumn: "Attributi",
         warningsColumn: "Avvisi",
         warningNoDn: "DN assente: è richiesto un DN padre",
+        noteSkipped: "Proprietà calcolate o non supportate ignorate: {names}",
+        warningUnconverted: "Valore non convertito eliminato: {detail}",
         entryCount: "{count} voci analizzate",
         importButton: "Importa",
         summary: "Importate {ok} voci, {failed} non riuscite.",
@@ -2959,6 +2978,7 @@ export const messages = {
       syntaxes: "Sintassi LDAP",
       applies: "Si applica agli attributi",
       detailsEmpty: "Seleziona una definizione per vedere i dettagli",
+      showAll: "Mostra tutti ({count})",
     },
     batchModify: {
       title: "Modifica attributi in blocco",
@@ -3149,6 +3169,7 @@ export const messages = {
         tooLarge: "「{name}」はバイナリ値の上限 {max} MB を超えています",
         readFailed: "「{name}」を読み込めません",
         invalidBase64: "値が有効な base64 ではありません",
+        hexTooLarge: "値が大きすぎて hex ビューの上限（{max} MB）を超えています。ダウンロードして確認してください",
       },
       valueEditors: {
         oidInvalid: "有効な OID ではありません(ドット区切りの数値)",
@@ -3212,6 +3233,8 @@ export const messages = {
         attributesColumn: "属性数",
         warningsColumn: "警告",
         warningNoDn: "DN がありません。親 DN が必要です",
+        noteSkipped: "計算プロパティ/非対応プロパティをスキップしました：{names}",
+        warningUnconverted: "変換できない値は破棄されました：{detail}",
         entryCount: "{count} 件を解析しました",
         importButton: "インポート",
         summary: "{ok} 件をインポートし、{failed} 件が失敗しました。",
@@ -3579,6 +3602,7 @@ export const messages = {
       syntaxes: "LDAP 構文",
       applies: "適用属性",
       detailsEmpty: "左側の定義を選択すると詳細を表示します",
+      showAll: "すべて表示（{count}）",
     },
     batchModify: {
       title: "属性の一括変更",
@@ -3769,6 +3793,7 @@ export const messages = {
         tooLarge: "\"{name}\" excede o limite de {max} MB para valores binários",
         readFailed: "Não é possível ler \"{name}\"",
         invalidBase64: "O valor não é um base64 válido",
+        hexTooLarge: "Valor grande demais para a visão hex (limite de {max} MB) — baixe para inspecionar",
       },
       valueEditors: {
         oidInvalid: "Não é um OID válido (números separados por pontos)",
@@ -3832,6 +3857,8 @@ export const messages = {
         attributesColumn: "Atributos",
         warningsColumn: "Avisos",
         warningNoDn: "Sem DN: é necessário um DN pai",
+        noteSkipped: "Propriedades calculadas ou não suportadas ignoradas: {names}",
+        warningUnconverted: "Valor não convertido descartado: {detail}",
         entryCount: "{count} entradas analisadas",
         importButton: "Importar",
         summary: "Importadas {ok} entradas, {failed} falharam.",
@@ -4199,6 +4226,7 @@ export const messages = {
       syntaxes: "Sintaxes LDAP",
       applies: "Aplica-se aos atributos",
       detailsEmpty: "Selecione uma definição para ver os detalhes",
+      showAll: "Mostrar todos ({count})",
     },
     batchModify: {
       title: "Modificar atributos em lote",

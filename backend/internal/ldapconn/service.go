@@ -149,8 +149,11 @@ func NewProfileFromLifecycle(params *lifecycle.Params) (Profile, bindSecrets, er
 	profile.AuthzID = params.ConfigString("authz_id")
 	profile.NTLMHash = params.SecretString("ntlm_hash")
 	// tls_verify 缺省 true（manifest §4 默认值）：字段未下发时保持 true。
-	if _, present := params.Connection.ExternalConfig["tls_verify"]; present {
-		profile.TLSVerify = params.ConfigBool("tls_verify")
+	// fail-closed：ConfigBool 对不可解析值缺省返回 false，会让 "yes"/数字 1
+	// 这类宿主表单形态静默关闭证书校验（MITM 可截获 bind 凭据），故此处
+	// 单独解析——只有显式 false 形态才关校验，其余一律保持 true。
+	if raw, present := params.Connection.ExternalConfig["tls_verify"]; present {
+		profile.TLSVerify = configTLSVerify(raw)
 	} else {
 		profile.TLSVerify = true
 	}
@@ -191,6 +194,28 @@ func NewProfileFromLifecycle(params *lifecycle.Params) (Profile, bindSecrets, er
 		KerberosPassword: params.SecretString("krb_password"),
 	}
 	return NormalizeProfile(profile), secrets, nil
+}
+
+// configTLSVerify 以 fail-closed 语义解析 tls_verify 原始值：只有显式 false
+// 形态（false/f/0/数字 0）才关闭证书校验，bool/字符串/数字之外的形态一律
+// 保持 true。不能复用 ConfigBool——它对不可解析值缺省 false，会让宿主表单
+// 存出的 "yes"/1 静默变成 InsecureSkipVerify=true。
+func configTLSVerify(raw any) bool {
+	switch value := raw.(type) {
+	case bool:
+		return value
+	case string:
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "false", "f", "0", "no", "off":
+			return false
+		default:
+			return true
+		}
+	case float64:
+		return value != 0
+	default:
+		return true
+	}
 }
 
 // buildLDAPURL 由连接表单组装 profile.URL：host 绑定按 ssh 族约定存裸主机名
@@ -318,6 +343,15 @@ func (s *Service) Test(ctx context.Context, params *lifecycle.Params) (string, e
 	}
 	if profile.ID == "" {
 		return "", fmt.Errorf("connection.id is required")
+	}
+	// 审查 L2：baseDN 与其他读路径同款裸控制字符拒绝（H1 纵深），探测请求
+	// 不把配置里的裸换行/空字节 DN 原样发往服务端。
+	if profile.BaseDN != "" {
+		normalized, err := normalizeLDAPReadDN(profile.BaseDN)
+		if err != nil {
+			return "", err
+		}
+		profile.BaseDN = normalized
 	}
 	target := connTarget{Host: params.Runtime.Host, Port: params.Runtime.Port}
 

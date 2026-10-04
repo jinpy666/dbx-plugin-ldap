@@ -123,6 +123,23 @@ const keyword = ref("");
 const selectedAttribute = ref("");
 const selectedObjectClass = ref("");
 
+// 审查 M-3：AD 规模 schema（attributeTypes 4000+、objectClasses 2000+）逐键
+// 全量重渲数千 DOM 节点会卡顿弹窗。列表默认只渲染前 SCHEMA_LIST_RENDER_CAP 行，
+// 「显示全部」opt-in 解锁——行高不固定（选中行内联展开明细），不适合固定行高
+// 虚拟化；键入过滤与常规浏览在截断窗口内即流畅，全量浏览按需展开。过滤字
+// 变化复位展开态，避免换关键词后仍背着全量列表。
+const SCHEMA_LIST_RENDER_CAP = 500;
+const showAllRows = ref(false);
+watch(keyword, () => {
+  showAllRows.value = false;
+});
+function renderRows<T>(rows: T[]): T[] {
+  return showAllRows.value ? rows : rows.slice(0, SCHEMA_LIST_RENDER_CAP);
+}
+function rowsCapped(total: number): boolean {
+  return !showAllRows.value && total > SCHEMA_LIST_RENDER_CAP;
+}
+
 // -- 分类页签（F2b 五分类主从浏览）-------------------------------------------
 // attributeTypes / objectClasses 为基础分类（始终可见）；匹配规则 / 匹配规则
 // 用途 / LDAP 语法仅在 sidecar 返回对应定义（非空数组）时显示。
@@ -307,6 +324,20 @@ const attributeRows = computed(() => {
   return cache.attributeNames.value.filter((name) => !needle || name.toLowerCase().includes(needle));
 });
 
+// 对象类行 title 用的 raw 定义串索引（审查 L-6：原恒填 ""，title 死绑定）。
+// 只在 rawObjectClasses 变化时重建，键入过滤不触发。
+const objectClassRawTextIndex = computed<Map<string, string>>(() => {
+  const index = new Map<string, string>();
+  for (const raw of cache.rawObjectClasses.value) {
+    const parsed = parseRawObjectClass(raw);
+    for (const name of [parsed.oid, ...parsed.names]) {
+      const key = name.toLowerCase();
+      if (key && !index.has(key)) index.set(key, raw);
+    }
+  }
+  return index;
+});
+
 const objectClassRows = computed<SchemaClassRow[]>(() => {
   const needle = keyword.value.trim().toLowerCase();
   const source = cache.objectClassAttributes.value;
@@ -318,7 +349,7 @@ const objectClassRows = computed<SchemaClassRow[]>(() => {
     seen.add(name.toLowerCase());
     if (needle && !name.toLowerCase().includes(needle)) continue;
     const entry = source[name];
-    rows.push({ name, must: entry.must ?? [], may: entry.may ?? [], definition: "" });
+    rows.push({ name, must: entry.must ?? [], may: entry.may ?? [], definition: objectClassRawTextIndex.value.get(name.toLowerCase()) ?? "" });
   }
   return rows.sort((left, right) => left.name.localeCompare(right.name));
 });
@@ -454,7 +485,7 @@ useModalA11y(
             <template v-if="activeTab === 'attributeTypes'">
               <h3>{{ t("schema.attributeTypes") }} <span class="muted">({{ attributeRows.length }})</span></h3>
               <ul>
-                <li v-for="name in attributeRows" :key="name" class="mono schema-attribute-row" :class="{ 'is-selected': name === selectedAttribute }" @click="selectAttribute(name)">
+                <li v-for="name in renderRows(attributeRows)" :key="name" class="mono schema-attribute-row" :class="{ 'is-selected': name === selectedAttribute }" @click="selectAttribute(name)">
                   <button type="button" class="schema-attribute-button mono" @click.stop="selectAttribute(name)">{{ name }}</button>
                   <div v-if="name === selectedAttribute && selectedAttributeInfo" class="schema-def">
                     <div v-if="selectedAttributeInfo.syntax">{{ t("schema.syntax") }}: <span class="mono">{{ selectedAttributeInfo.syntax }}</span></div>
@@ -465,12 +496,13 @@ useModalA11y(
                 </li>
                 <li v-if="attributeRows.length === 0" class="muted">{{ attributeEmptyText }}</li>
               </ul>
+              <button v-if="rowsCapped(attributeRows.length)" type="button" class="schema-show-all" @click="showAllRows = true">{{ t("schema.showAll", { count: attributeRows.length }) }}</button>
             </template>
             <template v-else-if="activeTab === 'objectClasses'">
               <h3>{{ t("schema.objectClasses") }} <span class="muted">({{ objectClassRows.length }})</span></h3>
               <ul>
                 <li
-                  v-for="row in objectClassRows"
+                  v-for="row in renderRows(objectClassRows)"
                   :key="row.name"
                   class="schema-attribute-row schema-oc-row"
                   :class="{ 'is-selected': row.name === selectedObjectClass }"
@@ -483,22 +515,24 @@ useModalA11y(
                 </li>
                 <li v-if="objectClassRows.length === 0" class="muted">{{ objectClassEmptyText }}</li>
               </ul>
+              <button v-if="rowsCapped(objectClassRows.length)" type="button" class="schema-show-all" @click="showAllRows = true">{{ t("schema.showAll", { count: objectClassRows.length }) }}</button>
             </template>
             <!-- 三类补充分类（F2b）：行样式/过滤/选中交互沿用属性列模式。 -->
             <template v-else-if="activeTab === 'matchingRules'">
               <h3>{{ t("schema.matchingRules") }} <span class="muted">({{ matchingRuleRows.length }})</span></h3>
               <ul>
-                <li v-for="row in matchingRuleRows" :key="row.oid" class="schema-attribute-row" :class="{ 'is-selected': row.oid === selectedMatchingRule }" @click="selectMatchingRule(row.oid)">
+                <li v-for="row in renderRows(matchingRuleRows)" :key="row.oid" class="schema-attribute-row" :class="{ 'is-selected': row.oid === selectedMatchingRule }" @click="selectMatchingRule(row.oid)">
                   <button type="button" class="schema-attribute-button mono" @click.stop="selectMatchingRule(row.oid)">{{ namesOrOid(row.names, row.oid) }}</button>
                 </li>
                 <li v-if="matchingRuleRows.length === 0" class="muted">{{ listEmptyText }}</li>
               </ul>
+              <button v-if="rowsCapped(matchingRuleRows.length)" type="button" class="schema-show-all" @click="showAllRows = true">{{ t("schema.showAll", { count: matchingRuleRows.length }) }}</button>
             </template>
             <template v-else-if="activeTab === 'matchingRuleUses'">
               <h3>{{ t("schema.matchingRuleUses") }} <span class="muted">({{ matchingRuleUseRows.length }})</span></h3>
               <ul>
                 <li
-                  v-for="row in matchingRuleUseRows"
+                  v-for="row in renderRows(matchingRuleUseRows)"
                   :key="row.oid"
                   class="schema-attribute-row"
                   :class="{ 'is-selected': row.oid === selectedMatchingRuleUse }"
@@ -508,15 +542,17 @@ useModalA11y(
                 </li>
                 <li v-if="matchingRuleUseRows.length === 0" class="muted">{{ listEmptyText }}</li>
               </ul>
+              <button v-if="rowsCapped(matchingRuleUseRows.length)" type="button" class="schema-show-all" @click="showAllRows = true">{{ t("schema.showAll", { count: matchingRuleUseRows.length }) }}</button>
             </template>
             <template v-else>
               <h3>{{ t("schema.syntaxes") }} <span class="muted">({{ syntaxRows.length }})</span></h3>
               <ul>
-                <li v-for="row in syntaxRows" :key="row.oid" class="schema-attribute-row" :class="{ 'is-selected': row.oid === selectedSyntax }" @click="selectSyntax(row.oid)">
+                <li v-for="row in renderRows(syntaxRows)" :key="row.oid" class="schema-attribute-row" :class="{ 'is-selected': row.oid === selectedSyntax }" @click="selectSyntax(row.oid)">
                   <button type="button" class="schema-attribute-button mono" @click.stop="selectSyntax(row.oid)">{{ syntaxLabel(row) }}</button>
                 </li>
                 <li v-if="syntaxRows.length === 0" class="muted">{{ listEmptyText }}</li>
               </ul>
+              <button v-if="rowsCapped(syntaxRows.length)" type="button" class="schema-show-all" @click="showAllRows = true">{{ t("schema.showAll", { count: syntaxRows.length }) }}</button>
             </template>
           </div>
           <!-- 明细卡（Master-Details）：OID/NAME/DESC 标签沿用 RFC 4512 关键字
@@ -651,5 +687,20 @@ useModalA11y(
 /* objectClass 行改为可点选：沿用属性列的指针手型。 */
 .schema-oc-row {
   cursor: pointer;
+}
+/* 「显示全部」按钮（审查 M-3 截断渲染的解锁入口）：弱化样式，紧贴列表尾部。 */
+.schema-show-all {
+  margin-top: 4px;
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.schema-show-all:hover {
+  color: var(--foreground);
 }
 </style>

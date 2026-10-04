@@ -32,21 +32,33 @@ beforeEach(() => {
 });
 
 describe("toResultRows", () => {
-  it("maps entries to row VMs with dn as the stable row id and joined multi-values", () => {
+  it("maps entries to row VMs with a dn-derived stable row id and joined multi-values", () => {
     const entries: LdapEntry[] = [
       { dn: "cn=alice,dc=demo,dc=dbx", attributes: { cn: ["alice"], mail: ["a@x", "b@x"] } },
       { dn: "cn=bob,dc=demo,dc=dbx", attributes: { cn: [] } },
     ];
     const rows = toResultRows(entries);
-    expect(rows[0]).toMatchObject({ id: entries[0].dn, dn: entries[0].dn, cn: "alice", mail: "a@x | b@x" });
+    // id = DN#seq（审查 L-3：裸 DN 在同 DN 多行时会被 ag-grid 按 id 合并丢行）。
+    expect(rows[0].id).toMatch(new RegExp(`^${entries[0].dn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}#\\d+$`));
+    expect(rows[0]).toMatchObject({ dn: entries[0].dn, cn: "alice", mail: "a@x | b@x" });
     // 空数组 → 空串（筛选面板的 blank 选项可命中）；缺列不落键（ag-grid 同样按空值过滤）
     expect(rows[1].cn).toBe("");
     expect(rows[1].mail).toBeUndefined();
   });
 
+  it("gives duplicate DNs distinct row ids so ag-grid cannot merge them (L-3)", () => {
+    const dn = "cn=dup,dc=demo,dc=dbx";
+    const rows = toResultRows([{ dn, attributes: { cn: ["1"] } }, { dn, attributes: { cn: ["2"] } }]);
+    expect(rows[0].id).not.toBe(rows[1].id);
+    expect(rows[0].dn).toBe(dn);
+    expect(rows[1].dn).toBe(dn);
+    expect(rows[0].cn).toBe("1");
+    expect(rows[1].cn).toBe("2");
+  });
+
   it("never lets an attribute overwrite the reserved id/dn row fields", () => {
     const rows = toResultRows([{ dn: "cn=x,dc=demo,dc=dbx", attributes: { id: ["evil"], cn: ["x"] } }]);
-    expect(rows[0].id).toBe("cn=x,dc=demo,dc=dbx");
+    expect(rows[0].id).toMatch(new RegExp(`^cn=x,dc=demo,dc=dbx#\\d+$`));
     // 保留字段不落 VM，但列仍会渲染（值为空）
     expect(resultColumns(["id", "cn"]).map((def) => def.field)).toEqual(["dn", "cn"]);
   });
@@ -57,10 +69,12 @@ describe("toResultRows", () => {
     // 同一 entry 对象重复提交（游标排空期间的既有条目）→ 复用同一行 VM。
     const [again] = toResultRows([entry, { dn: "cn=bob,dc=demo,dc=dbx", attributes: {} }]);
     expect(again).toBe(first);
-    // 不同对象（新一次搜索返回的条目）→ 新行 VM，不会串用旧数据。
+    // 不同对象（新一次搜索返回的条目）→ 新行 VM + 新行 id，不会串用旧数据。
     const [fresh] = toResultRows([{ dn: entry.dn, attributes: { cn: ["alice"] } }]);
     expect(fresh).not.toBe(first);
-    expect(fresh).toEqual(first);
+    expect(fresh.dn).toBe(first.dn);
+    expect(fresh.cn).toBe(first.cn);
+    expect(fresh.id).not.toBe(first.id);
   });
 
   it("renders AD objectGUID as a readable UUID in the result list", () => {

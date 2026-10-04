@@ -8,7 +8,7 @@
 //   （ldapApi.callLdap 会注入并强校验 connectionId，此处不能用）
 // 数据面纯函数在 lib/logFeed（单测覆盖），本组件只持有列表与交互。
 <script setup lang="ts">
-import { computed, onBeforeUnmount, nextTick, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ChevronDown, Check, Copy, ScrollText, Trash2 } from "@lucide/vue";
 import {
   collectConnectionIds,
@@ -24,9 +24,15 @@ import {
 } from "../lib/logFeed";
 import { t } from "../lib/i18n";
 import { writeClipboardText } from "../lib/clipboard";
+import VirtualList from "./VirtualList.vue";
 
 // 单次回填上限：后端 ring 容量 1000，取两倍冗余防旧宿主缓冲更大。
 const TAIL_LIMIT = 2000;
+
+// 虚拟化行高（审查 M-5）：单行 nowrap（11px × line-height 1.7 ≈ 18.7px），
+// 取 19px。1000 行全量 DOM + 每条事件强制 reflow 在高频日志下明显卡顿，
+// 视口外行不再挂载。
+const LOG_ROW_HEIGHT = 19;
 
 const items = ref<LogFeedItem[]>([]);
 const levelFilter = ref<"all" | LogLevel>("all");
@@ -35,7 +41,8 @@ const query = ref("");
 const autoScroll = ref(true);
 const tailError = ref("");
 const copied = ref(false);
-const listRef = ref<HTMLElement>();
+// ref 类型按 expose 的方法面声明（泛型组件 InstanceType 不适用，DnTree 同款）。
+const listRef = ref<{ scrollToIndex(index: number): void }>();
 
 const filtered = computed(() =>
   filterLogItems(items.value, { level: levelFilter.value, connectionId: connectionFilter.value, query: query.value }),
@@ -51,17 +58,26 @@ const connectionNames = ref(new Map<string, string>());
 
 let unsubscribe: (() => void) | undefined;
 let copiedTimer = 0;
+// 连续事件的滚动合并（rAF 节流）：高频日志下每条事件只排一次滚底，
+// 不再逐条 nextTick + 读 scrollHeight 强制布局。
+let scrollRaf = 0;
 
-async function scrollToBottom() {
-  await nextTick();
-  const element = listRef.value;
-  if (element && autoScroll.value) element.scrollTop = element.scrollHeight;
+function scrollToBottom() {
+  if (!autoScroll.value) return;
+  if (scrollRaf) return;
+  scrollRaf = requestAnimationFrame(() => {
+    scrollRaf = 0;
+    listRef.value?.scrollToIndex(filtered.value.length - 1);
+  });
 }
 
 function push(entry: LogFeedItem) {
   items.value = pushLogItem(items.value, entry);
-  void scrollToBottom();
+  scrollToBottom();
 }
+
+// 过滤条件变化后列表内容整体换代：自动滚动开启时跟随到底部。
+watch([levelFilter, connectionFilter, query], () => scrollToBottom());
 
 // 回填历史：after=已见最大 seq（增量语义，重开面板不重复）。连接名与回填
 // 并行 best-effort，任一失败不影响增量渲染。
@@ -76,7 +92,7 @@ async function backfill() {
       .filter((entry): entry is LogFeedItem => entry !== undefined);
     if (parsed.length) {
       items.value = mergeLogTail(items.value, parsed);
-      void scrollToBottom();
+      scrollToBottom();
     }
     tailError.value = "";
   } catch (cause) {
@@ -113,7 +129,7 @@ function clearLog() {
 
 function toggleAutoScroll() {
   autoScroll.value = !autoScroll.value;
-  if (autoScroll.value) void scrollToBottom();
+  if (autoScroll.value) scrollToBottom();
 }
 
 async function copyLog() {
@@ -143,6 +159,7 @@ onBeforeUnmount(() => {
   unsubscribe?.();
   unsubscribe = undefined;
   window.clearTimeout(copiedTimer);
+  if (scrollRaf) cancelAnimationFrame(scrollRaf);
 });
 </script>
 
@@ -194,25 +211,27 @@ onBeforeUnmount(() => {
       </button>
     </header>
     <p v-if="tailError" class="log-tail-error" role="alert">{{ t("logs.tailFailed") }}: {{ tailError }}</p>
-    <div ref="listRef" class="log-list" role="log">
+    <div class="log-list" role="log">
       <p v-if="filtered.length === 0" class="log-empty">{{ items.length === 0 ? t("logs.empty") : t("logs.emptyFiltered") }}</p>
-      <div
-        v-for="entry in filtered"
-        :key="entry.seq"
-        class="log-row"
-        :class="`log-row-${entry.level}`"
-        :title="entry.detail || entry.target || entry.method"
-      >
-        <span class="log-time">{{ formatLogTime(entry.at) }}</span>
-        <span class="log-badge" :class="resultBadgeClass(entry.result)">{{ entry.result }}</span>
-        <span class="log-level" :class="`log-level-${entry.level}`">{{ levelLabel(entry.level) }}</span>
-        <span class="log-method">{{ entry.method }}</span>
-        <span v-if="entry.source && entry.source !== 'ui'" class="log-source">{{ entry.source }}</span>
-        <span v-if="entry.connectionId" class="log-connection">{{ connectionLabel(entry.connectionId) }}</span>
-        <span class="log-target">{{ entry.target || "—" }}</span>
-        <span v-if="entry.detail" class="log-detail">{{ entry.detail }}</span>
-        <span v-if="entry.durationMs" class="log-duration">{{ entry.durationMs }}ms</span>
-      </div>
+      <VirtualList v-else ref="listRef" :items="filtered" :row-height="LOG_ROW_HEIGHT" class="log-vlist">
+        <template #default="{ item }">
+          <div
+            class="log-row"
+            :class="`log-row-${item.level}`"
+            :title="item.detail || item.target || item.method"
+          >
+            <span class="log-time">{{ formatLogTime(item.at) }}</span>
+            <span class="log-badge" :class="resultBadgeClass(item.result)">{{ item.result }}</span>
+            <span class="log-level" :class="`log-level-${item.level}`">{{ levelLabel(item.level) }}</span>
+            <span class="log-method">{{ item.method }}</span>
+            <span v-if="item.source && item.source !== 'ui'" class="log-source">{{ item.source }}</span>
+            <span v-if="item.connectionId" class="log-connection">{{ connectionLabel(item.connectionId) }}</span>
+            <span class="log-target">{{ item.target || "—" }}</span>
+            <span v-if="item.detail" class="log-detail">{{ item.detail }}</span>
+            <span v-if="item.durationMs" class="log-duration">{{ item.durationMs }}ms</span>
+          </div>
+        </template>
+      </VirtualList>
     </div>
   </section>
 </template>
@@ -302,11 +321,15 @@ onBeforeUnmount(() => {
 .log-list {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
   font-family: var(--mono-font-family);
   font-size: 11px;
   line-height: 1.7;
   padding: 2px 0;
+}
+/* VirtualList 是真正的滚动容器（.vlist 全局 height:100%），字体继承自
+   .log-list；行高由 :row-height 固定（LOG_ROW_HEIGHT），行内不再自行撑高。 */
+.log-vlist :deep(.log-row) {
+  height: 19px;
 }
 .log-empty {
   margin: 0;

@@ -37,6 +37,9 @@ const emit = defineEmits<{
   (e: "notify", message: string): void;
   /** 失败冒泡：扩展操作（经 friendlyLdapError 映射）或本地哈希失败（i18n 文案）。 */
   (e: "error", message: string): void;
+  /** RFC 3062 扩展操作成功：密码已由服务端写入，壳层应直接关闭弹窗——
+   *  本地草稿仍持有旧哈希，再走 Confirm 会把过期值写回表单行（审查 M-1）。 */
+  (e: "extendedApplied"): void;
 }>();
 
 // 占位 key（lib/i18n.ts 由主控合并，见任务收口说明）：t() 对缺失 key 直通
@@ -161,6 +164,7 @@ async function applyExtended() {
       return;
     }
     emit("notify", t("ldap.passwordEditor.extendedDone"));
+    emit("extendedApplied");
     identityDraft.value = "";
     oldPlain.value = "";
     newPlain.value = "";

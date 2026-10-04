@@ -60,6 +60,14 @@ func (s *Service) withDedicatedConn(ctx context.Context, connectionID string, fn
 	// tls_verify=false 审计留痕：独立拨号与共享建连同承诺（每次建连一条）。
 	s.emitTLSInsecureAudit(profile)
 
+	// 换代身份双检（审查 L6，对齐 connectLocked / SearchStart）：拨号窗口内
+	// 并发 Connect 换代后，不得按旧配置的凭据与旧白名单执行本次聚合读——
+	// 返回 errEntryDetached 让调用方重试落到新配置。
+	if !s.connectionEntryCurrent(entry) {
+		_ = conn.Close()
+		return errEntryDetached(entry.profile.ID)
+	}
+
 	// dialProfile 成功路径已设过同规则超时；stub 注入路径（单测）可能未设，
 	// 这里统一再设一次（0 归一为 30s，避免 WithConn 的 0=无限等待面）。
 	timeout := time.Duration(profile.TimeoutSeconds) * time.Second

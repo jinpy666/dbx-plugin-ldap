@@ -50,6 +50,8 @@ func NewServer(svc *ldapconn.Service, st *store.Store) *Server {
 }
 
 // SetEmitter 注入事件回调（main.go 持锁转发到当前 Emitter）。
+// 时序契约（审查 L4）：必须在 Serve 首个请求前调用一次——s.emit 无锁读，
+// 服务中途重设会与 runIntent 的读并发竞争。
 func (s *Server) SetEmitter(emit func(method string, params any)) {
 	s.emit = emit
 }
@@ -405,11 +407,22 @@ func (s *Server) searchDigest(args map[string]any) (map[string]any, error) {
 	}
 
 	// 物化 cursor：DN + 投影属性（DN 不截断，属性值过截断宽度）。
+	// 审查 M4：cursor 至多物化 MaxRows 行——先裁掉注定被 Put 丢弃的超额
+	// 条目再做逐行投影，避免 sizeLimit 达到聚合上限（10 万）时为约 90% 的
+	// 行做值级拷贝与截断。预裁剪置位 Truncated，与 Put 的截断语义汇合。
+	cursorTruncated := false
+	if maxRows := s.cursors.MaxRows(); maxRows > 0 && len(result.Entries) > maxRows {
+		result.Entries = result.Entries[:maxRows]
+		cursorTruncated = true
+	}
 	rows := make([]CursorRow, 0, len(result.Entries))
 	for _, entry := range result.Entries {
 		rows = append(rows, CursorRow{DN: entry.DN, Attributes: projectCursorAttributes(entry, projected, settings.CellWidth)})
 	}
 	session := s.cursors.Put(rows, result.BaseDN, result.Filter, s.now())
+	if cursorTruncated {
+		session.Truncated = true
+	}
 
 	baseDigest := map[string]any{
 		"matched":         result.Count,

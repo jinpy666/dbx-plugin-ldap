@@ -14,7 +14,8 @@ import { GRID_COLUMN_STATE_KEY, GRID_PAGE_SIZE_KEY, pluginStore, prunePersistedM
 // -- 结果表行视图模型 --------------------------------------------------------------
 // 字段名 = 属性名（值 = 多值 " | " 连接后的全文，供筛选/排序匹配），单元格
 // 显示层的 120 字截断只发生在 valueFormatter，不影响过滤与排序语义。
-// `id` 给 DbxAgGrid 的 getRowId 用（= 原始 DN，行身份稳定）。
+// `id` 给 DbxAgGrid 的 getRowId 用（`DN#seq` 形态，见 toResultRows；行身份
+// 稳定且同 DN 多行不互相覆盖，业务侧一律用 dn 字段）。
 
 export interface ResultRow {
   id: string;
@@ -37,11 +38,16 @@ export function joinValues(values: string[] | undefined | null): string {
 // 重建整表行；被结果集替换掉的旧条目对象由 GC 随 WeakMap 回收。
 const rowMemo = new WeakMap<LdapEntry, ResultRow>();
 
+// 行 id 自增序号（审查 L-3）：id 不再裸用 DN——服务器异常/referral 场景同一
+// DN 返回两次时，ag-grid 按 id 合并会静默丢行。`DN#seq` 对每个行对象唯一
+// （memo 复用同一行对象 → id 跨结果集稳定），业务侧行身份一律用 dn 字段。
+let resultRowIdSeq = 0;
+
 export function toResultRows(entries: LdapEntry[]): ResultRow[] {
   return entries.map((entry) => {
     const cached = rowMemo.get(entry);
     if (cached) return cached;
-    const row: ResultRow = { id: entry.dn, dn: entry.dn };
+    const row: ResultRow = { id: `${entry.dn}#${resultRowIdSeq++}`, dn: entry.dn };
     for (const [name, values] of Object.entries(entry.attributes)) {
       if (!RESERVED_ROW_FIELDS.has(name)) {
         const displayValues = name.toLowerCase() === "objectguid"

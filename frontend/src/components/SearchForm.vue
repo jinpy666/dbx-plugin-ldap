@@ -299,10 +299,8 @@ function recordSearch(model: SearchFormModel) {
 // 两种形态各挂一个触发按钮（快捷条 / filter-head 右侧），切换同一个下拉状态；
 // 面板绝对定位于各自按钮下方，因此按分支各写一份面板模板（不引入浮动层）。
 const historyOpen = ref(false);
-// filter-head 常驻 DOM（靠 hidden 收起），两个锚点须各自持 ref，
-// 外点判定对两个容器做 containment（同一时刻只有一个面板可见）。
+// 快捷条锚点（filter-head 展开态历史面板已并入快捷条，展开锚点已随模板移除）。
 const historyRootCompact = ref<HTMLElement | null>(null);
-const historyRootExpanded = ref<HTMLElement | null>(null);
 
 function toggleHistory() {
   if (props.disabled) return;
@@ -362,7 +360,7 @@ function clearHistory() {
 function onHistoryDocClick(event: MouseEvent) {
   if (!historyOpen.value) return;
   const target = event.target as Node;
-  if (historyRootCompact.value?.contains(target) || historyRootExpanded.value?.contains(target)) return;
+  if (historyRootCompact.value?.contains(target)) return;
   historyOpen.value = false;
 }
 

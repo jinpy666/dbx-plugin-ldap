@@ -267,6 +267,21 @@ function reset() {
   resultSummary.value = null;
 }
 
+// 解析层 notes/warnings 的本地化骨架（审查 M-7）：lib 产出的 `skipped: …`
+// 与 `Attr: value` 是英文技术串，七语界面里裸露。此处按前缀识别包装，
+// 未识别的（如 LDIF 行号注记）原样透出。
+function noteText(note: string): string {
+  const skippedPrefix = "skipped: ";
+  if (note.startsWith(skippedPrefix)) {
+    return t("ldap.importEntry.noteSkipped", { names: note.slice(skippedPrefix.length) });
+  }
+  return note;
+}
+
+function warningText(warning: string): string {
+  return t("ldap.importEntry.warningUnconverted", { detail: warning });
+}
+
 watch(
   () => [props.open, props.parentDn] as const,
   ([open], previous) => {
@@ -321,7 +336,7 @@ function onBackdropClick() {
         </div>
       </div>
 
-      <p v-for="note in parseNotes" :key="note" class="hint">{{ note }}</p>
+      <p v-for="note in parseNotes" :key="note" class="hint">{{ noteText(note) }}</p>
 
       <template v-if="entries.length > 0">
         <div class="import-dn-strategy">
@@ -361,7 +376,7 @@ function onBackdropClick() {
                 <td>{{ row.attributeCount }}</td>
                 <td>
                   <span v-if="row.warnings.includes('dn')" class="form-error">{{ t("ldap.importEntry.warningNoDn") }}</span>
-                  <span v-for="warning in row.warnings.filter((item) => item !== 'dn')" :key="warning" class="muted">{{ warning }}</span>
+                  <span v-for="warning in row.warnings.filter((item) => item !== 'dn')" :key="warning" class="muted">{{ warningText(warning) }}</span>
                   <span v-if="row.status === 'failed' && row.error" class="form-error">{{ row.error }}</span>
                 </td>
                 <td>

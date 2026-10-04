@@ -869,6 +869,9 @@ function handleEvent(event: DbxPluginEvent) {
   if (event.type === "env") return;
   if (event.method === "ldap/audit") {
     const params = event.params || {};
+    // 与 onEntryEvent 同款连接隔离：宿主广播/切换连接后迟到的旧连接审计事件
+    // 不得混入当前工作台（面板记录与 denied/error 横幅都会错误归属）。
+    if (String(params.connectionId ?? "") !== connectionId.value) return;
     // 数据面：进入最近操作面板（denied/error 高亮）。ok 结果不再弹通知——
     // 面板已承载记录，弹窗反而会覆盖领域反馈（审计 J-9）；denied/error 保留横幅。
     auditItems.value = pushAuditItem(auditItems.value, parseAuditEvent(params, auditSeq++, Date.now()));
@@ -1022,6 +1025,7 @@ function scheduleSchemaWarmup() {
 function syncConnectionContext() {
   setLdapConnectionId(connectionId.value);
   const current = connectionId.value;
+  const firstSync = lastSyncedConnectionId === "";
   const switched = lastSyncedConnectionId !== "" && lastSyncedConnectionId !== current;
   lastSyncedConnectionId = current;
   if (switched) {
@@ -1063,8 +1067,13 @@ function syncConnectionContext() {
   }
   // 书签按连接隔离：切换后重载（首次初始化也经此处装载）。
   reloadBookmarks();
-  baseDn.value = contextBaseDn.value;
-  void resolveAutoBaseDn();
+  // 审查 L-4：base_dn 只在真正切换连接（或首次同步）时复位——同连接 context
+  // 重推不再清掉用户 F12「设为浏览基」/自动定位的结果（未配置 base_dn 的
+  // 连接随后还会再弹一次“自动定位”通知）。
+  if (switched || firstSync) {
+    baseDn.value = contextBaseDn.value;
+    void resolveAutoBaseDn();
+  }
   // Schema is intentionally not warmed here: a user-visible entry read must
   // always win over metadata.  The wizard and entry detail loaders request it
   // lazily after their own primary data is visible.  服务器徽章的预热走

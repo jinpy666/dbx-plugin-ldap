@@ -4,9 +4,10 @@
 //     成功报 latencyMs（毫秒取整）；
 //   - bind 段：对既有活跃会话发一次 RootDSE base 读取验证存活。
 //
-// 只读安全：检查零目录写副作用、不发审计、不改写连接表状态（status/
-// lastUsedAt 均不触碰）；bind 段绝不静默自动建连——这与 WithConn 的惰性
-// 建连语义刻意相反，检查必须无副作用。
+// 只读安全：检查零目录写副作用、不改写连接表状态（status/lastUsedAt 均不
+// 触碰）；bind 段绝不静默自动建连——这与 WithConn 的惰性建连语义刻意相反，
+// 检查必须无副作用。唯一审计例外（审查 L3 契约勘误）：network 段是真实
+// 建连，tls_verify=false 时按「每次建连一条」的承诺发 tls-insecure 审计。
 package ldapconn
 
 import (

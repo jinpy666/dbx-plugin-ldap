@@ -269,6 +269,11 @@ export function useEntryDetail(options: UseEntryDetailOptions) {
     const request = ++entryRequestSeq;
     clearBanner();
     editorInitialTab.value = undefined;
+    // bump 序号同样使 openEntry 在途 finally 对 loadingMore/deferredLoading 的
+    // 复位失效（审查 L-5：该函数此前只自愈 editorLoading）。防御性复位三态，
+    // 避免入口变化时复制草稿永久只读 + loading 横幅不消失。
+    editorLoadingMore.value = false;
+    editorDeferredLoading.value = false;
     try {
       const result = await ldapApi.entryGet(dn);
       if (request !== entryRequestSeq) return;

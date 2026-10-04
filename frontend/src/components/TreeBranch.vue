@@ -25,9 +25,13 @@ const emit = defineEmits<{
   (e: "toggle", node: DnTreeNode): void;
   (e: "select", node: DnTreeNode): void;
   (e: "view", node: DnTreeNode): void;
-  (e: "menu", event: MouseEvent, dn: string): void;
+  (e: "menu", event: MenuTriggerEvent, dn: string): void;
   (e: "loadMore", node: DnTreeNode): void;
 }>();
+// 菜单触发源：鼠标右键是真实 MouseEvent；键盘路径（Shift+F10 / ContextMenu
+// 键）没有指针坐标，用行元素中心的合成坐标（审查 M-6：管理动作此前只存在于
+// 右键菜单，键盘用户完全不可达）。
+type MenuTriggerEvent = MouseEvent | { clientX: number; clientY: number };
 const rowElement = ref<HTMLElement>();
 const canExpand = computed(() => canExpandDnTreeNode(props.node));
 
@@ -67,6 +71,15 @@ function onKeydown(event: KeyboardEvent) {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
     onSelect(event);
+    return;
+  }
+  // 键盘打开节点菜单（WAI-ARIA tree 惯例键）：Shift+F10 或 ContextMenu 键。
+  if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (props.disabled) return;
+    const rect = rowElement.value?.getBoundingClientRect();
+    emit("menu", { clientX: rect ? rect.left + rect.width / 2 : 0, clientY: rect ? rect.top + rect.height / 2 : 0 }, props.node.dn);
     return;
   }
   if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;

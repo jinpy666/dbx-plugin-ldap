@@ -232,7 +232,18 @@ func normalizeLDAPModifyChanges(changes []LDAPModifyChange) ([]LDAPModifyChange,
 				Values:    values,
 			})
 		case "delete":
-			values := append([]string{}, change.Values...)
+			// 审查 L5：delete 语义对空值敏感——values 为空表示「删整个属性」，
+			// 不能走拒绝空值的 normalizeLDAPWriteValues；但显式给出的空白值
+			// （UI 直传 `values:[""]`）多数服务端回 protocolError，行为不可
+			// 预期。剔除空白值（与 MCP 路径 stringSlice 丢空白同款），其余
+			// 原样保留不 trim；全空则保持「无值删全部」语义。
+			values := make([]string, 0, len(change.Values))
+			for _, value := range change.Values {
+				if strings.TrimSpace(value) == "" {
+					continue
+				}
+				values = append(values, value)
+			}
 			normalized = append(normalized, LDAPModifyChange{
 				Operation: op,
 				Attribute: attr,
@@ -474,10 +485,16 @@ func effectiveReadAttributes(profile Profile, requested []string) []string {
 // 审查 L2：blocked 集合在顶部构建一次（原先每属性经 firstBlockedLDAPAttribute
 // 重建整张 map，O(条目×属性×表长)；Search 聚合与 search_sessions 逐页路径
 // 同一受益）。空属性名语义与 firstBlockedLDAPAttribute 一致：不算命中，保留。
+// 审查 M5：Search 大结果集请改用 newLDAPBlockedAttributeFilter——每条目重建
+// blocked map + 无条件整表拷贝在 10 万条目量级是纯浪费。
 func filterLDAPEntryBlockedAttributes(profile Profile, entry LDAPEntry) LDAPEntry {
-	if entry.Attributes == nil {
-		return entry
-	}
+	return newLDAPBlockedAttributeFilter(profile)(entry)
+}
+
+// newLDAPBlockedAttributeFilter 编译一次的条目屏蔽过滤器：blocked map 只建
+// 一次，无命中条目直接原样返回（Attributes 来自 ldapEntryToType 的新建 map，
+// 共享安全）。逐条目循环（Search 聚合、search_sessions 逐页）共用一个闭包。
+func newLDAPBlockedAttributeFilter(profile Profile) func(LDAPEntry) LDAPEntry {
 	blockedList := profile.BlockedAttributes
 	if len(blockedList) == 0 {
 		blockedList = DefaultLDAPBlockedAttributes()
@@ -488,15 +505,32 @@ func filterLDAPEntryBlockedAttributes(profile Profile, entry LDAPEntry) LDAPEntr
 	for _, attr := range blockedList {
 		blocked[ldapAttrNameKey(attr)] = struct{}{}
 	}
-	out := make(map[string][]string, len(entry.Attributes))
-	for name, values := range entry.Attributes {
-		if key := ldapAttrNameKey(name); key != "" {
-			if _, ok := blocked[key]; ok {
-				continue
+	return func(entry LDAPEntry) LDAPEntry {
+		if entry.Attributes == nil {
+			return entry
+		}
+		hit := false
+		for name := range entry.Attributes {
+			if key := ldapAttrNameKey(name); key != "" {
+				if _, ok := blocked[key]; ok {
+					hit = true
+					break
+				}
 			}
 		}
-		out[name] = values
+		if !hit {
+			return entry
+		}
+		out := make(map[string][]string, len(entry.Attributes))
+		for name, values := range entry.Attributes {
+			if key := ldapAttrNameKey(name); key != "" {
+				if _, ok := blocked[key]; ok {
+					continue
+				}
+			}
+			out[name] = values
+		}
+		entry.Attributes = out
+		return entry
 	}
-	entry.Attributes = out
-	return entry
 }

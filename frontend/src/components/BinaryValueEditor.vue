@@ -56,7 +56,6 @@ interface BinaryCard {
   kind: BinaryKind;
   previewUrl?: string;
   pemText?: string;
-  hexText: string;
   /** AD 二进制标识（objectGUID/objectSid）的人类可读解码（UUID / S-1-…）。 */
   decoded?: string;
   /** 解码后的原始字节数（invalid 值无法计算，缺省）。 */
@@ -114,17 +113,36 @@ function buildCard(value: string): BinaryCard {
       kind,
       previewUrl: mime ? `data:${mime};base64,${value}` : undefined,
       pemText,
-      hexText: toHexView(bytes),
       decoded: decoded || undefined,
       sizeBytes: bytes.length,
       invalid: false,
     };
   } catch {
-    return { value, kind: "unknown", hexText: "", invalid: true };
+    return { value, kind: "unknown", invalid: true };
   }
 }
 
 const cards = computed<BinaryCard[]>(() => props.modelValue.map(buildCard));
+
+// hex 文本惰性构建（审查 M-4）：toHexView 对 5MB 值会物化 20MB+ 字符串，而
+// 卡片多数时间展示的是图片预览/PEM/解码标识。首切 hex 视图才按值缓存计算；
+// 超过阈值的值直接提示下载查看，不再物化 hex 文本（模板有对应的提示分支）。
+const HEX_VIEW_MAX_BYTES = 256 * 1024;
+const hexTextCache = new Map<string, string>();
+
+function hexTooLarge(card: BinaryCard): boolean {
+  return (card.sizeBytes ?? 0) > HEX_VIEW_MAX_BYTES;
+}
+
+function hexTextFor(card: BinaryCard): string {
+  if (card.invalid || hexTooLarge(card)) return "";
+  let text = hexTextCache.get(card.value);
+  if (text === undefined) {
+    text = toHexView(base64ToBytes(card.value));
+    hexTextCache.set(card.value, text);
+  }
+  return text;
+}
 
 // 视图切换状态按"值内容"记录：删除某个值后其余卡片的视图不被错位重置。
 const hexToggled = ref(new Set<string>());
@@ -261,7 +279,8 @@ function onDrop(event: DragEvent): void {
         :alt="`${attributeName} #${index + 1}`"
       />
       <pre v-else-if="cardMode(card) === 'pem' && card.pemText !== undefined" class="binary-pem mono">{{ card.pemText }}</pre>
-      <pre v-else class="binary-hex mono">{{ card.hexText }}</pre>
+      <p v-else-if="hexTooLarge(card)" class="binary-error">{{ t("ldap.binary.hexTooLarge", { max: HEX_VIEW_MAX_BYTES / (1024 * 1024) }) }}</p>
+      <pre v-else class="binary-hex mono">{{ hexTextFor(card) }}</pre>
       <div class="binary-actions">
         <span v-if="card.sizeBytes !== undefined" class="binary-size mono">{{ sizeLabel(card) }}</span>
         <button v-if="card.decoded" type="button" class="toolbar-button binary-copy" :disabled="disabled" @click="copyDecoded(card)">
