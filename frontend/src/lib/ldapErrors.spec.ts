@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { friendlyLdapError, parseLdapErrorMeta } from "./ldapErrors";
+import { setWorkbenchLocale } from "./i18n";
 
 describe("friendlyLdapError", () => {
     it("maps the go-ldap network error (original runtime bug) to a friendly message", () => {
@@ -147,5 +148,28 @@ describe("numeric code prefix collisions (LDAP-DEV mislocalization fix)", () => 
         const raw = 'bind ldap: LDAP Result Code 206 "Empty password not allowed by the client"';
         expect(friendlyLdapError(raw)).toBe(friendlyLdapError("[ldap-code=206] empty password"));
         expect(friendlyLdapError(raw)).not.toBe(friendlyLdapError("[ldap-code=20] x"));
+    });
+});
+
+describe("connection not connected (web restore self-heal)", () => {
+    const inactive = 'connection "abc" is not connected; call connection/connect first';
+
+    it("maps the sidecar not-connected error to the reopen guidance", () => {
+        const mapped = friendlyLdapError(inactive);
+        expect(mapped).not.toBe(inactive);
+        // 同一暂时态不同连接 id 命中同一文案；指引指向「关闭页签重开」。
+        expect(mapped).toBe(friendlyLdapError('connection "x.y" is not connected; call connection/connect first'));
+        // 英文 locale 下确认指引语义（默认 locale 为 zh-CN，不依赖具体语言断言全量文案）。
+        setWorkbenchLocale("en");
+        try {
+            expect(friendlyLdapError(inactive)).toContain("reopen");
+        } finally {
+            setWorkbenchLocale("zh-CN");
+        }
+    });
+
+    it("keeps the not-connected rule ahead of the generic network/timeout rules", () => {
+        const raw = `${inactive} (i/o timeout)`;
+        expect(friendlyLdapError(raw)).toBe(friendlyLdapError(inactive));
     });
 });
