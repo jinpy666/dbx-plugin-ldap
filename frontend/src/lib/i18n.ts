@@ -205,6 +205,7 @@ export const messages = {
       tls: "TLS certificate check failed: install the CA in connection settings or disable certificate verification",
       network: "Cannot reach the LDAP server: check host, port and network",
       timeout: "The server did not respond in time (timeout)",
+      notConnected: "The LDAP connection is not open in this session yet. Close this tab, then reopen the connection from the DBX sidebar.",
     },
     tree: {
       title: "Directory tree",
@@ -824,6 +825,7 @@ export const messages = {
       tls: "TLS 证书校验失败：可在连接配置安装 CA 证书，或关闭「校验 TLS 证书」",
       network: "无法连接 LDAP 服务器：请检查地址、端口与网络",
       timeout: "服务器未在限定时间内响应（超时）",
+      notConnected: "LDAP 连接尚未在本会话建立（凭据可能尚未送达）。请关闭本页签，然后在 DBX 左侧连接列表重新打开该连接。",
     },
     tree: {
       title: "目录树",
@@ -1443,6 +1445,7 @@ export const messages = {
       tls: "TLS 憑證驗證失敗：可在連線設定安裝 CA 憑證，或關閉「驗證 TLS 憑證」",
       network: "無法連線 LDAP 伺服器：請檢查位址、連接埠與網路",
       timeout: "伺服器未在限定時間內回應（逾時）",
+      notConnected: "LDAP 連線尚未在本工作階段建立（憑據可能尚未送達）。請關閉本頁籤，然後在 DBX 左側連線清單重新開啟該連線。",
     },
     tree: {
       title: "目錄樹",
@@ -2062,6 +2065,7 @@ export const messages = {
       tls: "Falló la verificación del certificado TLS: instala la CA en la configuración de conexión o desactiva la verificación",
       network: "No se puede conectar al servidor LDAP: revisa dirección, puerto y red",
       timeout: "El servidor no respondió a tiempo (timeout)",
+      notConnected: "La conexión LDAP aún no se ha establecido en esta sesión (las credenciales pueden no haber llegado). Cierre esta pestaña y vuelva a abrir la conexión en la barra lateral de DBX.",
     },
     tree: {
       title: "Árbol de directorio",
@@ -2681,6 +2685,7 @@ export const messages = {
       tls: "Verifica del certificato TLS non riuscita: installa la CA nelle impostazioni di connessione o disattiva la verifica",
       network: "Impossibile raggiungere il server LDAP: controlla indirizzo, porta e rete",
       timeout: "Il server non ha risposto in tempo (timeout)",
+      notConnected: "La connessione LDAP non è ancora stata stabilita in questa sessione (le credenziali potrebbero non essere ancora arrivate). Chiudi questa scheda e riapri la connessione dalla barra laterale di DBX.",
     },
     tree: {
       title: "Albero della directory",
@@ -3300,6 +3305,7 @@ export const messages = {
       tls: "TLS 証明書の検証に失敗しました：接続設定で CA 証明書を導入するか、証明書検証を無効にしてください",
       network: "LDAP サーバーに接続できません：アドレス・ポート・ネットワークを確認してください",
       timeout: "サーバーが制限時間内に応答しません（タイムアウト）",
+      notConnected: "LDAP 接続はこのセッションでまだ確立されていません（認証情報がまだ届いていない可能性があります）。このタブを閉じてから、DBX のサイドバーで接続を開き直してください。",
     },
     tree: {
       title: "ディレクトリツリー",
@@ -3919,6 +3925,7 @@ export const messages = {
       tls: "Falha na verificação do certificado TLS: instale a CA nas configurações de conexão ou desative a verificação",
       network: "Não foi possível conectar ao servidor LDAP: verifique endereço, porta e rede",
       timeout: "O servidor não respondeu a tempo (timeout)",
+      notConnected: "A conexão LDAP ainda não foi estabelecida nesta sessão (as credenciais podem não ter chegado). Feche esta aba e reabra a conexão na barra lateral do DBX.",
     },
     tree: {
       title: "Árvore do diretório",

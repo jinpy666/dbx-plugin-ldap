@@ -56,6 +56,11 @@ const RULES: ReadonlyArray<{ pattern: RegExp; key: string }> = [
     { pattern: /administr?ative limit|result code 11(?!\d)/i, key: "err.adminLimit" },
     { pattern: /result code 53(?!\d)|unwilling to perform/i, key: "err.unwilling" },
     { pattern: /result code 8(?!\d)|strong(?:er)? auth(?:entication)? required/i, key: "err.strongAuth" },
+    // Sidecar 连接注册表无此连接（web/docker 恢复页首调跑赢宿主
+    // connection/connect 重放，或连接确未打开）：明确指向「关闭本页签，从
+    // 左侧连接列表重新打开」的恢复出口——指向「重开后点重连」类指引在
+    // 旧宿主下会死循环（ssh#144 同款教训）。
+    { pattern: /is not connected; call connection\/connect first/i, key: "err.notConnected" },
     // 网络类先于通用超时：dial i/o timeout 归为"无法连接"更贴切；
     // "connection lost/closed"（连接中断，含传输层意外断开）同归网络类
     //（UI 扫描 P2-1：此前英文原文透传三处横幅）。
