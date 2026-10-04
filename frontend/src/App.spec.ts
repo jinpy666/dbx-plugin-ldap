@@ -546,6 +546,118 @@ describe("App batch write guards and replay coalescing", () => {
   });
 });
 
+// -- Boot 恢复自愈窗口（web/docker 整页刷新后首次调用跑赢宿主 connect 重放）------
+describe("App boot-restore connection wait window", () => {
+  const inactiveError = 'connection "first" is not connected; call connection/connect first';
+
+  it("waits out the not-connected race on boot and proceeds once the host replays the connection", async () => {
+    vi.useFakeTimers();
+    try {
+      let whoamiCalls = 0;
+      const host = await mountWithHost(false, false, {}, async (method) => {
+        if (method === "ldap/whoami") {
+          whoamiCalls += 1;
+          if (whoamiCalls <= 2) throw new Error(inactiveError);
+          return { authzId: "dn:cn=admin,dc=first" };
+        }
+        return { statuses: [], entries: [], count: 0, truncated: false };
+      });
+      // 前两次探测被拒：bootWaiting 状态可见（恢复等待文案）。
+      await flushPromises();
+      expect(whoamiCalls).toBe(1);
+      expect(wrapper!.text()).toContain("waiting for the DBX host to reopen");
+      // 第 1 次重试仍失败，第 2 次重试成功：窗口内自愈，等待态退出。
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(1000);
+      await flushPromises();
+      expect(whoamiCalls).toBe(3);
+      expect(wrapper!.text()).not.toContain("waiting for the DBX host to reopen");
+      expect(host.invoke.mock.calls.some(([method]) => method === "ldap/whoami")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up the boot window after exhaustion and lets the existing error surfaces take over", async () => {
+    vi.useFakeTimers();
+    try {
+      let whoamiCalls = 0;
+      await mountWithHost(false, false, {}, async (method) => {
+        if (method === "ldap/whoami") {
+          whoamiCalls += 1;
+          throw new Error(inactiveError);
+        }
+        return { statuses: [], entries: [], count: 0, truncated: false };
+      });
+      await flushPromises();
+      // 首次探测 + 窗口上限 12 次重试后放行，不无限等待。
+      for (let round = 0; round < 12; round += 1) await vi.advanceTimersByTimeAsync(1000);
+      await flushPromises();
+      expect(whoamiCalls).toBe(13);
+      expect(wrapper!.text()).not.toContain("waiting for the DBX host to reopen");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not enter the wait window for non-inactive boot errors", async () => {
+    vi.useFakeTimers();
+    try {
+      let whoamiCalls = 0;
+      await mountWithHost(false, false, {}, async (method) => {
+        if (method === "ldap/whoami") {
+          whoamiCalls += 1;
+          throw new Error('LDAP Result Code 49 "Invalid Credentials"');
+        }
+        return { statuses: [], entries: [], count: 0, truncated: false };
+      });
+      await flushPromises();
+      expect(whoamiCalls).toBe(1);
+      expect(wrapper!.text()).not.toContain("waiting for the DBX host to reopen");
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(whoamiCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-resolves the base DN after the boot window when the race voided the first attempt", async () => {
+    vi.useFakeTimers();
+    try {
+      let whoamiCalls = 0;
+      let statusesCalls = 0;
+      // 场景（E2E 实测）：context 缺 base_dn（旧宿主恢复），首轮
+      // resolveAutoBaseDn 时连接未就绪（statuses 空），等待窗口期间宿主
+      // connect 重放落地，之后 statuses 才带出 baseDn——就绪后必须重解。
+      await mountWithHost(false, false, { baseDn: "" }, async (method) => {
+        if (method === "ldap/whoami") {
+          whoamiCalls += 1;
+          if (whoamiCalls <= 2) throw new Error('connection "first" is not connected; call connection/connect first');
+          return { authzId: "dn:cn=admin,dc=first" };
+        }
+        if (method === "ldap/connections/statuses") {
+          statusesCalls += 1;
+          if (statusesCalls <= 2) return { statuses: [] };
+          return { statuses: [{ connectionId: "first", baseDn: "O=late" }] };
+        }
+        if (method === "ldap/rootDse") return { attributes: {} };
+        return { statuses: [], entries: [], count: 0, truncated: false };
+      });
+      await flushPromises();
+      // 窗口内两次重试（whoami #2/#3）；statuses #1 = refreshBackendReadOnly、
+      // #2 = 首轮 resolveAutoBaseDn。
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(1000);
+      await flushPromises();
+      expect(whoamiCalls).toBe(3);
+      // 就绪后重解：statuses #3 带出 baseDn，搜索面板跟随。
+      expect(wrapper!.findComponent(searchStub).props("baseDn")).toBe("O=late");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 // -- 宿主禁存储（WebKit 非安全上下文）下的工作台启动 ---------------------------
 // DBX webview 里访问 localStorage 绑定本身即抛 SecurityError（"The operation
 // is insecure."）。初始化链 initialize → syncConnectionContext → reloadBookmarks
