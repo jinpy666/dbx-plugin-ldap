@@ -81,7 +81,7 @@ describe("SchemaPanel", () => {
     const wrapper = trackPanel({ open: true });
     await flushPromises();
     expect(schemaMock).toHaveBeenCalledTimes(1);
-    expect(schemaMock).toHaveBeenNthCalledWith(1, false);
+    expect(schemaMock).toHaveBeenNthCalledWith(1, false, "conn-1");
     expect(wrapper.find("h2").text()).toBe("Schema");
     // 默认页签为属性类型；旧 payload 不含三类定义 → 仅两个基础页签。
     expect(tabs(wrapper).map((tab) => tab.text())).toEqual(["属性类型", "对象类"]);
@@ -175,8 +175,8 @@ describe("SchemaPanel", () => {
     expect(schemaMock).toHaveBeenCalledTimes(1);
     await refreshButton(wrapper).trigger("click");
     await flushPromises();
-    expect(schemaMock).toHaveBeenNthCalledWith(2, true);
-    expect(schemaMock).toHaveBeenNthCalledWith(3, false);
+    expect(schemaMock).toHaveBeenNthCalledWith(2, true, "conn-1");
+    expect(schemaMock).toHaveBeenNthCalledWith(3, false, "conn-1");
     expect(columns(wrapper)[0].findAll("li")).toHaveLength(3);
   });
 

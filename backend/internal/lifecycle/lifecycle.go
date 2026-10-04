@@ -127,6 +127,9 @@ func (p *Params) ConfigInt(key string) int {
 		}
 		return parsed
 	case json.Number:
+		// 审查 B-L8 澄清：json.Unmarshal 未开 UseNumber，当前解码路径只会产
+		// float64，本分支实际不可达；保留是为了 Params 若改走 UseNumber
+		//（大整数精度）时立即正确——注意 float64 分支对 >2^53 的值会丢精度。
 		parsed, err := strconv.Atoi(value.String())
 		if err != nil {
 			return 0

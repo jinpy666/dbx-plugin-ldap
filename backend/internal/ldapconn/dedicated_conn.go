@@ -84,12 +84,17 @@ func (s *Service) withDedicatedConn(ctx context.Context, connectionID string, fn
 	if !ldapNeedsReconnect(err) {
 		return err
 	}
-	// 断线重连一次（语义对齐 WithConn service.go「断线重连」段）。
+	// 断线重连一次（语义对齐 WithConn service.go「断线重连」段）。复审 A-L4：
+	// 重拨同样要换代复查——重拨窗口内并发 Connect 换代时不得按旧配置执行。
 	retryConn, dialErr := s.dedicatedDialFn(requestCtx, profile, target, secrets)
 	if dialErr != nil {
 		return dialErr
 	}
 	s.emitTLSInsecureAudit(profile)
+	if !s.connectionEntryCurrent(entry) {
+		_ = retryConn.Close()
+		return errEntryDetached(entry.profile.ID)
+	}
 	defer retryConn.Close()
 	return fn(retryConn)
 }

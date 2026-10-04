@@ -233,13 +233,13 @@ func normalizeLDAPModifyChanges(changes []LDAPModifyChange) ([]LDAPModifyChange,
 			})
 		case "delete":
 			// 审查 L5：delete 语义对空值敏感——values 为空表示「删整个属性」，
-			// 不能走拒绝空值的 normalizeLDAPWriteValues；但显式给出的空白值
-			// （UI 直传 `values:[""]`）多数服务端回 protocolError，行为不可
-			// 预期。剔除空白值（与 MCP 路径 stringSlice 丢空白同款），其余
-			// 原样保留不 trim；全空则保持「无值删全部」语义。
+			// 不能走拒绝空值的 normalizeLDAPWriteValues。只剔空串（UI/JSON 的
+			// 「没给值」形态，透传会被多数服务端拒）；纯空白值是合法 LDAP 值，
+			// 保留以维持「精确删该值」语义（复审 A-L1：连空白一起剔会把
+			// 「删单个空白值」升级为「删整个属性」，破坏方向更具破坏性）。
 			values := make([]string, 0, len(change.Values))
 			for _, value := range change.Values {
-				if strings.TrimSpace(value) == "" {
+				if value == "" {
 					continue
 				}
 				values = append(values, value)

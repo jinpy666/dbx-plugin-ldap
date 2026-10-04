@@ -466,6 +466,9 @@ const uiIntentHandlers = {
       importOpen.value = false;
       connectionsOpen.value = false;
       rootDseOpen.value = false;
+      // 审查 B-M5：Schema 对话框也在遮挡清单内——漏关时遮罩仍挡住目标
+      // 面板，intent 却回报 applied。
+      schemaOpen.value = false;
       // 搜索面板默认折叠为快捷条：宿主点名聚焦时展开，字段必须可见可交互。
       if (panel === "search") searchRef.value?.expandSearch();
       return { status: "applied", summary: { panel } };

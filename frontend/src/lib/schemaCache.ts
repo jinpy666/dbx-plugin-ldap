@@ -267,8 +267,10 @@ export function deriveSchemaMetadata(
  * 面板列表用）；DN 值属性解析等 raw 消费方走 rawAttributeTypes（sidecar 透出
  * 的原始串优先，mock/旧形状回退 deriveSchemaMetadata 保留的原文）。
  */
-async function fetchCanonicalSchema(): Promise<SchemaMetadata> {
-    const result = await ldapApi.schema(false);
+async function fetchCanonicalSchema(connectionId: string): Promise<SchemaMetadata> {
+    // 审查 B-M2：按缓存键显式路由拉取——全局 connectionId 在连接切换竞态
+    // 窗口里可能已指向新连接，错源拉取会让新 schema 挂进旧键。
+    const result = await ldapApi.schema(false, connectionId);
     const metadata = deriveSchemaMetadata(
         result.attributeTypes,
         result.objectClasses,
@@ -417,7 +419,7 @@ export function useLdapSchemaCache(): SchemaCacheView {
             sharedError.value = null;
             const generation = sharedCacheGeneration;
             try {
-                const raw = loaderOverride ? await loaderOverride(key) : await fetchCanonicalSchema();
+                const raw = loaderOverride ? await loaderOverride(key) : await fetchCanonicalSchema(key);
                 // loader 允许返回 Partial：缺省字段按空值补齐（与旧实现一致）。
                 const payload: SchemaMetadata = {
                     attributeNames: raw.attributeNames || [],

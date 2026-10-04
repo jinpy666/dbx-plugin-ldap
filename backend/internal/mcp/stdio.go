@@ -619,11 +619,12 @@ func (s *StdioServer) poolHas(id string) bool {
 
 // pooledConnectionID 按参数 hash 池化：命中直接复用（底层 service 惰性
 // 建连 + 断线重连语义保持）；未命中经 svc.Connect 注册（幂等、惰性拨号，
-// 与工作台同一套底层驱动），池满淘汰最旧并断开。
+// 与工作台同一套底层驱动），池满按 LRU 淘汰最久未用项并断开。
 func (s *StdioServer) pooledConnectionID(inline inlineConn) (string, error) {
 	id := inline.poolKey()
 	s.mu.Lock()
 	if _, ok := s.hash[id]; ok {
+		s.touchPoolLocked(id)
 		s.mu.Unlock()
 		return id, nil
 	}
@@ -665,6 +666,23 @@ func (s *StdioServer) pooledConnectionID(inline inlineConn) (string, error) {
 		return "", connectErr
 	}
 	return id, nil
+}
+
+// touchPoolLocked 命中复用把条目移到队尾（审查 B-L1：FIFO 淘汰会选中「刚
+// 返回给调用方、其首次工具调用还在路上」的连接，造成一次性 not-found——
+// 可自愈但体验差；LRU 下活跃连接永远是最后被触碰的，不会被淘汰）。调用方
+// 持 s.mu；容量 8，线性扫队成本可忽略。
+func (s *StdioServer) touchPoolLocked(id string) {
+	for index, pooled := range s.order {
+		if pooled == id {
+			if index == len(s.order)-1 {
+				return
+			}
+			s.order = append(s.order[:index], s.order[index+1:]...)
+			s.order = append(s.order, id)
+			return
+		}
+	}
 }
 
 // --- 内联连接参数（camelCase，与连接表单字段对齐） ---

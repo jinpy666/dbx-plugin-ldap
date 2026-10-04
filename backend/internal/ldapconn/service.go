@@ -131,10 +131,21 @@ func NewProfileFromLifecycle(params *lifecycle.Params) (Profile, bindSecrets, er
 		ID:   params.ConnectionID(),
 		Name: params.Connection.Name,
 	}
+	// use_starttls 审查 M1：严格布尔解析。缺省 false（无 StartTLS）；字段在场
+	// 且不可识别时 fail-closed 取 true——宁可连接报错也不静默明文（bind 凭据
+	// 会过网）。
+	legacyStartTLS := false
+	if raw, present := params.Connection.ExternalConfig["use_starttls"]; present {
+		if value, ok := configBoolForms(raw); ok {
+			legacyStartTLS = value
+		} else {
+			legacyStartTLS = true
+		}
+	}
 	ldapURL, useStartTLS, err := buildLDAPURL(
 		params.Connection.Host,
 		params.ConfigString("tls_mode"),
-		params.ConfigBool("use_starttls"),
+		legacyStartTLS,
 	)
 	if err != nil {
 		return Profile{}, bindSecrets{}, err
@@ -164,7 +175,14 @@ func NewProfileFromLifecycle(params *lifecycle.Params) (Profile, bindSecrets, er
 	profile.TLSClientKeyPath = params.ConfigString("tls_client_key_path")
 	profile.SASLHost = params.ConfigString("sasl_host")
 	profile.SASLQoP = params.ConfigString("sasl_qop")
-	profile.SASLMutualAuth = params.ConfigBool("sasl_mutual_auth")
+	profile.SASLMutualAuth = false
+	// sasl_mutual_auth 审查 M1：严格布尔解析；缺省/不可识别均 false（非安全
+	// 门禁，保持与字段缺失时一致的缺省行为）。
+	if raw, present := params.Connection.ExternalConfig["sasl_mutual_auth"]; present {
+		if value, ok := configBoolForms(raw); ok {
+			profile.SASLMutualAuth = value
+		}
+	}
 	// M3 kerberos：manifest krb_* 字段（auth_type=kerberos 时 visible）。
 	profile.Kerberos = &LDAPKerberosConfig{
 		CredentialType: params.ConfigString("krb_credential_type"),
@@ -180,8 +198,17 @@ func NewProfileFromLifecycle(params *lifecycle.Params) (Profile, bindSecrets, er
 	// 拨号窗口独立档（dial/read 两档超时）：0/缺省 = 回落 timeout_secs。
 	profile.DialTimeoutSeconds = params.ConfigInt("dial_timeout_secs")
 	// 只读门禁收敛：连接表单 read_only（插件特定配置项）∥ 宿主标准 read_only
-	// （ConnectionConfig 通用连接设置）。
-	profile.ReadOnly = params.ConfigBool("read_only") || params.Connection.ReadOnly
+	// （ConnectionConfig 通用连接设置）。审查 M1：表单 read_only 走严格布尔
+	// 解析——不可识别形态 fail-closed 取 true（写操作被放行比被拒危险）。
+	readOnlyForm := false
+	if raw, present := params.Connection.ExternalConfig["read_only"]; present {
+		if value, ok := configBoolForms(raw); ok {
+			readOnlyForm = value
+		} else {
+			readOnlyForm = true
+		}
+	}
+	profile.ReadOnly = readOnlyForm || params.Connection.ReadOnly
 	profile.AllowedBaseDNs = params.ConfigStringSlice("allowed_base_dns")
 	profile.AllowedWriteBaseDNs = params.ConfigStringSlice("allowed_write_base_dns")
 	profile.BlockedAttributes = params.ConfigStringSlice("blocked_attributes")
@@ -196,26 +223,39 @@ func NewProfileFromLifecycle(params *lifecycle.Params) (Profile, bindSecrets, er
 	return NormalizeProfile(profile), secrets, nil
 }
 
-// configTLSVerify 以 fail-closed 语义解析 tls_verify 原始值：只有显式 false
-// 形态（false/f/0/数字 0）才关闭证书校验，bool/字符串/数字之外的形态一律
-// 保持 true。不能复用 ConfigBool——它对不可解析值缺省 false，会让宿主表单
-// 存出的 "yes"/1 静默变成 InsecureSkipVerify=true。
-func configTLSVerify(raw any) bool {
-	switch value := raw.(type) {
+// configBoolForms 严格布尔解析：真值形态（true/t/yes/y/on/非零数字/bool）→
+// (true,true)，假值形态（false/f/no/n/off/数字0）→ (false,true)，不可识别
+// 形态 → (_,false)。ConfigBool 对不可识别值缺省 false——"yes"/数字 1 这类
+// 宿主表单形态会静默变 false，read_only 门禁 fail-open、use_starttls 明文
+// 降级都源于此（审查 M1）；安全相关布尔一律走本解析并按调用方 fail-closed
+// 方向定不可识别时的缺省。
+func configBoolForms(raw any) (value, ok bool) {
+	switch typed := raw.(type) {
 	case bool:
-		return value
+		return typed, true
 	case string:
-		switch strings.ToLower(strings.TrimSpace(value)) {
-		case "false", "f", "0", "no", "off":
-			return false
-		default:
-			return true
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "t", "yes", "y", "on", "1":
+			return true, true
+		case "false", "f", "no", "n", "off", "0":
+			return false, true
 		}
+		return false, false
 	case float64:
-		return value != 0
+		return typed != 0, true
 	default:
-		return true
+		return false, false
 	}
+}
+
+// configTLSVerify tls_verify 的 fail-closed 解析：只有显式 false 形态才关闭
+// 证书校验，bool/字符串/数字之外的形态一律保持 true（MITM 可截获 bind 凭据
+// 的方向绝不能是缺省）。
+func configTLSVerify(raw any) bool {
+	if value, ok := configBoolForms(raw); ok {
+		return value
+	}
+	return true
 }
 
 // buildLDAPURL 由连接表单组装 profile.URL：host 绑定按 ssh 族约定存裸主机名

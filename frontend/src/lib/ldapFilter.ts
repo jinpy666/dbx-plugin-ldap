@@ -635,6 +635,8 @@ export const TREE_FILTER_ATTRIBUTES = ['cn', 'ou', 'dc', 'uid', 'o', 'sn', 'give
  * 树过滤前缀语法：`ou=peo` / `cn: ali` 把匹配限定到单个属性（值含子串匹配）；
  * `ou=`（空值）= 存在性过滤（列出全部 OU）；`objectClass=person` 走精确等值。
  * 属性名大小写不敏感；前缀属性名不在白名单时返回 null（整串按普通关键字处理）。
+ * 前缀值内的 `*` 按控制台通配习惯参与匹配（审查 B-L6）：尾 `*` → startsWith、
+ * 首 `*` → endsWith、中段 `*` → 多段子串；`*` 不再被转义成字面星号。
  */
 export const parseTreeKeywordPrefix = (keyword: string): { attribute: string; value: string } | null => {
     const match = String(keyword ?? '').trim().match(/^([A-Za-z][A-Za-z0-9-]*)\s*[=:]\s*(.*)$/);
@@ -642,6 +644,20 @@ export const parseTreeKeywordPrefix = (keyword: string): { attribute: string; va
     const attribute = match[1].toLowerCase();
     if (attribute !== 'objectclass' && !(TREE_FILTER_ATTRIBUTES as readonly string[]).includes(attribute)) return null;
     return { attribute, value: match[2].trim() };
+};
+
+/** 前缀值的通配匹配：按 `*` 切段、逐段 RFC 4515 转义后重组。锚定严格按
+ * 用户书写位置——`peo*` = startsWith、`*li` = endsWith、`a*i` = 双端锚定
+ * （LDAP 子串断言里 `*` 就在它该在的位置）；无 `*` 保持 contains 语义。 */
+const buildTreeWildcardFilter = (attribute: string, value: string): string => {
+    const attr = safeBuilderAttribute(attribute);
+    if (!attr) return '';
+    if (!value.includes('*')) return buildSubstringFilter(attribute, value, 'contains');
+    const pieces = value.split('*').map((piece) => piece.trim()).filter(Boolean);
+    if (pieces.length === 0) return buildPresenceFilter(attribute);
+    const head = value.startsWith('*') ? '*' : '';
+    const tail = value.endsWith('*') ? '*' : '';
+    return `(${attr}=${head}${pieces.map((piece) => escapeLdapFilterValue(piece)).join('*')}${tail})`;
 };
 
 /**
@@ -660,7 +676,7 @@ export const buildTreeKeywordFilter = (keyword: string): string => {
             return prefixed.value ? buildEqualityFilter('objectClass', prefixed.value) : '(objectClass=*)';
         }
         if (prefixed.value === '') return buildPresenceFilter(prefixed.attribute);
-        return buildSubstringFilter(prefixed.attribute, prefixed.value, 'contains') || '(objectClass=*)';
+        return buildTreeWildcardFilter(prefixed.attribute, prefixed.value) || '(objectClass=*)';
     }
     const filters = TREE_FILTER_ATTRIBUTES.map((attribute) => buildSubstringFilter(attribute, text, 'contains')).filter(Boolean);
     return combineFilters(filters, 'or') || '(objectClass=*)';

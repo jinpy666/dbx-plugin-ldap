@@ -258,8 +258,13 @@ describe("buildTreeKeywordFilter", () => {
     expect(buildTreeKeywordFilter("ou=peo")).toBe("(ou=*peo*)");
     expect(buildTreeKeywordFilter("cn: ali")).toBe("(cn=*ali*)");
     expect(buildTreeKeywordFilter("DC=exa")).toBe("(dc=*exa*)");
-    // 前缀值同样走 RFC 4515 转义
-    expect(buildTreeKeywordFilter("ou=a*b")).toBe("(ou=*a\\2ab*)");
+    // 前缀值里的 `*` 按控制台通配习惯参与匹配（审查 B-L6）：锚定严格按
+    // 书写位置——`a*b` = startsWith a 且 endsWith b，非字面星号。
+    expect(buildTreeKeywordFilter("ou=a*b")).toBe("(ou=a*b)");
+    expect(buildTreeKeywordFilter("ou=peo*")).toBe("(ou=peo*)");
+    expect(buildTreeKeywordFilter("cn:*li")).toBe("(cn=*li)");
+    expect(buildTreeKeywordFilter("cn=a*i*n")).toBe("(cn=a*i*n)");
+    expect(buildTreeKeywordFilter("cn=*")).toBe("(cn=*)");
   });
 
   it("treats an empty prefix value as a presence filter (list all OUs)", () => {

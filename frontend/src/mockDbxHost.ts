@@ -282,6 +282,10 @@ interface SearchSession {
   entries: MockEntry[];
   pageSize: number;
   position: number;
+  // 审查 B-M4：sizeLimit 配额打满时与 Go pagedSearchEntries 同款 exact-limit
+  // 语义——聚合到顶即截断；末页 hasMore=false + truncated:true（api.ts 契约），
+  // useSearchSession 的「可能不完整」分支因此在走查中可达。
+  truncated: boolean;
 }
 
 const searchSessions = new Map<string, SearchSession>();
@@ -299,9 +303,12 @@ function startSearchSession(params_: Record<string, unknown>) {
   if (needsAliasDereference(baseDn, scope, String(params_.derefAliases ?? "never").trim().toLowerCase())) {
     throw new Error("alias dereferencing is not implemented in the fixture");
   }
-  const entries = Array.from(directory.values()).filter((entry) => dnInSearchScope(entry.dn, baseDn, scope) && matches(entry));
+  const matched = Array.from(directory.values()).filter((entry) => dnInSearchScope(entry.dn, baseDn, scope) && matches(entry));
+  const sizeLimit = Math.max(0, Number(params_.sizeLimit) || 0);
+  const truncated = sizeLimit > 0 && matched.length >= sizeLimit;
+  const entries = truncated ? matched.slice(0, sizeLimit) : matched;
   const searchId = `fixture-search-${nextSearchSessionId++}`;
-  searchSessions.set(searchId, { entries, pageSize, position: 0 });
+  searchSessions.set(searchId, { entries, pageSize, position: 0, truncated });
   return nextSearchSession({ ...params_, searchId });
 }
 
@@ -320,6 +327,8 @@ function nextSearchSession(params_: Record<string, unknown>) {
       attributes: selectAttributes(entry.attributes, params_.attributes, params_.typesOnly === true),
     })),
     hasMore,
+    // 截断语义落在末页（Go：配额打满页 hasMore:=false 且 truncated）。
+    ...(session.truncated && !hasMore ? { truncated: true } : {}),
   };
 }
 
@@ -431,6 +440,19 @@ function denyWrite(target: string): never {
   throw new Error("connection is read-only (fixture)");
 }
 
+// 成功写操作补发 ok 审计事件（审查 B-L10）：真实 sidecar 每次写都经
+// auditRecord 发 ldap/audit；mock 只在 denied/子树删除时发事件，ok 通知/
+// 最近操作面板路径在走查中覆盖不足。action 命名对齐后端 writeAuditRecord。
+function mockWriteAudit(action: string, target: string, detail?: string) {
+  emitEvent("ldap/audit", {
+    connectionId: context.connectionId,
+    action,
+    target,
+    result: "ok",
+    ...(detail ? { detail } : {}),
+  });
+}
+
 // -- 日志面板夹具（?panel=1） ----------------------------------------------------
 // 形状同 backend/internal/logbuf.Entry；seq 由 tail/live 两个通道共享同一条
 // 游标（后端 ring 单调递增的镜像），live 事件在装配后延迟推送（面板挂载并
@@ -499,6 +521,7 @@ const invoke: DbxPluginApi["invoke"] = async <T = unknown>(method: string, rawPa
     if (get(dn)) throw new Error(`entry already exists: ${dn}`);
     if (!dnWithinBase(dn, BASE_DN)) throw new Error(`base DN allowlist rejected: ${dn}`);
     put(dn, Object.fromEntries(Object.entries((input.attributes ?? {}) as Record<string, string[]>)));
+    mockWriteAudit("add-entry", dn);
   } else if (method === "ldap/entry/modify") {
     if (readOnly) denyWrite(String(input.dn ?? ""));
     const entry = get(String(input.dn ?? ""));
@@ -528,6 +551,7 @@ const invoke: DbxPluginApi["invoke"] = async <T = unknown>(method: string, rawPa
       } else throw new Error(`change ${index} operation must be add, replace, or delete`);
     }
     entry.attributes = attributes;
+    mockWriteAudit("modify-entry", String(input.dn ?? ""));
   } else if (method === "ldap/entry/compare") {
     // Compare（RFC 4511 §4.10）：按 caseIgnoreMatch 目录字符串默认规则比较
     // 属性首值；属性缺失/无值返回 match:false（compareFalse 走成功通道，非错误）。
@@ -549,6 +573,7 @@ const invoke: DbxPluginApi["invoke"] = async <T = unknown>(method: string, rawPa
     if (!entry) throw new Error(`entry not found: ${dn}`);
     // 密码值不落盘明文：写固定占位哈希（明文仅存在于请求参数内）。
     entry.attributes["userPassword"] = ["{SSHA}fixture-digest"];
+    mockWriteAudit("passwd-modify", dn);
     result = { success: true };
   } else if (method === "ldap/entry/delete") {
     if (readOnly) denyWrite(String(input.dn ?? ""));
@@ -574,6 +599,7 @@ const invoke: DbxPluginApi["invoke"] = async <T = unknown>(method: string, rawPa
       });
     } else {
       directory.delete(dn.toLowerCase());
+      mockWriteAudit("delete-entry", dn);
     }
   } else if (method === "ldap/entry/modifyDn") {
     if (readOnly) denyWrite(String(input.dn ?? ""));
@@ -607,6 +633,7 @@ const invoke: DbxPluginApi["invoke"] = async <T = unknown>(method: string, rawPa
     entry.attributes = attributes;
     for (const child of subtree) directory.delete(child.dn.toLowerCase());
     for (const child of subtree) put(child.dn.slice(0, child.dn.length - dn.length) + newDn, child.attributes);
+    mockWriteAudit("modify-dn", dn, `destinationDn: ${newDn}`);
   } else if (method === "ldap/connections/statuses") {
     // 字段名与后端契约一致：status（三态）+ unix 毫秒 lastUsedAt；name 供
     // 日志面板连接下拉显示（后端 SnapshotStatuses 恒带）。

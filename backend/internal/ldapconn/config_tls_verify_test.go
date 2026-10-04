@@ -38,3 +38,36 @@ func TestConfigTLSVerifyFailClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigBoolForms(t *testing.T) {
+	cases := []struct {
+		raw  any
+		want bool
+		ok   bool
+	}{
+		{nil, false, false},
+		{true, true, true},
+		{false, false, true},
+		{"TRUE", true, true},
+		{"t", true, true},
+		{"yes", true, true},
+		{"y", true, true},
+		{"on", true, true},
+		{"1", true, true},
+		{"no", false, true},
+		{"n", false, true},
+		{"off", false, true},
+		{"  False ", false, true},
+		{"", false, false},
+		{"maybe", false, false},
+		{float64(2), true, true},
+		{float64(0), false, true},
+		{struct{}{}, false, false},
+	}
+	for _, tc := range cases {
+		got, ok := configBoolForms(tc.raw)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("configBoolForms(%#v) = (%v,%v), want (%v,%v)", tc.raw, got, ok, tc.want, tc.ok)
+		}
+	}
+}

@@ -95,8 +95,9 @@ const effectiveColumnDefs = computed(() =>
     : props.columnDefs.map((definition) => ({ ...definition, sortable: false, filter: false })),
 );
 
-// 行 id：行 VM 带 id 字段直接用（ResultRow.id = DN）；兜底按对象身份分配稳定自增
-// id（重复空串 id 会让 ag-grid 行覆盖合并——kafka 侧走查发现的同类 bug）。
+// 行 id：行 VM 带 id 字段直接用（ResultRow.id = `DN#seq`，审查 L-3：同 DN
+// 多行不互相覆盖）；兜底按对象身份分配稳定自增 id（重复空串 id 会让 ag-grid
+// 行覆盖合并——kafka 侧走查发现的同类 bug）。
 const autoRowIds = new WeakMap<object, number>();
 let autoRowIdSeq = 0;
 

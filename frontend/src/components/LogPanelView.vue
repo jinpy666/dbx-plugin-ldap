@@ -18,7 +18,6 @@ import {
   mergeLogTail,
   nextLogCursor,
   parseLogEvent,
-  pushLogItem,
   type LogFeedItem,
   type LogLevel,
 } from "../lib/logFeed";
@@ -72,7 +71,10 @@ function scrollToBottom() {
 }
 
 function push(entry: LogFeedItem) {
-  items.value = pushLogItem(items.value, entry);
+  // 审查 B-M3：live 事件不保证到达序=seq 序（后端每请求一个 goroutine，
+  // Append 与 emit 之间可交错），复用 mergeLogTail 的 seq 排序+去重合入，
+  // 面板时间轴不再倒挂；n≤1000 的单条合并成本可接受。
+  items.value = mergeLogTail(items.value, [entry]);
   scrollToBottom();
 }
 

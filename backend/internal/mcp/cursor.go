@@ -166,6 +166,9 @@ func (s *CursorStore) Next(id string, req NextRequest, now time.Time) (*NextResu
 		end = len(session.Rows)
 	}
 	rows := append([]CursorRow(nil), session.Rows[offset:end]...)
+	// 语义（TestCursorRepeatedPagingSameSession 钉死）：显式 offset 是 seek，
+	// 续读游标跟随最后一次窗口末尾；响应的 NextOffset 如实回报位置，调用方
+	// 顺序消费时始终可用显式 offset 精确控位。
 	session.Offset = end
 	return &NextResult{
 		Rows:       rows,

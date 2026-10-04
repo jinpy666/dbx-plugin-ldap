@@ -24,7 +24,7 @@ export interface PsCommandSearch {
   sizeLimit?: number;
 }
 
-export type PsCommandReason = "empty" | "unknownCommand" | "missingValue" | "filter" | "identity";
+export type PsCommandReason = "empty" | "unknownCommand" | "missingValue" | "invalidValue" | "filter" | "identity";
 
 export interface PsCommandResult {
   ok: boolean;
@@ -56,10 +56,21 @@ function tokenize(command: string): string[] {
     if (current) tokens.push(current);
     current = "";
   };
-  for (const char of joined) {
+  for (let index = 0; index < joined.length; index += 1) {
+    const char = joined[index]!;
     if (quote) {
-      if (char === quote) quote = null;
-      else current += char;
+      if (char === quote) {
+        // PS 单引号字符串的转义是成对引号（'' → 字面 '，审查 B-L4）；
+        // 双引号内反引号（`）转义由通用尾随处理，此处只折叠 ''。
+        if (quote === "'" && joined[index + 1] === "'") {
+          current += "'";
+          index += 1;
+          continue;
+        }
+        quote = null;
+      } else {
+        current += char;
+      }
       continue;
     }
     if (char === "'" || char === '"') {
@@ -101,7 +112,6 @@ const COMPARISON_OPS: Record<string, { op: string; negateFallback?: boolean }> =
   "-ne": { op: "!=" },
   "-notlike": { op: "!=" },
   "-ge": { op: ">=" },
-  "-ge_desc": { op: ">=" },
   "-le": { op: "<=" },
   "-gt": { op: ">", negateFallback: true }, // LDAP 无 >：(!(attr<=v))
   "-lt": { op: "<", negateFallback: true }, // LDAP 无 <：(!(attr>=v))
@@ -305,7 +315,8 @@ export function parsePsAdCommand(command: string): PsCommandResult {
       search.scope = mapped;
     } else if (lower === "-sizelimit" || lower === "-resultsetsize") {
       const parsed = Number(next);
-      if (!Number.isInteger(parsed) || parsed <= 0) return { ok: false, search: base(), notes, ignored, reason: "missingValue", value: token };
+      // 审查 B-L5：值在场但非法 ≠ 缺值——reason 指向「改值」而非「补参数」。
+      if (!Number.isInteger(parsed) || parsed <= 0) return { ok: false, search: base(), notes, ignored, reason: "invalidValue", value: token };
       search.sizeLimit = parsed;
     } else if (lower === "-properties") {
       if (next.trim() !== "*") search.attributes = next.split(",").map((name) => name.trim()).filter(Boolean);

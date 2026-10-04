@@ -32,6 +32,11 @@ const defaultSearchAggregateLimit = 500
 // 语义只透出不追随；封顶防个别服务端在海量引用上撑爆响应体）。
 const maxReportedReferrals = 20
 
+// maxPagedEmptyPages 分页搜索连续空页护栏（审查 M2）：cookie 持续变化但
+// 迟迟不出条目的空页超过该数即按截断收尾；同 cookie 空页在循环内即时终止，
+// 不受此数约束。
+const maxPagedEmptyPages = 64
+
 // maxSubtreeDeleteEntries 子树递归删除条目上限（N1 防误删：先清点后删除，
 // 超限一律报错不删）。
 const maxSubtreeDeleteEntries = 1000
@@ -1005,14 +1010,12 @@ func pagedSearchEntries(conn *ldap.Conn, searchReq *ldap.SearchRequest, pageSize
 	// 死循环护栏（审查 M2）：有缺陷或敌意服务端可能每页都返回非空 cookie
 	// 但 0 条条目——entries 永不增长、cookie 永不为空，而 go-ldap 的
 	// conn.Search 不感知 ctx，外层 requestCtx 的 deadline 拦不住；共享连接
-	// 回退路径上这会卡死 entry.mu 临界区饿死全部后续操作。两道护栏：相同
-	// cookie 的连续空页视为翻页结束；总页数按 limit/pageSize 推算加余量
-	// 封顶，超限按截断语义收尾（放弃请求顺带清掉服务端结果集）。
-	maxPages := 64
-	if pageSize > 0 && limit > 0 {
-		maxPages = limit/int(pageSize) + 16
-	}
-	pages := 0
+	// 回退路径上这会卡死 entry.mu 临界区饿死全部后续操作。护栏按「空页」
+	// 口径：相同 cookie 的空页视为翻页结束；cookie 持续变化的连续空页到
+	// maxPagedEmptyPages 按截断收尾（放弃请求顺带清掉服务端结果集）。有条目
+	// 的页不计数——entries 必然增长到 limit 收尾（调用方 aggregateLimit 恒
+	// >0），服务端缩页（AD MaxPageSize 小于请求页大小）的合法慢搜索不受影响。
+	emptyPages := 0
 	collectReferrals := func(uris []string) {
 		for _, uri := range uris {
 			if len(referrals) >= maxReportedReferrals {
@@ -1072,21 +1075,25 @@ func pagedSearchEntries(conn *ldap.Conn, searchReq *ldap.SearchRequest, pageSize
 		if received == nil || len(received.Cookie) == 0 {
 			return entries, referrals, truncated, sortResult, nil
 		}
-		pages++
-		if len(result.Entries) == 0 && string(received.Cookie) == string(lastCookie) {
-			// 空页 + 与上页相同的 cookie：翻页游标停滞，视为翻页结束，
-			// 避免无限循环（守护注释见 lastCookie 上方）。
-			return entries, referrals, truncated, sortResult, nil
-		}
-		if pages >= maxPages {
-			if limit > 0 && len(entries) > limit {
-				entries = entries[:limit]
+		if len(result.Entries) == 0 {
+			if string(received.Cookie) == string(lastCookie) {
+				// 空页 + 与上页相同的 cookie：翻页游标停滞，视为翻页结束，
+				// 避免无限循环（守护注释见 lastCookie 上方）。
+				return entries, referrals, truncated, sortResult, nil
 			}
-			truncated = true
-			pagingControl.PagingSize = 0
-			pagingControl.SetCookie(received.Cookie)
-			_, _ = conn.Search(searchReq) // 放弃尽力而为：失败不掩盖截断结果
-			return entries, referrals, truncated, sortResult, nil
+			emptyPages++
+			if emptyPages >= maxPagedEmptyPages {
+				if limit > 0 && len(entries) > limit {
+					entries = entries[:limit]
+				}
+				truncated = true
+				pagingControl.PagingSize = 0
+				pagingControl.SetCookie(received.Cookie)
+				_, _ = conn.Search(searchReq) // 放弃尽力而为：失败不掩盖截断结果
+				return entries, referrals, truncated, sortResult, nil
+			}
+		} else {
+			emptyPages = 0
 		}
 		lastCookie = received.Cookie
 		pagingControl.SetCookie(received.Cookie)

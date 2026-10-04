@@ -286,6 +286,11 @@ function selectSyntax(oid: string) {
 
 // 切换页签即清空选中：明细卡跟随当前分类。
 watch(activeTab, () => clearSelections());
+// 复审 A-L2：页签切换复位「显示全部」——对一个分类的 opt-in 不应蔓延到
+// 未点过的分类（声明顺序在 activeTab 之后，与上同段放置）。
+watch(activeTab, () => {
+  showAllRows.value = false;
+});
 
 // -- 明细卡（选中 attributeType / objectClass 的结构化展示）-------------------
 
@@ -434,7 +439,7 @@ async function refresh() {
     const { ldapApi } = await import("../lib/api");
     // Bypass the server-side cache first, then drop the in-process entry so
     // the loader refetches the fresh payload.
-    await ldapApi.schema(true);
+    await ldapApi.schema(true, props.connectionId);
     cache.invalidate(props.connectionId);
     await cache.ensureLoaded(props.connectionId);
   } catch (cause) {

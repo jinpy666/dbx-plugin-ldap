@@ -225,7 +225,15 @@ export const ldapApi = {
     );
   },
 
-  schema(refresh = false) {
+  schema(refresh = false, connectionId?: string) {
+    // 审查 B-M2：显式连接路由（callLdapForConnection 同款语义）——schema 的
+    // 缓存键与拉取目标必须同源。缺省仍走全局 connectionId（requireConnectionId
+    // 校验在位）；连接切换竞态窗口里 ensureLoaded 用缓存键显式路由，避免
+    // 新连接的 schema 被缓存到旧连接键下（30min TTL 内切回会读到错串的
+    // attributeInfo/rawAttributeTypes，影响 DN 值属性识别）。
+    if (connectionId) {
+      return callLdapForConnection<SchemaResult>(connectionId, "ldap/schema", refresh ? { refresh: true } : {});
+    }
     return callLdap<SchemaResult>("ldap/schema", refresh ? { refresh: true } : {});
   },
 
@@ -264,7 +272,12 @@ export const ldapApi = {
     return callLdap<{ authzId: string }>("ldap/whoami");
   },
 
-  /** 密码修改扩展操作（RFC 3062，F3）：write 路径，受 read_only/审计约束。 */
+  /**
+   * 密码修改扩展操作（RFC 3062，F3）：write 路径，受 read_only/审计约束。
+   * 线缆契约（与 sidecar passwdModify 一致，勿改）：identity/oldPassword/
+   * newPassword 空串一律「省略该参数」而非「传空值」——后端对空值同样省略，
+   * 「清空密码」这类需要显式空值的场景不在本通道表达（审查 B-L7 留痕）。
+   */
   entryPasswdModify(dn: string, options: { identity?: string; oldPassword?: string; newPassword?: string }) {
     return callLdap<{ success: boolean }>("ldap/entry/passwdModify", {
       dn,

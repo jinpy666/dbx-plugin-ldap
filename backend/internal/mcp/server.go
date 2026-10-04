@@ -409,7 +409,33 @@ func (s *Server) searchDigest(args map[string]any) (map[string]any, error) {
 	// 物化 cursor：DN + 投影属性（DN 不截断，属性值过截断宽度）。
 	// 审查 M4：cursor 至多物化 MaxRows 行——先裁掉注定被 Put 丢弃的超额
 	// 条目再做逐行投影，避免 sizeLimit 达到聚合上限（10 万）时为约 90% 的
-	// 行做值级拷贝与截断。预裁剪置位 Truncated，与 Put 的截断语义汇合。
+	// 行做值级拷贝与截断。复审 A-M1：统计与 rows 输出先于预裁剪、按全量
+	// 条目完成——否则 sizeLimit 超过 maxCursorRows 时 scanned/stats/sample
+	// 只覆盖前 N 行而 matched 仍是全量计数，同一响应口径自相矛盾。rows 输
+	// 出本就止于 DigestRowLimit、digest 聚合是修复前就有的全量语义。
+	rowsFormat := strings.EqualFold(strings.TrimSpace(stringField(args, "format")), "rows")
+	var outRows []map[string]any
+	var aggregated DigestResult
+	if rowsFormat {
+		outRows = make([]map[string]any, 0, settings.DigestRowLimit)
+		for index, entry := range result.Entries {
+			if index >= settings.DigestRowLimit {
+				break
+			}
+			outRows = append(outRows, ProjectEntry(entry, settings.CellWidth))
+		}
+	} else {
+		aggregated = AggregateDigest(DigestInput{
+			Entries:      result.Entries,
+			BaseDN:       result.BaseDN,
+			Filter:       result.Filter,
+			DistinctAttr: distinctAttr,
+			Width:        settings.CellWidth,
+			GroupLimit:   settings.DigestGroupLimit,
+			TopN:         settings.DigestTopN,
+			SampleRows:   settings.DigestSampleRows,
+		})
+	}
 	cursorTruncated := false
 	if maxRows := s.cursors.MaxRows(); maxRows > 0 && len(result.Entries) > maxRows {
 		result.Entries = result.Entries[:maxRows]
@@ -424,7 +450,7 @@ func (s *Server) searchDigest(args map[string]any) (map[string]any, error) {
 		session.Truncated = true
 	}
 
-	baseDigest := map[string]any{
+	response := map[string]any{
 		"matched":         result.Count,
 		"truncated":       result.Truncated,
 		"baseDn":          result.BaseDN,
@@ -432,33 +458,14 @@ func (s *Server) searchDigest(args map[string]any) (map[string]any, error) {
 		"cursorId":        session.ID,
 		"cursorTruncated": session.Truncated,
 	}
-	if strings.EqualFold(strings.TrimSpace(stringField(args, "format")), "rows") {
-		rowLimit := settings.DigestRowLimit
-		outRows := make([]map[string]any, 0, rowLimit)
-		for index, entry := range result.Entries {
-			if index >= rowLimit {
-				break
-			}
-			outRows = append(outRows, ProjectEntry(entry, settings.CellWidth))
-		}
-		baseDigest["rows"] = outRows
-		return baseDigest, nil
+	if rowsFormat {
+		response["rows"] = outRows
+		return response, nil
 	}
-
-	aggregated := AggregateDigest(DigestInput{
-		Entries:      result.Entries,
-		BaseDN:       result.BaseDN,
-		Filter:       result.Filter,
-		DistinctAttr: distinctAttr,
-		Width:        settings.CellWidth,
-		GroupLimit:   settings.DigestGroupLimit,
-		TopN:         settings.DigestTopN,
-		SampleRows:   settings.DigestSampleRows,
-	})
-	baseDigest["scanned"] = aggregated.Matched
-	baseDigest["stats"] = aggregated.Stats
-	baseDigest["sample"] = aggregated.Sample
-	return baseDigest, nil
+	response["scanned"] = aggregated.Matched
+	response["stats"] = aggregated.Stats
+	response["sample"] = aggregated.Sample
+	return response, nil
 }
 
 // cursorNext 工具 `ldap_cursor_next`：分批取定位字段行（n ≤20/批）。错误
