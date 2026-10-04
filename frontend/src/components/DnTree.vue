@@ -38,6 +38,8 @@ const emit = defineEmits<{
   (e: "copyDn", dn: string): void;
   (e: "addBookmark", dn: string): void;
   (e: "compare", dn: string): void;
+  /** 树根错误态的恢复出口：宿主侧重开连接后再重载树根（顺序由 App 保证）。 */
+  (e: "retryConnection"): void;
 }>();
 const rootNode = ref<DnTreeNode>();
 const treeError = ref("");
@@ -825,7 +827,12 @@ onBeforeUnmount(onMountedCleanup);
         <div v-if="loadingRoot" class="tree-state" role="status">{{ t("tree.loading") }}</div>
         <template v-else>
           <!-- 懒展开失败：错误横幅与树并存，不吞掉已加载的树 -->
-          <div v-if="treeError" class="tree-error" role="alert" :title="treeErrorRaw || treeError">{{ treeError }}</div>
+          <div v-if="treeError" class="tree-error" role="alert" :title="treeErrorRaw || treeError">
+            <span>{{ treeError }}</span>
+            <!-- 根加载失败的恢复出口：先请宿主重开连接（retryConnection），再重载树根。
+                 只重发 ldap/* 而连接始终未重开时，原地重试只会永远失败。 -->
+            <button type="button" class="toolbar-button" :disabled="disabled" @click.stop="emit('retryConnection')">{{ t("retry") }}</button>
+          </div>
           <div v-if="!rootNode && !treeError" class="tree-state" role="status">{{ t("tree.empty") }}</div>
           <VirtualList
             v-else-if="rootNode"

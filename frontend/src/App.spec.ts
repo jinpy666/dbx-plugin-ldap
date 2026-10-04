@@ -64,6 +64,7 @@ async function mountWithHost(
   both = false,
   connectionPatch: Record<string, unknown> = {},
   invokeImpl?: (method: string, params?: Record<string, unknown>) => Promise<unknown>,
+  stubOverrides: Record<string, unknown> = {},
 ) {
   let receiveContext: ((next: Record<string, unknown>) => void) | undefined;
   // 真桥 onEvent 是多监听器（audit 流 + useUiIntent + shared hostThemeRuntime），
@@ -90,7 +91,7 @@ async function mountWithHost(
     },
   } as unknown as DbxPluginApi;
   wrapper = mount(App, { global: { stubs: {
-    DnTree: treeStub, SearchForm: searchStub, ResultTable: resultTableStub, EntryEditorDialog: true,
+    DnTree: stubOverrides.DnTree ?? treeStub, SearchForm: searchStub, ResultTable: resultTableStub, EntryEditorDialog: true,
     DeleteEntryDialog: true, ModifyDnDialog: true, NewEntryWizard: true,
     SchemaPanel: true, ConnectionsPanel: true, AuditFeedPanel: true,
   } }, attachTo: document.body });
@@ -566,6 +567,11 @@ describe("App boot-restore connection wait window", () => {
       await flushPromises();
       expect(whoamiCalls).toBe(1);
       expect(wrapper!.text()).toContain("waiting for the DBX host to reopen");
+      // 首次探测失败即请宿主重开连接（旧宿主回退 host.reopenConnection 请求）。
+      expect((window.dbxPlugin as unknown as { request: ReturnType<typeof vi.fn> }).request).toHaveBeenCalledWith(
+        "host.reopenConnection",
+        { connectionId: "first" },
+      );
       // 第 1 次重试仍失败，第 2 次重试成功：窗口内自愈，等待态退出。
       await vi.advanceTimersByTimeAsync(1000);
       await vi.advanceTimersByTimeAsync(1000);
@@ -655,6 +661,37 @@ describe("App boot-restore connection wait window", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("skips the reopen request entirely when the connection is already live at boot", async () => {
+    // 侧边栏首次打开（连接已在线）：whoami 一次即过，不发任何重开请求。
+    await mountWithHost();
+    await flushPromises();
+    const request = (window.dbxPlugin as unknown as { request: ReturnType<typeof vi.fn> }).request;
+    expect(request.mock.calls.some(([method]) => method === "host.reopenConnection")).toBe(false);
+  });
+
+  it("requests the host to reopen the connection before reloading the tree from the error retry exit", async () => {
+    // 树根错误态重试按钮（DnTree retry-connection 事件）：重开在先、重载在后，
+    // 只重发 ldap/* 而连接始终未重开时原地重试只会永远失败。
+    let refreshSpy: ReturnType<typeof vi.fn> | undefined;
+    const retryTreeStub = defineComponent({
+      emits: ["retry-connection"],
+      setup(_, { expose, emit }) {
+        const refresh = vi.fn();
+        refreshSpy = refresh;
+        expose({ refresh, invalidate: vi.fn() });
+        return () => h("button", { class: "tree-retry-btn", onClick: () => emit("retry-connection") });
+      },
+    });
+    await mountWithHost(false, false, {}, undefined, { DnTree: retryTreeStub });
+    wrapper!.findComponent(retryTreeStub).vm.$emit("retry-connection");
+    await flushPromises();
+    expect((window.dbxPlugin as unknown as { request: ReturnType<typeof vi.fn> }).request).toHaveBeenCalledWith(
+      "host.reopenConnection",
+      { connectionId: "first" },
+    );
+    expect(refreshSpy).toHaveBeenCalled();
   });
 });
 
