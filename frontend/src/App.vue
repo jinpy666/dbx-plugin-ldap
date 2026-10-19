@@ -17,6 +17,8 @@ import { joinRdnAndParent, splitFirstDnRdn } from "./lib/dn";
 import { escapeLdapFilterValue } from "./lib/ldapFilter";
 import { friendlyLdapError } from "./lib/ldapErrors";
 import { decideConnectionRetry } from "./lib/connectionRetry";
+import { reopenHostConnection } from "./lib/hostReopen";
+import { TRANSPORT_PROBE_TIMEOUT_MS, useTransportWatch } from "./lib/useTransportWatch";
 import { writeClipboardText } from "./lib/clipboard";
 import { saveTextFile, type SaveTextOutcome } from "./lib/fileSave";
 import { serializeEntriesToCsv, serializeEntriesToJson, serializeEntriesToLdifText } from "./lib/ldapExporter";
@@ -991,18 +993,13 @@ async function waitForConnectionReady() {
 // 手动重连前请宿主按当前最新配置重开连接（对标 ssh App.vue 的同名函数）：
 // 连接在侧边栏被编辑（如改密码）后，宿主会摘掉 connected 标记且不回推插件，
 // sidecar 里存的凭据就此过期——不先重开的话后续 ldap/* 只会拿旧凭据反复失败。
-// 宿主以打开连接的同款流程重新下发配置（含 vault 里的最新凭据）。旧宿主无
-// reopenConnection 桥：回退 host.reopenConnection 请求，仍报错则静默忽略，
-// 行为退化为纯重试。
-async function requestHostReopenConnection() {
-  if (!connectionId.value) return;
-  try {
-    const api = window.dbxPlugin;
-    if (api?.reopenConnection) await api.reopenConnection(connectionId.value);
-    else await api?.request("host.reopenConnection", { connectionId: connectionId.value });
-  } catch {
-    // 旧宿主无此方法。
-  }
+// 宿主以打开连接的同款流程重新下发配置（含 vault 里的最新凭据）。重开有界
+// （hostReopen 10s Promise.race，双通道 api.reopenConnection 优先回退
+// host.reopenConnection 请求）：断链时请求可能永不落定，不设上限会把 boot
+// 恢复窗/树重试一起拖死。失败返回 false，由调用方决定重试或落错误面。
+async function requestHostReopenConnection(): Promise<boolean> {
+  if (!connectionId.value) return false;
+  return reopenHostConnection(window.dbxPlugin, connectionId.value);
 }
 
 // 树根错误态的恢复出口（排查清单第 5 项）：先请宿主重开连接（含最新凭据
@@ -1178,6 +1175,41 @@ async function resolveAutoBaseDn() {
 function refreshTree() {
   void treeRef.value?.refresh();
 }
+
+// -- 断网/断链自愈：传输看守（对标 ssh 的 useTerminalTransportWatch）-----------
+// http(s) 部署（web/docker）里浏览器↔宿主链路中断不会以 ldap/* 报错落到既有
+// 错误面：在途 invoke 永不落定（api.ts 的看门狗只救单个调用），后续调用石沉
+// 大海。看守以 whoami 作只读轻量探测（走 callLdap，注入 8s 前端超时），超时
+// 或 offline 即落横幅；恢复动作先请宿主重开连接（hostReopen 有界版），成功后
+// 刷新树根并重解 Base DN。挂载/退订与环境订阅同侧：监听器与周期探测在组合式
+// 内部注册，onBeforeUnmount 随组件卸载一并清理。原生 webview（file://）看守
+// 整体静默不启动，保持宿主推送的连接生命周期。
+const transportWatch = useTransportWatch({
+  // boot 恢复窗（waitForConnectionReady）自带 12×1s 重试梯，看守不叠加探测；
+  // log 面板/无连接页没有可探测的连接主体。
+  active: () => ready.value && !bootWaiting.value && connectionId.value !== "",
+  subject: () => connectionId.value,
+  probe: () => ldapApi.whoami({ timeoutMs: TRANSPORT_PROBE_TIMEOUT_MS }),
+  recover: async () => {
+    const restored = await requestHostReopenConnection();
+    if (!restored) return false;
+    refreshTree();
+    // baseDn 已解析时 resolveAutoBaseDn 直接早退（零 RPC），只有恢复竞态吞掉
+    // 首轮解析时才补解（与 boot 窗就绪后的重解同语义）。
+    await resolveAutoBaseDn();
+    // 恢复后不失效 schema/entry 缓存（权衡留痕）：host reopen 只是重建宿主→
+    // LDAP 的连接（目录数据本身不变），缓存仍按连接键/DN 有效；整树失效会
+    // 放大成一轮全量重拉（每节点 childrenCount + entry），代价远大于收益。
+    // 树根 refresh 已覆盖用户可见面，陈旧缓存由既有 TTL/写事件失效路径兜底。
+    return true;
+  },
+  onUnavailable: () => {
+    // 复用全局横幅承载断链文案：这不是 LDAP 业务错误，err.* 映射都不贴切。
+    ldapError.value = t("transportDown");
+    ldapErrorDetail.value = "";
+  },
+  onRecovered: () => showNotice(t("transportRecovered")),
+});
 
 onMounted(() => {
   setupTooltipLayer();

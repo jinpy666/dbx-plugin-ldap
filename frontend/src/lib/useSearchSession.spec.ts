@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises } from "@vue/test-utils";
 import { watch } from "vue";
 import { useSearchSession, type SearchFormModel } from "./useSearchSession";
-import { ldapApi } from "./api";
+import { LDAP_INVOKE_DEFAULT_TIMEOUT_MS, ldapApi, setLdapConnectionId } from "./api";
 
 const model: SearchFormModel = {
   baseDn: "dc=demo",
@@ -94,6 +94,45 @@ describe("useSearchSession cursor drain commits", () => {
     await flushPromises();
     expect(session.results.value.map((row) => row.dn)).toEqual([entry(1).dn, entry(2).dn]);
     expect(session.resultsComplete.value).toBe(true);
+  });
+
+  // 断网/断链自愈：searchNext 挂起（浏览器↔宿主断链）曾被 while 循环吞掉，
+  // loadingMore 闸永不复位 = 死锁。api.ts 的前端看门狗（Promise.race 15s）
+  // 让挂起变成超时错误，错误分支必须放行重试入口并复位闸门。走真桥 invoke
+  // （假桥挂起）而非 spy ldapApi——spy 会整只替换掉看门狗包装层。
+  it("resets the load-more gate when a hung page times out via the frontend watchdog", async () => {
+    vi.useFakeTimers();
+    const invoke = vi.fn(async (method: string) => {
+      if (method === "ldap/search/start") return { searchId: "s1", entries: [entry(1)], hasMore: true };
+      return new Promise(() => undefined);
+    });
+    (window as unknown as { dbxPlugin: DbxPluginApi }).dbxPlugin = { invoke, request: invoke, locale: "en" } as unknown as DbxPluginApi;
+    setLdapConnectionId("conn-1");
+    try {
+      const session = createSession();
+      await session.runSearch(model);
+      await flushPromises();
+      expect(session.loadingMore.value).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(LDAP_INVOKE_DEFAULT_TIMEOUT_MS);
+      expect(session.loadMoreError.value).not.toBe("");
+      expect(session.loadMoreErrorDetail.value).toContain("timed out");
+      expect(session.loadingMore.value).toBe(false);
+
+      // 重试入口可用：假桥恢复后续拉能走完游标并清掉错误态。
+      invoke.mockImplementation(async (method: string) => {
+        if (method === "ldap/search/start") return { searchId: "s1", entries: [entry(1)], hasMore: true };
+        return { entries: [entry(2)], hasMore: false };
+      });
+      session.requestNextSearchPage();
+      await flushPromises();
+      expect(session.resultsComplete.value).toBe(true);
+      expect(session.loadMoreError.value).toBe("");
+    } finally {
+      vi.useRealTimers();
+      setLdapConnectionId("");
+      delete (window as unknown as { dbxPlugin?: unknown }).dbxPlugin;
+    }
   });
 });
 

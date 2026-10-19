@@ -150,11 +150,48 @@ function requireConnectionId(): string {
   return currentConnectionId;
 }
 
+// -- 前端 invoke 看门狗（断网/断链自愈） ---------------------------------------
+// options.timeoutMs 是宿主侧超时：宿主只有在收到 HTTP 请求后才计时，卡在
+// 浏览器与宿主之间（断网/断链）的请求它永远收不到、永不落定——mock 宿主
+// （mockDbxHost 的 invoke）甚至不接收 options。因此上限必须在页面内用
+// Promise.race 兜底，收口在 callLdap / callLdapForConnection 两个封装。
+// 缺省 15s 与 count/childrenCount/check 三处既有显式值一致；调用点显式
+// timeoutMs 优先（探测类可传更短值）。落败错误 message 含 "timed out"，
+// 会被 friendlyLdapError 的 timeout 规则映射为既有 err.timeout 七语文案，
+// 无需新增 i18n 键。
+export const LDAP_INVOKE_DEFAULT_TIMEOUT_MS = 15_000;
+
+export class LdapInvokeTimeoutError extends Error {
+  readonly timeoutMs: number;
+  constructor(timeoutMs: number) {
+    super(`LDAP request timed out after ${timeoutMs} ms (no response from the DBX host bridge)`);
+    this.name = "LdapInvokeTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function withInvokeTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const watchdog = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new LdapInvokeTimeoutError(timeoutMs)), timeoutMs);
+  });
+  // race 落定即清看门狗定时器（成功/失败都走 finally）；落定后 watchdog 再
+  // reject 也已被 race 挂接处理器，不会成为 unhandled rejection。
+  return Promise.race([operation, watchdog]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
+function effectiveInvokeTimeout(options?: { timeoutMs?: number }): number {
+  return typeof options?.timeoutMs === "number" && options.timeoutMs > 0 ? options.timeoutMs : LDAP_INVOKE_DEFAULT_TIMEOUT_MS;
+}
+
 async function callLdap<T>(method: string, params: Record<string, unknown> = {}, options?: { timeoutMs?: number }): Promise<T> {
   const api = window.dbxPlugin;
   if (!api) throw new Error("DBX Host API unavailable");
   const invoke = (api.invoke ?? api.request).bind(api);
-  return invoke<T>(method, { connectionId: requireConnectionId(), ...params }, options);
+  // options 原样透传（含 undefined）：App.spec 契约断言 invoke 的第三参形状。
+  return withInvokeTimeout(invoke<T>(method, { connectionId: requireConnectionId(), ...params }, options), effectiveInvokeTimeout(options));
 }
 
 // Search sessions can outlive the currently selected connection briefly while
@@ -164,7 +201,7 @@ async function callLdapForConnection<T>(connectionId: string, method: string, pa
   const api = window.dbxPlugin;
   if (!api) throw new Error("DBX Host API unavailable");
   const invoke = (api.invoke ?? api.request).bind(api);
-  return invoke<T>(method, { connectionId, ...params }, options);
+  return withInvokeTimeout(invoke<T>(method, { connectionId, ...params }, options), effectiveInvokeTimeout(options));
 }
 
 // -- domain methods (§5.2 of IMPL_PLAN_DBX_LDAP) -----------------------------
@@ -267,9 +304,10 @@ export const ldapApi = {
     );
   },
 
-  /** WhoAmI（RFC 4531 扩展操作，F3）：返回服务器认可的授权身份。 */
-  whoami() {
-    return callLdap<{ authzId: string }>("ldap/whoami");
+  /** WhoAmI（RFC 4531 扩展操作，F3）：返回服务器认可的授权身份。timeoutMs
+   *  供传输看守的轻量探测覆盖缺省（8s，与探测窗对齐）。 */
+  whoami(options?: { timeoutMs?: number }) {
+    return callLdap<{ authzId: string }>("ldap/whoami", {}, options);
   },
 
   /**
