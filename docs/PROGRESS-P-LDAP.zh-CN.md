@@ -1933,3 +1933,17 @@ files）。剩余风险：GitHub runner 真跑待推送观察。
 前端三件套 ×5 去重与 concurrency 均经真实 runner 验证。主仓
 build-candidates 的 ldap 5 平台矩阵同批全绿（run 36799950921 部分
 窗口）。
+
+## Windows 本地全量测试修复（2026-10-28，issue 扫描轮）
+
+随工作区 issue 全量扫描（`docs/issue-scan-20261028/`）跑通 Windows 本机测试
+基线时修复三处 Windows 特有失败，CI（Linux）行为不变：
+
+- POSIX 权限位断言（krb5.conf / presets.json 0600）与 AF_UNIX ldapi 拨号测试
+  在 Windows skip（Go chmod 仅切只读位；AF_UNIX listen/dial 语义不同）。
+- `test.sh` 构建产物按 GOOS 补 `.exe` 后缀；`sidecar_client_jsonl` 默认路径
+  Windows 解析 `.exe`（此前 smoke_mcp 直接 FileNotFoundError）。
+- `smoke_mcp` stdio 客户端 `_read_line` 在 Windows 改 daemon 线程 + 队列等待
+  （`select.select` 不支持管道句柄，WinError 10038；与 kafka K12 同模式）。
+
+验证：`scripts/test.sh` 全绿（13 PASS / 7 SKIP）。
