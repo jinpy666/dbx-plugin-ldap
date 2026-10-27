@@ -94,13 +94,15 @@ echo "==> extended-ops smoke (compare/whoami/passwdModify; 容器不可用自动
 # orchestration and SKIPs the whole suite when Docker is missing or the image
 # pull fails.
 if [ -f backend/go.mod ] && command -v go >/dev/null 2>&1; then
-  (cd backend && CGO_ENABLED=0 go build -trimpath -o bin/dbx-plugin-ldap .)
+  exe=""; [ "$(go env GOOS 2>/dev/null)" = "windows" ] && exe=".exe"
+  (cd backend && CGO_ENABLED=0 go build -trimpath -o "bin/dbx-plugin-ldap$exe" .)
 fi
 python3 scripts/smoke_extended_ops_test.py
 
 echo "==> MCP smoke (sidecar auto-built; container cases auto-SKIP)"
 if [ -f backend/go.mod ] && command -v go >/dev/null 2>&1; then
-  (cd backend && CGO_ENABLED=0 go build -trimpath -o bin/dbx-plugin-ldap .)
+  exe=""; [ "$(go env GOOS 2>/dev/null)" = "windows" ] && exe=".exe"
+  (cd backend && CGO_ENABLED=0 go build -trimpath -o "bin/dbx-plugin-ldap$exe" .)
 fi
 python3 scripts/smoke_mcp.py
 

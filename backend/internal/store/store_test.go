@@ -186,6 +186,9 @@ func TestPrefsRoundTrip(t *testing.T) {
 }
 
 func TestSaveJSONIsAtomicAndPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("0600 perm bits are not enforceable on windows (chmod only toggles the read-only bit)")
+	}
 	st := openTestStore(t)
 	if err := st.SaveJSON("presets.json", map[string]any{"v": 1}); err != nil {
 		t.Fatalf("SaveJSON() error = %v", err)

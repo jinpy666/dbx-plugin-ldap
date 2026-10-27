@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -156,6 +157,9 @@ func TestLDAPKerberosPort88FallbackProfile(t *testing.T) {
 // --- kerberos：临时 krb5.conf（tiny-rdm :1649 模板原样；落 DBX_PLUGIN_DATA_DIR/krb5） ---
 
 func TestLDAPWriteTempKrb5Conf(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("0600 perm bits are not enforceable on windows (chmod only toggles the read-only bit)")
+	}
 	dataDir := t.TempDir()
 	t.Setenv("DBX_PLUGIN_DATA_DIR", dataDir)
 

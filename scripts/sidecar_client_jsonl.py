@@ -40,7 +40,11 @@ def default_binary() -> str:
     )
     if os.path.exists(installed):
         return installed
-    return "backend/bin/dbx-plugin-ldap"
+    local = "backend/bin/dbx-plugin-ldap"
+    # Windows: CreateProcess 只认 .exe；go build -o 无后缀产物无法直接执行。
+    if os.name == "nt" and os.path.exists(local + ".exe"):
+        return local + ".exe"
+    return local
 
 
 class SidecarError(RuntimeError):

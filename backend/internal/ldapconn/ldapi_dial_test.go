@@ -10,12 +10,16 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestDialProfileLdapiUnixSocket(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AF_UNIX listen/dial semantics differ on windows; ldapi is a POSIX slapd concept")
+	}
 	dir := t.TempDir()
 	socketPath := filepath.Join(dir, "ldapi")
 
