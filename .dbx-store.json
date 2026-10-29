@@ -16,7 +16,7 @@
   "source": "https://github.com/jinpy666/dbx-plugin-ldap",
   "homepage": "https://github.com/jinpy666/dbx-plugin-ldap",
   "license": "MIT",
-  "releaseNotes": "预发布版（0.1.100-beta.2，916b2ea）。断网/断链自愈（移植 ssh useTerminalTransportWatch 经验）：web/docker 部署下浏览器↔宿主断链此前无任何信号——目录树/搜索停在错误态或挂起（searchNext 分页挂起会让加载闸永久死锁），只有 boot 窗与树重试两个手动出口。新增传输看守：online/offline 即时信号 + whoami 有界探测（5s 间隔/8s 页面超时/2s 同源可达性门）兜底，恢复动作单飞；恢复 = 有界 reopen（10s 超时、reopenConnection 优先回退 host.reopenConnection 请求，boot 窗与树重试入口同走此路径）→ 刷新目录树 → 重解 Base DN（已解析时零 RPC 早退）；schema/entry 缓存不失效（reopen 只重建宿主→LDAP 连接，目录数据不变）。全部 LDAP 调用收口加 15s 页面看门狗（宿主侧 timeoutMs 管不住根本没送到的请求，显式传参优先），searchNext 挂起死锁随之有界化并补端到端单测；断链/恢复横幅七语（transportDown/transportRecovered）。前端 vitest 91 文件 1339 用例全绿。",
+  "releaseNotes": "预发布版（0.1.100-beta.3）。LDAP stdio MCP 兼容 2026-07-28 与 2024-11-05 协议修订版：协商 initialize 版本、提供 server/discover 能力发现，并为成功结果补齐 resultType。同步协议说明、smoke 覆盖与宿主主题适配说明。",
   "localizations": {
     "zh-CN": {
       "name": "LDAP Studio",

@@ -1947,3 +1947,27 @@ build-candidates 的 ldap 5 平台矩阵同批全绿（run 36799950921 部分
   （`select.select` 不支持管道句柄，WinError 10038；与 kafka K12 同模式）。
 
 验证：`scripts/test.sh` 全绿（13 PASS / 7 SKIP）。
+
+## MCP 2026-07-28 协议一致性（2026-10-29，对齐 ssh）
+
+ssh 插件 2026-10-28 完成的新版 MCP 适配（`eca213fd` + `5663f1a5`）同款
+应用到 ldap stdio 面（`backend/internal/mcp/stdio.go`）：
+
+- `MCPSupportedProtocolVersions = [2026-07-28, 2024-11-05]`；`initialize`
+  按请求 `protocolVersion` 原样回显，未命中回落 `MCPProtocolVersion`。
+- 新增 `server/discover` → `{supportedVersions, capabilities}`（2026-07-28
+  起 initialize 握手移除后的发现通道）。
+- `rpcResult` 统一为成功结果盖 `resultType:"complete"`（含 `isError` 工具
+  结果；错误响应不带 result）。
+- `tools/list` 增补缓存信封 `ttlMs:0` + `cacheScope:"private"`（严格宿主
+  校验必填，0/private = 永不缓存——连接态会带外变化）。
+
+验证：`go test ./internal/mcp/...` PASS；`scripts/smoke_mcp.py`
+13 PASS / 0 FAIL / 7 SKIP（M11 钉住 resultType、版本回显、discover 与缓存
+信封）；`shared/mcp_schema_check.py --plugin io.dbx.ldap` RESULT: CLEAN。
+`docs/MCP.zh-CN.md` 已同步协议版本章节；`shared/MCP_ACCEPTANCE.zh-CN.md`
+登记四插件同款契约。
+
+全量 `scripts/test.sh`：前端 typecheck、vitest（91 文件 / 1339 用例）、Go
+vet/test、UI walkthrough、扩展 smoke 与 MCP smoke 均通过；OpenLDAP 主 smoke
+因容器不可用按设计 SKIP（19 SKIP），扩展 ops 6 PASS，MCP 13 PASS / 7 SKIP。
