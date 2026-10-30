@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { friendlyLdapError, parseLdapErrorMeta } from "./ldapErrors";
+import { friendlyLdapError, isTransientLdapError, parseLdapErrorMeta } from "./ldapErrors";
 import { setWorkbenchLocale } from "./i18n";
 
 describe("friendlyLdapError", () => {
@@ -171,5 +171,23 @@ describe("connection not connected (web restore self-heal)", () => {
     it("keeps the not-connected rule ahead of the generic network/timeout rules", () => {
         const raw = `${inactive} (i/o timeout)`;
         expect(friendlyLdapError(raw)).toBe(friendlyLdapError(inactive));
+    });
+});
+
+describe("isTransientLdapError", () => {
+    it("只有会被映射为 network 或 timeout 文案的失败才算瞬时", () => {
+        expect(isTransientLdapError("[ldap-code=200] dial tcp 10.0.0.1:389: connect: connection refused")).toBe(true);
+        expect(isTransientLdapError("read tcp 10.0.0.1:389: i/o timeout")).toBe(true);
+        expect(isTransientLdapError("context deadline exceeded")).toBe(true);
+    });
+
+    it("确定性失败（TLS, 凭据, referral, 206, 未知）不是瞬时", () => {
+        expect(isTransientLdapError("[ldap-code=200] x509: certificate has expired")).toBe(false);
+        expect(isTransientLdapError('[ldap-code=49] invalid credentials')).toBe(false);
+        expect(isTransientLdapError("[ldap-code=10] referral: ldap://other")).toBe(false);
+        expect(isTransientLdapError("[ldap-code=206] empty password not allowed")).toBe(false);
+        expect(isTransientLdapError('connection "c1" is not connected; call connection/connect first')).toBe(false);
+        expect(isTransientLdapError("some completely unknown sidecar failure")).toBe(false);
+        expect(isTransientLdapError("")).toBe(false);
     });
 });

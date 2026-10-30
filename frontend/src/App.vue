@@ -74,6 +74,9 @@ const ready = ref(false);
 // 首次 ldap/* 调用跑赢宿主 connection/connect 重放时短暂置位，窗口耗尽或
 // 探测成功后复位——工作台照常落既有错误面，不吞错。
 const bootWaiting = ref(false);
+// 首次 whoami 就绪探测未落定前，不让树根瞬时失败启动自己的重试梯——
+// 否则它会与 boot 的宿主重开/等待窗并发。ready 会先让树挂载，故需独立门闩。
+const connectionProbePending = ref(false);
 // 宿主 executeCommand 桥可用性（initialize 时特性检测）：决定工具栏是否显示
 // "请求日志"按钮；旧宿主无该桥时隐藏，入口仍在 appToolbar/命令面板/dock「+」。
 const logsCommandSupported = ref(false);
@@ -89,6 +92,9 @@ const logPanelMode = computed(() => {
 });
 
 const treeRef = ref<InstanceType<typeof DnTree>>();
+const treeReconnecting = ref(false);
+const transportUnavailable = ref(false);
+const treeRetryGuarded = computed(() => connectionProbePending.value || bootWaiting.value || transportUnavailable.value || treeReconnecting.value);
 // ResultTable 引用：批量移动/修改确认执行后清空勾选（对话框取消保留选择）。
 const resultTableRef = ref<InstanceType<typeof ResultTable>>();
 const searchRef = ref<InstanceType<typeof SearchForm>>();
@@ -1004,10 +1010,18 @@ async function requestHostReopenConnection(): Promise<boolean> {
 
 // 树根错误态的恢复出口（排查清单第 5 项）：先请宿主重开连接（含最新凭据
 // 回推），再重载树根——重试按钮若只重发 ldap/* 而连接始终未重开，会永远
-// 原地失败。DnTree 只发 retry-connection 事件，重开+重载的顺序在本侧保证。
+// 原地失败。DnTree 只发 retry-connection 事件（横幅手动点击与自动重试倒计时
+// 到点同源），重开+重载的顺序在本侧保证。重开期间置 treeReconnecting 给
+// DnTree 换文案禁按钮；重载走 retryReload 而非 refreshTree——refresh 是用户
+// 手动入口（整体复位树的自动重试梯），梯子的续排依赖计数在重载链路上存活。
 async function onTreeRetryConnection() {
-  await requestHostReopenConnection();
-  refreshTree();
+  treeReconnecting.value = true;
+  try {
+    await requestHostReopenConnection();
+    await treeRef.value?.retryReload();
+  } finally {
+    treeReconnecting.value = false;
+  }
 }
 
 async function initialize() {
@@ -1045,9 +1059,14 @@ async function initialize() {
   setLdapConnectionId(connectionId.value);
   syncConnectionContext();
   void refreshBackendReadOnly();
+  connectionProbePending.value = true;
   ready.value = true;
   await nextTick();
-  await waitForConnectionReady();
+  try {
+    await waitForConnectionReady();
+  } finally {
+    connectionProbePending.value = false;
+  }
   bootWaiting.value = false;
   // 恢复竞态期间 resolveAutoBaseDn 已空跑过一轮（statuses/RootDSE 在连接未就绪
   // 时全部静默失败，主机名推断又救不了 IP 直连）：就绪后 baseDn 仍为空则重解
@@ -1207,8 +1226,12 @@ const transportWatch = useTransportWatch({
     // 复用全局横幅承载断链文案：这不是 LDAP 业务错误，err.* 映射都不贴切。
     ldapError.value = t("transportDown");
     ldapErrorDetail.value = "";
+    transportUnavailable.value = true;
   },
-  onRecovered: () => showNotice(t("transportRecovered")),
+  onRecovered: () => {
+    transportUnavailable.value = false;
+    showNotice(t("transportRecovered"));
+  },
 });
 
 onMounted(() => {
@@ -1285,6 +1308,8 @@ onBeforeUnmount(() => {
         :base-dn="baseDn"
         :connection-id="connectionId"
         :can-write="canWrite"
+        :tree-reconnecting="treeReconnecting"
+        :retry-guarded="treeRetryGuarded"
         @select="selectEntry"
         @search-here="searchHere"
         @view="openEntry"

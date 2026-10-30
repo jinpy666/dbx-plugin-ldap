@@ -104,17 +104,33 @@ export const parseLdapErrorMeta = (message: string): LdapErrorMeta => {
     return meta;
 };
 
-export const friendlyLdapError = (message: string): string => {
+// classifyLdapError：friendlyLdapError 的判定核心，返回命中的 i18n key；
+// 未命中任何规则返回 null（调用方按原文透传）。拆出来是为了让瞬时性判定
+// （isTransientLdapError）与用户可见文案同源——文案归类变了，重试口径跟着变。
+export const classifyLdapError = (message: string): string | null => {
     const raw = String(message ?? "");
-    if (TLS_PATTERN.test(raw)) return t("err.tls");
+    if (TLS_PATTERN.test(raw)) return "err.tls";
     // code-first：后端 [ldap-code=NNN] 前缀存在时按精确码命中（杜绝 20/200/206
     // 这类前缀碰撞）；无码消息回落到锚定后的文本规则。
     const meta = parseLdapErrorMeta(raw);
     if (meta.resultCode !== undefined && CODE_RULES[meta.resultCode]) {
-        return t(CODE_RULES[meta.resultCode]);
+        return CODE_RULES[meta.resultCode];
     }
     for (const rule of RULES) {
-        if (rule.pattern.test(raw)) return t(rule.key);
+        if (rule.pattern.test(raw)) return rule.key;
     }
-    return raw;
+    return null;
+};
+
+export const friendlyLdapError = (message: string): string => {
+    const key = classifyLdapError(message);
+    return key ? t(key) : String(message ?? "");
+};
+
+// isTransientLdapError：树根失败自动重试的瞬时性口径——只有会被归类为网络
+// 失败或超时的错误才值得自动重试；TLS 证书、凭据、referral、not-connected
+// 等确定性失败重试无意义（各有专属恢复出口），保持一次性错误态不吞错。
+export const isTransientLdapError = (message: string): boolean => {
+    const key = classifyLdapError(message);
+    return key === "err.network" || key === "err.timeout";
 };
