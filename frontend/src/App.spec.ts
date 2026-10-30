@@ -15,8 +15,9 @@ const context = (id: string, connectionPatch: Record<string, unknown> = {}) => (
 });
 let wrapper: ReturnType<typeof mount<typeof App>> | undefined;
 const treeStub = defineComponent({
+  props: ["retryGuarded", "treeReconnecting"],
   setup(_, { expose }) {
-    expose({ refresh: vi.fn(), invalidate: vi.fn() });
+    expose({ refresh: vi.fn(), retryReload: vi.fn(), invalidate: vi.fn() });
     return () => h("div");
   },
 });
@@ -551,6 +552,22 @@ describe("App batch write guards and replay coalescing", () => {
 describe("App boot-restore connection wait window", () => {
   const inactiveError = 'connection "first" is not connected; call connection/connect first';
 
+  it("keeps tree auto-retry guarded until the initial connection probe settles", async () => {
+    const probe = deferred<unknown>();
+    const host = await mountWithHost(false, false, {}, async (method) => {
+      if (method === "ldap/whoami") return probe.promise;
+      return { statuses: [], entries: [], count: 0, truncated: false };
+    });
+    await flushPromises();
+    const tree = wrapper!.findComponent(treeStub);
+    expect(tree.props("retryGuarded")).toBe(true);
+
+    probe.resolve({ authzId: "dn:cn=admin,dc=first" });
+    await flushPromises();
+    expect(tree.props("retryGuarded")).toBe(false);
+    expect(host.invoke).toHaveBeenCalledWith("ldap/whoami", { connectionId: "first" }, undefined);
+  });
+
   it("waits out the not-connected race on boot and proceeds once the host replays the connection", async () => {
     vi.useFakeTimers();
     try {
@@ -673,14 +690,16 @@ describe("App boot-restore connection wait window", () => {
 
   it("requests the host to reopen the connection before reloading the tree from the error retry exit", async () => {
     // 树根错误态重试按钮（DnTree retry-connection 事件）：重开在先、重载在后，
-    // 只重发 ldap/* 而连接始终未重开时原地重试只会永远失败。
-    let refreshSpy: ReturnType<typeof vi.fn> | undefined;
+    // 只重发 ldap/* 而连接始终未重开时原地重试只会永远失败。重载走 retryReload
+    // （重连续排通道，不复位 DnTree 的自动重试梯计数），refresh 是用户手动入口。
+    let retryReloadSpy: ReturnType<typeof vi.fn> | undefined;
     const retryTreeStub = defineComponent({
       emits: ["retry-connection"],
       setup(_, { expose, emit }) {
         const refresh = vi.fn();
-        refreshSpy = refresh;
-        expose({ refresh, invalidate: vi.fn() });
+        const retryReload = vi.fn();
+        retryReloadSpy = retryReload;
+        expose({ refresh, retryReload, invalidate: vi.fn() });
         return () => h("button", { class: "tree-retry-btn", onClick: () => emit("retry-connection") });
       },
     });
@@ -691,7 +710,7 @@ describe("App boot-restore connection wait window", () => {
       "host.reopenConnection",
       { connectionId: "first" },
     );
-    expect(refreshSpy).toHaveBeenCalled();
+    expect(retryReloadSpy).toHaveBeenCalled();
   });
 });
 

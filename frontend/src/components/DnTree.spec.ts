@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { defineComponent, h } from "vue";
-import { ldapApi, type LdapSearchPage, type LdapSearchResult } from "../lib/api";
+import { ldapApi, type LdapSearchPage, type LdapSearchResult, type LdapSearchSessionResult } from "../lib/api";
 import DnTree from "./DnTree.vue";
 
 vi.mock("../lib/api", () => ({
@@ -469,5 +469,207 @@ describe("DnTree 浏览树解引用", () => {
     await flushPromises();
     const lastCall = searchStart.mock.calls.at(-1)![0];
     expect(lastCall).toMatchObject({ baseDn, derefAliases: "searching" });
+  });
+});
+
+// 树根失败自动重试（有界退避）：瞬时网络/超时类失败在横幅内倒计时并到点
+// emit retry-connection（App 侧既有「宿主重开连接 + 重载树根」闭环）；确定性
+// 失败（凭据/DN/referral/TLS/not-connected）不排程；3 次用尽停在静态横幅；
+// 用户手动操作 / 上下文切换 / retryGuarded 激活一律取消梯子。
+describe("DnTree 树根失败自动重试", () => {
+  const transientRaw = "connection refused";
+
+  function mountWith(listener?: { onRetryConnection?: () => void; retryGuarded?: boolean }) {
+    wrapper.unmount();
+    const { onRetryConnection, retryGuarded } = listener ?? {};
+    wrapper = mount(DnTree, {
+      props: { baseDn, canWrite: true, retryGuarded, onRetryConnection },
+      global: { stubs: { VirtualList: ListStub } },
+    });
+  }
+
+  async function failRootWith(raw: string) {
+    searchStart.mockRejectedValueOnce(new Error(raw));
+    await wrapper.vm.refresh();
+    await flushPromises();
+  }
+
+  it("瞬时失败 → 横幅带倒计时，到点 emit retry-connection", async () => {
+    await failRootWith(transientRaw);
+    const banner = wrapper.find(".tree-error");
+    expect(banner.text()).toContain("无法连接");
+    expect(banner.text()).toContain("自动重试");
+    expect(banner.text()).toContain("1/3");
+    expect(wrapper.emitted("retryConnection")).toBeUndefined();
+    vi.advanceTimersByTime(5_000);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toHaveLength(1);
+  });
+
+  it("确定性失败（凭据类）→ 静态横幅，零排程", async () => {
+    await failRootWith("[ldap-code=49] invalid credentials");
+    const banner = wrapper.find(".tree-error");
+    expect(banner.text()).not.toContain("自动重试");
+    vi.advanceTimersByTime(120_000);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toBeUndefined();
+  });
+
+  it("退避梯：每次 retry 后仍瞬时失败按 5s/10s/20s 递增，第 3 次失败后放弃", async () => {
+    mountWith({ onRetryConnection: () => void wrapper.vm.retryReload() });
+    searchStart.mockRejectedValue(new Error(transientRaw));
+    await wrapper.vm.refresh();
+    await flushPromises();
+
+    vi.advanceTimersByTime(5_000);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toHaveLength(1);
+    expect(wrapper.find(".tree-error").text()).toContain("10 秒后");
+
+    vi.advanceTimersByTime(10_000);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toHaveLength(2);
+    expect(wrapper.find(".tree-error").text()).toContain("20 秒后");
+
+    vi.advanceTimersByTime(20_000);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toHaveLength(3);
+
+    vi.advanceTimersByTime(120_000);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toHaveLength(3);
+    expect(wrapper.find(".tree-error").text()).not.toContain("自动重试");
+  });
+
+  it("重试成功 → 横幅消失且不再排程", async () => {
+    mountWith({ onRetryConnection: () => void wrapper.vm.retryReload() });
+    searchStart.mockRejectedValueOnce(new Error(transientRaw));
+    await wrapper.vm.refresh();
+    await flushPromises();
+
+    searchStart.mockResolvedValueOnce({ searchId: "root", entries: [], hasMore: false });
+    vi.advanceTimersByTime(5_000);
+    await flushPromises();
+    expect(wrapper.find(".tree-error").exists()).toBe(false);
+    vi.advanceTimersByTime(120_000);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toHaveLength(1);
+  });
+
+  it("倒计时中另一条根加载路径再次失败 → 保留原截止时间和次数", async () => {
+    await failRootWith(transientRaw);
+    vi.advanceTimersByTime(2_000);
+
+    searchStart.mockRejectedValueOnce(new Error(transientRaw));
+    wrapper.vm.invalidate();
+    await flushPromises();
+    expect(wrapper.find(".tree-error").text()).toContain("3 秒后");
+    expect(wrapper.find(".tree-error").text()).toContain("1/3");
+
+    vi.advanceTimersByTime(2_999);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toBeUndefined();
+    vi.advanceTimersByTime(1);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toHaveLength(1);
+  });
+
+  it("过期根请求迟到成功但未应用 → 不清除当前重试梯子", async () => {
+    await failRootWith(transientRaw);
+    vi.advanceTimersByTime(2_000);
+    await wrapper.setProps({ retryGuarded: true });
+
+    let resolveStale!: (page: LdapSearchSessionResult) => void;
+    searchStart.mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }));
+    const staleLoad = wrapper.vm.retryReload();
+    await flushPromises();
+
+    searchStart.mockRejectedValueOnce(new Error(transientRaw));
+    await wrapper.vm.retryReload();
+    await flushPromises();
+    expect(wrapper.find(".tree-error").exists()).toBe(true);
+
+    // 新一轮重载使较早请求过期；旧请求虽然 resolve，但不得清理当前暂停中的重试梯。
+    resolveStale({ searchId: "stale-root", entries: [], hasMore: false });
+    await staleLoad;
+
+    await wrapper.setProps({ retryGuarded: false });
+    vi.advanceTimersByTime(2_999);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toBeUndefined();
+    vi.advanceTimersByTime(1);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toHaveLength(1);
+  });
+
+  it("手动点重试按钮 → 立即 emit 并取消倒计时（不双发）", async () => {
+    await failRootWith(transientRaw);
+    await wrapper.find(".tree-error button").trigger("click");
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toHaveLength(1);
+    vi.advanceTimersByTime(120_000);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toHaveLength(1);
+  });
+
+  it("连接上下文切换（baseDn 变化）→ 取消待发梯子", async () => {
+    await failRootWith(transientRaw);
+    searchStart.mockResolvedValueOnce({ searchId: "root", entries: [], hasMore: false });
+    await wrapper.setProps({ baseDn: "dc=other,dc=dbx" });
+    await flushPromises();
+    vi.advanceTimersByTime(120_000);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toBeUndefined();
+  });
+
+  it("retryGuarded 激活 → 失败只落静态横幅", async () => {
+    mountWith({ retryGuarded: true });
+    await failRootWith(transientRaw);
+    expect(wrapper.find(".tree-error").text()).not.toContain("自动重试");
+    vi.advanceTimersByTime(120_000);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toBeUndefined();
+  });
+
+  it("retryGuarded 在倒计时中激活 → 暂停，解除后按剩余时间续跑", async () => {
+    await failRootWith(transientRaw);
+    expect(wrapper.find(".tree-error").text()).toContain("5 秒后");
+    vi.advanceTimersByTime(2_000);
+    await wrapper.setProps({ retryGuarded: true });
+    expect(wrapper.find(".tree-error").text()).toContain("3 秒后");
+
+    vi.advanceTimersByTime(30_000);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toBeUndefined();
+
+    await wrapper.setProps({ retryGuarded: false });
+    vi.advanceTimersByTime(2_999);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toBeUndefined();
+    vi.advanceTimersByTime(1);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toHaveLength(1);
+  });
+
+  it("guarded 期间根请求失败 → 解除守卫后才启动新倒计时", async () => {
+    mountWith({ retryGuarded: true });
+    await failRootWith(transientRaw);
+    expect(wrapper.find(".tree-error").text()).not.toContain("自动重试");
+
+    await wrapper.setProps({ retryGuarded: false });
+    expect(wrapper.find(".tree-error").text()).toContain("5 秒后");
+    vi.advanceTimersByTime(5_000);
+    await flushPromises();
+    expect(wrapper.emitted("retryConnection")).toHaveLength(1);
+  });
+
+  it("treeReconnecting → 重试按钮禁用并切换为重连中文案", async () => {
+    await failRootWith(transientRaw);
+    await wrapper.setProps({ treeReconnecting: true });
+    const button = wrapper.find(".tree-error button");
+    expect((button.element as HTMLButtonElement).disabled).toBe(true);
+    expect(button.text()).toContain("重连");
+    await wrapper.setProps({ treeReconnecting: false });
+    expect((wrapper.find(".tree-error button").element as HTMLButtonElement).disabled).toBe(false);
   });
 });

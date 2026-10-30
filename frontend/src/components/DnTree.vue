@@ -13,6 +13,7 @@ import { TREE_WIDTH_KEY, pluginStore } from "../lib/pluginStore";
 import { nextFocusIndex } from "../lib/modal";
 import { t } from "../lib/i18n";
 import { canExpandDnTreeNode, compareDnByLabel, compareDnForTree, flattenDnTree, nextTreeFocusIndex, objectClassValues, TREE_FETCH_PAGE, type DnTreeNode } from "../lib/dnTree";
+import { TREE_AUTO_RETRY_MAX, decideTreeAutoRetry } from "../lib/treeAutoRetry";
 import VirtualList from "./VirtualList.vue";
 import TreeBranch from "./TreeBranch.vue";
 import TreeNodeIcon from "./TreeNodeIcon.vue";
@@ -23,6 +24,10 @@ const props = defineProps<{
   disabled?: boolean;
   /** Passed by App so an old search can be cancelled after a connection switch. */
   connectionId?: string;
+  /** App 正在执行「宿主重开连接」：横幅重试按钮禁用并切换为重连中文案。 */
+  treeReconnecting?: boolean;
+  /** App 侧恢复机制在跑（boot 恢复窗/传输看守横幅）：梯子不排程，防双发重开。 */
+  retryGuarded?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -272,6 +277,88 @@ async function startChildren(node: DnTreeNode, generation: number): Promise<bool
   return true;
 }
 
+// -- 树根失败自动重试（有界退避）----------------------------------------------
+// 瞬时网络/超时失败在横幅内倒计时并到点 emit retry-connection（App 侧既有
+// 「宿主重开连接 + 重载树根」闭环）。续排的关键：重载走暴露的 retryReload
+// （不动梯子计数），而用户手动路径（refresh/toggle/过滤等）一律整体复位——
+// 这样 catch 里只需看计数就能区分「梯子自己的重试又失败」与「全新失败」。
+const autoRetry = ref<{ attempt: number; secondsLeft: number } | null>(null);
+let autoRetryTimer = 0;
+let autoRetryTicker = 0;
+let autoRetryAttempt = 0;
+let autoRetryRaw = "";
+let autoRetryDeadline = 0;
+
+function clearAutoRetryTimers() {
+  window.clearTimeout(autoRetryTimer);
+  window.clearInterval(autoRetryTicker);
+  autoRetryTimer = 0;
+  autoRetryTicker = 0;
+  autoRetryDeadline = 0;
+}
+
+/** 整体复位：下一次失败从第 1 次重新排程（用户手动操作/上下文切换/卸载）。 */
+function resetAutoRetry() {
+  clearAutoRetryTimers();
+  autoRetry.value = null;
+  autoRetryAttempt = 0;
+  autoRetryRaw = "";
+}
+
+function scheduleAutoRetry(delayMs: number) {
+  const attempt = autoRetry.value?.attempt ?? autoRetryAttempt;
+  autoRetry.value = { attempt, secondsLeft: Math.ceil(delayMs / 1000) };
+  autoRetryDeadline = Date.now() + delayMs;
+  autoRetryTicker = window.setInterval(() => {
+    if (autoRetry.value) autoRetry.value.secondsLeft = Math.ceil(Math.max(0, autoRetryDeadline - Date.now()) / 1000);
+  }, 250);
+  autoRetryTimer = window.setTimeout(() => {
+    clearAutoRetryTimers();
+    autoRetry.value = null;
+    emit("retryConnection");
+  }, delayMs);
+}
+
+function pauseAutoRetry() {
+  if (!autoRetry.value || !autoRetryTimer) return;
+  const remainingMs = Math.max(0, autoRetryDeadline - Date.now());
+  clearAutoRetryTimers();
+  autoRetry.value.secondsLeft = Math.ceil(remainingMs / 1000);
+}
+
+function resumeAutoRetry() {
+  if (autoRetry.value) {
+    scheduleAutoRetry(autoRetry.value.secondsLeft * 1000);
+  } else if (autoRetryRaw) {
+    const raw = autoRetryRaw;
+    autoRetryRaw = "";
+    armAutoRetry(raw);
+  }
+}
+
+/** 横幅手动「重试」：立即走一次恢复闭环，取消任何待发倒计时。 */
+function onManualRetry() {
+  resetAutoRetry();
+  emit("retryConnection");
+}
+
+function armAutoRetry(raw: string) {
+  // 倒计时已在途（含外部恢复期间暂停）时，重复的根加载失败不重置退避次数、
+  // 截止时间或计时器；保留最初失败对应的那一次重试，避免 timer 覆盖/双发。
+  if (autoRetry.value) return;
+  autoRetryRaw = raw;
+  if (props.retryGuarded || props.treeReconnecting) return;
+  const decision = decideTreeAutoRetry({ attempt: autoRetryAttempt, raw });
+  if (decision.kind === "fail") {
+    resetAutoRetry();
+    return;
+  }
+  autoRetryAttempt = decision.attempt;
+  autoRetryRaw = "";
+  autoRetry.value = { attempt: decision.attempt, secondsLeft: Math.ceil(decision.delayMs / 1000) };
+  scheduleAutoRetry(decision.delayMs);
+}
+
 async function loadRoot() {
   resetTreeSessions();
   if (!hasBaseDn.value || props.disabled) return;
@@ -283,13 +370,19 @@ async function loadRoot() {
     const node = makeNode(props.baseDn.trim());
     node.loading = true;
     rootNode.value = node;
-    if (await startChildren(node, generation)) node.expanded = true;
+    if (await startChildren(node, generation)) {
+      node.expanded = true;
+      resetAutoRetry();
+    }
   } catch (cause) {
     if (generation !== treeGeneration) return;
     rootNode.value = undefined;
     const raw = cause instanceof Error ? cause.message : String(cause);
     treeError.value = friendlyLdapError(raw);
     treeErrorRaw.value = treeError.value === raw ? "" : raw;
+    // 瞬时失败由 armAutoRetry 统一处理：外部守卫激活时只暂存原始错误，
+    // 守卫解除后再排梯；由单一入口管理可避免恢复状态变化丢失重试意图。
+    armAutoRetry(raw);
   } finally {
     if (generation === treeGeneration) {
       loadingRoot.value = false;
@@ -301,6 +394,7 @@ async function loadRoot() {
 async function toggleNode(node: DnTreeNode) {
   if (props.disabled || !canExpandDnTreeNode(node)) return;
   closeContextMenu();
+  resetAutoRetry();
   selectedDn.value = node.dn;
   emit("select", node.dn);
   // 加载中忽略重复点击（同一节点并发去重）；已加载节点直接折叠/展开。
@@ -346,6 +440,7 @@ function viewNode(node: DnTreeNode) {
 // continueOnePage（与 revealDn 静默定位共用），此处只保留用户可见的反馈层。
 async function loadMore(node: DnTreeNode) {
   if (props.disabled || node.loading) return;
+  resetAutoRetry();
   if (!childSessions.get(nodeSessionKey(node))?.hasMore) {
     // Do not quietly mark a partial node as complete if the server session was
     // lost.  The visible `+` badge remains and the user can refresh explicitly.
@@ -485,6 +580,7 @@ async function revealDn(dn: string): Promise<"ok" | "notFound" | "failed"> {
 
 function clearFilter() {
   window.clearTimeout(filterTimer);
+  resetAutoRetry();
   filterSequence += 1;
   filterKeyword.value = "";
   filterLoading.value = false;
@@ -494,7 +590,9 @@ function clearFilter() {
 }
 
 // Refresh the visible view: while filtering, retry that query with its keyword intact.
+// 用户手动刷新入口：整体复位自动重试梯（App 的重连续排走 retryReload，不经此）。
 function refresh() {
+  resetAutoRetry();
   window.clearTimeout(filterTimer);
   return hasFilter.value ? runFilter() : loadRoot();
 }
@@ -535,6 +633,7 @@ async function runFilter() {
 
 function onFilterInput() {
   window.clearTimeout(filterTimer);
+  resetAutoRetry();
   if (!filterKeyword.value.trim()) {
     clearFilter();
     return;
@@ -660,6 +759,7 @@ function menuAction(action: string) {
  *  下次展开时走既有懒加载）。失败保持折叠未加载态并以横幅明示，再次展开
  *  即重试（同 toggleNode 口径；原先静默吞错会让刷新失败零反馈）。 */
 async function reloadNodeChildren(dn: string) {
+  resetAutoRetry();
   const find = (node?: DnTreeNode): DnTreeNode | undefined => {
     if (!node) return undefined;
     // DN 比较与全库约定一致（大小写不敏感）：大小写漂移会让查找 miss，
@@ -712,13 +812,28 @@ watch(
   (next) => {
     if (next) {
       clearFilter();
+      resetAutoRetry();
       resetTreeSessions();
     }
   },
 );
 
+watch(
+  () => Boolean(props.retryGuarded || props.treeReconnecting),
+  (guarded) => {
+    if (guarded) pauseAutoRetry();
+    else resumeAutoRetry();
+  },
+  { immediate: true },
+);
+
 defineExpose({
   refresh,
+  /** App 重连续排专用：重开连接后的树根重载，不复位自动重试梯计数——
+   *  loadRoot 的 catch 依赖计数区分「梯子续排」与「全新失败」。 */
+  retryReload() {
+    return loadRoot();
+  },
   /** 树内定位（F8）：逐级展开到目标 DN 并高亮；三态返回（ok/notFound/failed）。 */
   revealDn,
   /** After writes, drop the cached children of `dn` (or reload everything). */
@@ -753,6 +868,7 @@ let menuListenerTimer = 0;
 function onMountedCleanup() {
   window.clearTimeout(filterTimer);
   window.clearTimeout(menuListenerTimer);
+  resetAutoRetry();
   filterSequence += 1;
   resetTreeSessions();
   document.removeEventListener("click", closeContextMenu);
@@ -830,10 +946,15 @@ onBeforeUnmount(onMountedCleanup);
         <template v-else>
           <!-- 懒展开失败：错误横幅与树并存，不吞掉已加载的树 -->
           <div v-if="treeError" class="tree-error" role="alert" :title="treeErrorRaw || treeError">
-            <span>{{ treeError }}</span>
+            <span>
+              {{ treeError }}
+              <!-- 瞬时失败自动重试倒计时；App 正在重开连接时切换为重连中文案 -->
+              <template v-if="autoRetry"> · {{ t("tree.autoRetryCountdown", { seconds: autoRetry.secondsLeft, attempt: autoRetry.attempt, max: TREE_AUTO_RETRY_MAX }) }}</template>
+              <template v-else-if="treeReconnecting"> · {{ t("tree.reconnecting") }}</template>
+            </span>
             <!-- 根加载失败的恢复出口：先请宿主重开连接（retryConnection），再重载树根。
                  只重发 ldap/* 而连接始终未重开时，原地重试只会永远失败。 -->
-            <button type="button" class="toolbar-button" :disabled="disabled" @click.stop="emit('retryConnection')">{{ t("retry") }}</button>
+            <button type="button" class="toolbar-button" :disabled="disabled || treeReconnecting" @click.stop="onManualRetry">{{ treeReconnecting ? t("tree.reconnecting") : t("retry") }}</button>
           </div>
           <div v-if="!rootNode && !treeError" class="tree-state" role="status">{{ t("tree.empty") }}</div>
           <VirtualList
